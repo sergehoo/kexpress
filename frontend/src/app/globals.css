@@ -105,6 +105,83 @@ body {
   animation: kx-pop 0.2s ease-out both;
 }
 
+/* Aurore animée (page de connexion) — halos flous en dérive lente */
+@keyframes kx-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.85;
+  }
+  to {
+    transform: translate3d(2.5rem, -1.75rem, 0) scale(1.12);
+    opacity: 1;
+  }
+}
+.kx-aurora {
+  will-change: transform;
+  animation: kx-drift 22s ease-in-out infinite alternate;
+}
+.kx-aurora-2 {
+  animation-duration: 28s;
+  animation-delay: -6s;
+}
+.kx-aurora-3 {
+  animation-duration: 32s;
+  animation-delay: -12s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kx-aurora {
+    animation: none;
+  }
+}
+
+/* Flotte en mouvement (page de connexion) — véhicules approchant DANS LA
+   PROFONDEUR : ils naissent au point de fuite (petits, transparents) puis
+   translatent vers l'avant-plan en grossissant, le long de la route fuyante.
+   Trajectoire et échelles passées par variables CSS (--x1/--y1/--s0/--s1/--op).
+   Le décalage négatif (animation-delay) échelonne un flux continu et, sous
+   prefers-reduced-motion, fige chaque véhicule à une position visible. */
+@keyframes kx-approach {
+  0% {
+    transform: translate3d(0, 0, 0) scale(var(--s0));
+    opacity: 0;
+  }
+  14% {
+    opacity: var(--op);
+  }
+  86% {
+    opacity: var(--op);
+  }
+  100% {
+    transform: translate3d(var(--x1), var(--y1), 0) scale(var(--s1));
+    opacity: 0;
+  }
+}
+.kx-approach {
+  animation-name: kx-approach;
+  animation-timing-function: cubic-bezier(0.45, 0, 0.9, 0.55);
+  animation-iteration-count: infinite;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+/* Marquages de la route qui défilent du point de fuite vers le spectateur. */
+@keyframes kx-road {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -120;
+  }
+}
+.kx-road {
+  animation: kx-road 7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kx-approach,
+  .kx-road {
+    animation-play-state: paused;
+  }
+}
+
 /* Conteneur carte en plein écran : occupe tout l'écran, sans coins arrondis */
 .kx-mapfs:fullscreen {
   width: 100vw !important;

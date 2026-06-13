@@ -1,5 +1,7 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.core.mixins import TenantScopedViewSetMixin
 from apps.maintenance.models import BreakdownType, MaintenanceRecord, MaintenanceType
@@ -8,6 +10,29 @@ from apps.maintenance.serializers import (
     MaintenanceRecordSerializer,
     MaintenanceTypeSerializer,
 )
+
+MANAGER_ROLES = {"super_admin", "company_admin", "subsidiary_admin", "fleet_manager", "finance"}
+
+
+class MaintenanceForecastView(APIView):
+    """Prévision de maintenance (estimation statistique) — gestionnaires & finance."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        u = request.user
+        if not (u.is_superuser or u.role in MANAGER_ROLES):
+            return Response({"detail": "Accès réservé aux gestionnaires."}, status=403)
+
+        from apps.maintenance.forecast import fleet_forecast
+        from apps.vehicles.models import Vehicle
+
+        rows = fleet_forecast(Vehicle.objects.all())
+        return Response({
+            "count": len(rows),
+            "results": rows,
+            "note": "Estimation statistique basée sur l'historique d'usage et de pannes.",
+        })
 
 
 class MaintenanceTypeViewSet(viewsets.ModelViewSet):

@@ -33,6 +33,14 @@ x-django-env: &django-env
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS requis}
   DATABASE_URL: postgres://${POSTGRES_USER:-kexpress}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@kexpress-db:5432/${POSTGRES_DB:-kexpress}
   REDIS_URL: redis://kexpress-redis:6379/0
+  # SSO Keycloak (OIDC) — actif si OIDC_ENABLED=True. Kexpress valide les jetons
+  # via la JWKS du realm ; l'autorisation (rôle + filiale) reste gérée dans l'app.
+  OIDC_ENABLED: ${OIDC_ENABLED:-False}
+  OIDC_ISSUER: ${OIDC_ISSUER:-}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-kexpress-web}
+  OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+  OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-requester}
+  LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-True}
   # Web Push (VAPID)
   VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
   VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
@@ -70,7 +78,8 @@ x-django-env: &django-env
 
 services:
   kexpress-db:
-    image: postgres:16-alpine
+    # PostGIS (GeoDjango) : fournit l'extension spatiale + outils géo.
+    image: postgis/postgis:16-3.5
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-kexpress}
@@ -215,6 +224,10 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE requis (ex. https://api.exemple.com/api)}
+        # SSO Keycloak (figé au build) — laisser vide pour conserver la connexion locale.
+        NEXT_PUBLIC_OIDC_AUTHORITY: ${NEXT_PUBLIC_OIDC_AUTHORITY:-}
+        NEXT_PUBLIC_OIDC_CLIENT_ID: ${NEXT_PUBLIC_OIDC_CLIENT_ID:-kexpress-web}
+        NEXT_PUBLIC_LOCAL_LOGIN: ${NEXT_PUBLIC_LOCAL_LOGIN:-true}
     restart: unless-stopped
     depends_on:
       kexpress-backend:

@@ -1,7 +1,38 @@
+from django.conf import settings
 from drf_spectacular.utils import extend_schema
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from apps.accounts.serializers import MeSerializer
+
+
+class BreakGlassTokenSerializer(TokenObtainPairSerializer):
+    """Connexion locale par mot de passe.
+
+    Quand le SSO Keycloak est actif, cette voie est réservée à l'accès de secours
+    (super-admin) — sauf si la connexion locale a été entièrement désactivée.
+    """
+
+    def validate(self, attrs):
+        data = super().validate(attrs)  # vérifie identifiants + compte actif
+        if getattr(settings, "OIDC_ENABLED", False):
+            if not getattr(settings, "LOCAL_LOGIN_ENABLED", True):
+                raise serializers.ValidationError(
+                    "Connexion locale désactivée. Utilisez le SSO."
+                )
+            if not self.user.is_superuser:
+                raise serializers.ValidationError(
+                    "Connexion locale réservée à l'accès de secours (super-admin). "
+                    "Utilisez le SSO."
+                )
+        return data
+
+
+class BreakGlassTokenView(TokenObtainPairView):
+    """Émission de jetons locaux (SimpleJWT) — voie de secours quand OIDC actif."""
+
+    serializer_class = BreakGlassTokenSerializer
 
 
 class MeView(generics.RetrieveAPIView):

@@ -1,6 +1,7 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 
 import { saveSyncMeta } from "@/lib/offlineDb";
+import { OIDC_ENABLED, oidcSilentRenew } from "@/lib/oidc";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api";
@@ -42,6 +43,15 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 let refreshing: Promise<string | null> | null = null;
 
 async function refreshAccess(): Promise<string | null> {
+  // SSO Keycloak : renouvellement silencieux (refresh token géré par oidc-client-ts).
+  if (OIDC_ENABLED) {
+    const t = await oidcSilentRenew();
+    if (t) {
+      tokens.set(t);
+      return t;
+    }
+    // pas de session OIDC → on tente le repli SimpleJWT (accès de secours).
+  }
   const refresh = tokens.refresh;
   if (!refresh) return null;
   try {

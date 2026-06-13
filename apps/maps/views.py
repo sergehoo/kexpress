@@ -10,7 +10,6 @@ from rest_framework.views import APIView
 
 from apps.analytics.scope import scoped
 from apps.tracking.live import _haversine
-from apps.tracking.models import VehicleLocation
 from apps.tracking.osrm import _ctx, road_route
 
 COST_PER_KM = float(getattr(settings, "MAP_COST_PER_KM", 350))
@@ -165,14 +164,25 @@ class NearbyVehiclesView(APIView):
         except (TypeError, ValueError):
             return Response({"detail": "Paramètres lat/lng requis."}, status=400)
 
-        vehicles = scoped(request.user)["vehicles"].filter(status="available").select_related("subsidiary")
-        locs = {l.vehicle_id: l for l in VehicleLocation.objects.filter(vehicle__in=vehicles)}
+        from django.contrib.gis.db.models.functions import Distance
+        from django.contrib.gis.geos import Point
+
+        origin = Point(lng, lat, srid=4326)
+        # Distance calculée et triée par PostGIS (ST_Distance géographique → mètres).
+        vehicles = (
+            scoped(request.user)["vehicles"]
+            .filter(status="available", last_location__isnull=False)
+            .select_related("subsidiary", "last_location")
+            .annotate(distance=Distance("last_location__location", origin))
+            .order_by("distance")
+        )
         rows = []
         for v in vehicles:
-            loc = locs.get(v.id)
-            if not loc:
-                continue
-            dist = _haversine([lat, lng], [float(loc.latitude), float(loc.longitude)])
+            loc = v.last_location
+            # Repli haversine si la géométrie n'est pas (encore) renseignée.
+            dist = v.distance.km if v.distance is not None else _haversine(
+                [lat, lng], [float(loc.latitude), float(loc.longitude)]
+            )
             rows.append({
                 "id": str(v.id),
                 "registration": v.registration,

@@ -385,3 +385,49 @@ def trip_route(user, trip_id) -> dict | None:
         "speed_kmh": float(speed) if speed is not None else None,
         "driver_name": trip.driver.full_name if trip.driver else None,
     }
+
+
+# Nombre maximal de points renvoyés pour la relecture (sous-échantillonnage au besoin).
+REPLAY_MAX_POINTS = 2000
+
+
+def trip_replay(user, trip_id) -> dict | None:
+    """Trace GPS complète et horodatée d'une course, pour la relecture temporelle.
+
+    Renvoie les points ordonnés dans le temps : [lat, lng, t (ISO), speed|None].
+    Sous-échantillonné à REPLAY_MAX_POINTS pour les très longs trajets.
+    """
+    base = Trip.objects.all() if user is None else Trip.objects.for_user(user)
+    trip = base.filter(pk=trip_id).select_related("route", "vehicle").first()
+    if trip is None:
+        return None
+
+    raw = []
+    for session in trip.tracking_sessions.all():
+        for p in session.points.order_by("recorded_at").values_list(
+            "latitude", "longitude", "recorded_at", "speed_kmh"
+        ):
+            raw.append(p)
+    raw.sort(key=lambda p: p[2])
+
+    # Sous-échantillonnage régulier si la trace est très longue.
+    if len(raw) > REPLAY_MAX_POINTS:
+        step = len(raw) / REPLAY_MAX_POINTS
+        raw = [raw[int(i * step)] for i in range(REPLAY_MAX_POINTS)]
+
+    points = [
+        [float(lat), float(lng), rec.isoformat(), float(spd) if spd is not None else None]
+        for (lat, lng, rec, spd) in raw
+    ]
+    route = getattr(trip, "route", None)
+    planned = route.geometry if (route and route.geometry) else []
+    return {
+        "trip_id": str(trip.id),
+        "destination": trip.destination,
+        "vehicle_registration": trip.vehicle.registration if trip.vehicle_id else None,
+        "planned": planned,
+        "points": points,
+        "distance_km": real_traveled_km(trip),
+        "started_at": points[0][2] if points else None,
+        "ended_at": points[-1][2] if points else None,
+    }

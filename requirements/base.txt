@@ -2,6 +2,8 @@
 Django==6.0.6
 djangorestframework>=3.16
 djangorestframework-simplejwt>=5.5
+# Keycloak/OIDC : validation des jetons (RS256 via JWKS). [crypto] = cryptography.
+PyJWT[crypto]>=2.9
 django-environ>=0.12
 psycopg[binary]>=3.2
 django-cors-headers>=4.7
@@ -20,7 +22,11 @@ redis>=5.0
 #   pip install anthropic
 # (import paresseux : l'absence du paquet/clé fait basculer K-BOT sur le moteur heuristique)
 
-# Différé : psycopg avec PostGIS (GeoDjango)
+# PostGIS / GeoDjango : aucune dépendance pip — GeoDjango charge les libs natives
+# GDAL/GEOS/PROJ via ctypes. Elles sont fournies par le système :
+#   Docker  → gdal-bin libgeos-dev libproj-dev (cf. Dockerfile)
+#   macOS   → brew install gdal geos proj   (chemins réglés dans settings/local.py)
+#   serveur DB → image postgis/postgis (extension PostGIS activée)
 
 openpyxl>=3.1
 reportlab>=4.0

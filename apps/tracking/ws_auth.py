@@ -12,8 +12,19 @@ from django.contrib.auth.models import AnonymousUser
 
 @database_sync_to_async
 def _get_user(token: str):
-    from rest_framework_simplejwt.tokens import AccessToken
+    from django.conf import settings
+
+    # Keycloak (OIDC) prioritaire si activé.
+    if getattr(settings, "OIDC_ENABLED", False):
+        try:
+            from apps.accounts.authentication import authenticate_keycloak_token
+
+            return authenticate_keycloak_token(token)
+        except Exception:
+            pass  # repli sur SimpleJWT (jeton de secours)
+
     from rest_framework_simplejwt.exceptions import TokenError
+    from rest_framework_simplejwt.tokens import AccessToken
 
     from apps.accounts.models import User
 

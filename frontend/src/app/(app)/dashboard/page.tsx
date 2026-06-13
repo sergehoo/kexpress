@@ -34,11 +34,11 @@ import {
 } from "lucide-react";
 
 import { Card, CardBody, CardHeader, CardTitle, EmptyState, Input, Select, Spinner } from "@/components/ui";
-import { useDashboardStats } from "@/lib/queries";
+import { useDashboardStats, useMaintenanceForecast } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
 import { useSubsidiaryFilter } from "@/lib/subsidiary";
-import { cn, formatNumber } from "@/lib/utils";
+import { cn, formatDate, formatNumber } from "@/lib/utils";
 
 const PERIODS = [
   { key: "week", label: "Semaine" },
@@ -78,6 +78,10 @@ export default function DashboardPage() {
   }
 
   const { data, isLoading, isError } = useDashboardStats(params);
+
+  // Prévision maintenance : réservée aux gestionnaires / finance.
+  const canForecast = !!me && (me.has_company_scope || ["fleet_manager", "subsidiary_admin", "finance"].includes(me.role));
+  const forecast = useMaintenanceForecast(canForecast);
 
   const axis = theme === "dark" ? "#9fb0c9" : "#64748b";
   const grid = theme === "dark" ? "#233149" : "#eef2f7";
@@ -335,6 +339,61 @@ export default function DashboardPage() {
               <TopList title="Maintenance : véhicules coûteux" rows={data.maintenance.top_cost_vehicles.map((v) => ({ label: v.registration, value: `${formatNumber(v.cost)} XOF` }))} />
               <TopList title="Indisponibilité par véhicule" rows={data.maintenance.top_downtime_vehicles.map((v) => ({ label: v.registration, value: `${formatNumber(v.hours)} h` }))} />
             </div>
+
+            {/* Prévision maintenance (estimation statistique) */}
+            {canForecast && (forecast.data?.results.length ?? 0) > 0 && (
+              <Card className="mt-4 animate-fade-up">
+                <CardHeader>
+                  <CardTitle>Prévision maintenance — véhicules à réviser bientôt</CardTitle>
+                </CardHeader>
+                <CardBody className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-faint">
+                          <th className="px-5 py-2.5 font-medium">Véhicule</th>
+                          <th className="px-5 py-2.5 font-medium">Usage</th>
+                          <th className="px-5 py-2.5 font-medium">Avant révision</th>
+                          <th className="px-5 py-2.5 font-medium">Échéance estimée</th>
+                          <th className="px-5 py-2.5 font-medium">Risque de panne</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-line">
+                        {forecast.data!.results.slice(0, 8).map((f) => {
+                          const overdue = f.revision_remaining_km <= 0;
+                          const soon = f.days_to_revision != null && f.days_to_revision <= 30;
+                          const riskTone =
+                            f.breakdown_risk === "élevé" ? "bg-rose-500/10 text-rose-600"
+                              : f.breakdown_risk === "modéré" ? "bg-amber-500/10 text-amber-600"
+                              : "bg-emerald-500/10 text-emerald-600";
+                          return (
+                            <tr key={f.vehicle} className="hover:bg-surface2">
+                              <td className="px-5 py-2.5 font-medium text-ink">{f.registration}<p className="text-[10px] font-normal text-faint">{f.subsidiary_name}</p></td>
+                              <td className="px-5 py-2.5 text-muted">{f.km_per_day > 0 ? `${formatNumber(f.km_per_day)} km/j` : "—"}</td>
+                              <td className={cn("px-5 py-2.5 font-medium", overdue ? "text-rose-600" : soon ? "text-amber-600" : "text-ink")}>
+                                {overdue ? `dépassée de ${formatNumber(Math.abs(f.revision_remaining_km))} km` : `${formatNumber(f.revision_remaining_km)} km`}
+                              </td>
+                              <td className="px-5 py-2.5 text-muted">
+                                {f.days_to_revision == null
+                                  ? "cadence inconnue"
+                                  : f.days_to_revision > 3650
+                                    ? "> 10 ans (usage faible)"
+                                    : `${f.revision_eta ? formatDate(f.revision_eta) : ""} (J-${f.days_to_revision})`}
+                              </td>
+                              <td className="px-5 py-2.5">
+                                <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", riskTone)}>{f.breakdown_risk}</span>
+                                {f.breakdowns_180d > 0 && <span className="ml-1.5 text-[10px] text-faint">{f.breakdowns_180d} panne(s)/180j</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="px-5 py-2 text-[11px] text-faint">{forecast.data!.note}</p>
+                </CardBody>
+              </Card>
+            )}
           </Section>
 
           {/* ============ CONFORMITÉ ============ */}

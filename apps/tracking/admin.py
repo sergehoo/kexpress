@@ -18,6 +18,7 @@ from apps.tracking.models import (
 @admin.register(VehicleLocation)
 class VehicleLocationAdmin(admin.ModelAdmin):
     list_display = ["vehicle", "latitude", "longitude", "speed_kmh", "recorded_at"]
+    exclude = ["location"]  # géométrie synchronisée depuis lat/lng
 
 
 @admin.register(TripTrackingSession)
@@ -30,6 +31,7 @@ class TripTrackingSessionAdmin(admin.ModelAdmin):
 class GeofenceZoneAdmin(admin.ModelAdmin):
     list_display = ["name", "zone_type", "subsidiary", "is_active"]
     list_filter = ["zone_type", "is_active", "subsidiary"]
+    exclude = ["area"]  # géométrie synchronisée depuis le polygone JSON
 
 
 @admin.register(GeofenceAlert)
@@ -50,8 +52,13 @@ class DriverDeviceAdmin(admin.ModelAdmin):
     list_filter = ["platform", "is_active"]
 
 
+@admin.register(TripLocationPoint)
+class TripLocationPointAdmin(admin.ModelAdmin):
+    list_display = ["session", "latitude", "longitude", "speed_kmh", "recorded_at"]
+    exclude = ["point"]  # géométrie synchronisée depuis lat/lng
+
+
 admin.site.register(TrackingConsent)
 admin.site.register(TripRoute)
 admin.site.register(TripWaypoint)
-admin.site.register(TripLocationPoint)
 admin.site.register(OfflineSyncLog)

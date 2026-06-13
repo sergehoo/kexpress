@@ -1,7 +1,9 @@
 """Géofencing temps réel : détection entrée/sortie de zone au fil des positions.
 
-Polygones stockés en JSON ([[lat, lng], ...]) sur GeofenceZone. Une alerte n'est
-créée que sur TRANSITION (entrée ou sortie), jamais répétée tant que l'état persiste.
+La containment est évaluée par PostGIS (ST_Covers sur la géométrie `area`).
+Repli ray-casting sur le polygone JSON [[lat, lng], ...] pour les zones dont la
+géométrie n'est pas encore synchronisée. Une alerte n'est créée que sur
+TRANSITION (entrée ou sortie), jamais répétée tant que l'état persiste.
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ from apps.core.enums import AlertSeverity, GeofenceType, NotificationType, RoleC
 
 
 def point_in_polygon(lat: float, lng: float, polygon: list) -> bool:
-    """Ray casting — polygon: [[lat, lng], ...] (≥ 3 points)."""
+    """Ray casting (repli) — polygon: [[lat, lng], ...] (≥ 3 points)."""
     if not polygon or len(polygon) < 3:
         return False
     inside = False
@@ -23,6 +25,18 @@ def point_in_polygon(lat: float, lng: float, polygon: list) -> bool:
             inside = not inside
         j = i
     return inside
+
+
+def _zones_containing(point, zones):
+    """IDs des zones dont la géométrie PostGIS couvre le point (ST_Covers)."""
+    ids = [z.id for z in zones if z.area is not None]
+    if not ids:
+        return set()
+    from apps.tracking.models import GeofenceZone
+
+    return set(
+        GeofenceZone.objects.filter(id__in=ids, area__covers=point).values_list("id", flat=True)
+    )
 
 
 def _last_event(zone, vehicle):
@@ -53,13 +67,18 @@ def _notify_managers(vehicle, title, message):
 
 def check_geofences(vehicle, loc, trip=None) -> int:
     """Compare la position courante aux zones actives de la filiale ; crée les alertes."""
+    from django.contrib.gis.geos import Point
+
     from apps.tracking.models import GeofenceAlert, GeofenceZone
 
     lat, lng = float(loc.latitude), float(loc.longitude)
     created = 0
-    zones = GeofenceZone.objects.filter(is_active=True, subsidiary_id=vehicle.subsidiary_id)
+    zones = list(GeofenceZone.objects.filter(is_active=True, subsidiary_id=vehicle.subsidiary_id))
+    point = Point(lng, lat, srid=4326)
+    inside_ids = _zones_containing(point, zones)
     for zone in zones:
-        inside = point_in_polygon(lat, lng, zone.polygon)
+        # Géométrie PostGIS si disponible, sinon repli ray-casting sur le JSON.
+        inside = zone.id in inside_ids if zone.area is not None else point_in_polygon(lat, lng, zone.polygon)
         last = _last_event(zone, vehicle)
         currently_inside = last == "enter"
 

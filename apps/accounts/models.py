@@ -47,6 +47,13 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name="responsable hiérarchique",
     )
 
+    # Identifiant immuable de l'utilisateur côté Keycloak (claim `sub`).
+    # Sert de liaison robuste au compte SSO (l'email peut changer).
+    keycloak_sub = models.CharField(
+        "identifiant Keycloak", max_length=255, null=True, blank=True,
+        unique=True, db_index=True, editable=False,
+    )
+
     is_active = models.BooleanField("actif", default=True)
     is_staff = models.BooleanField("accès admin", default=False)
     date_joined = models.DateTimeField("date d'inscription", auto_now_add=True)

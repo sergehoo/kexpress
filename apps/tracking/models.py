@@ -1,8 +1,12 @@
-"""Géolocalisation & tracking temps réel.
+"""Géolocalisation & tracking temps réel (PostGIS).
 
-Phase 1 : coordonnées en Decimal (lat/lng). Migration vers PostGIS PointField
-prévue à la phase temps réel — les relations restent inchangées.
+Les coordonnées restent exposées en Decimal lat/lng (contrat API/frontend),
+doublées d'une géométrie PostGIS (PointField/PolygonField, SRID 4326, geography)
+qui sert de colonne spatiale canonique pour le géofencing (ST_Covers) et les
+distances en mètres (ST_Distance). La géométrie est synchronisée depuis lat/lng
+(et depuis le polygone JSON pour les zones) à chaque save().
 """
+from django.contrib.gis.db import models as gis_models
 from django.db import models
 
 from apps.core.enums import (
@@ -17,6 +21,44 @@ from apps.core.models import TenantScopedModel, TimeStampedModel
 # Précision coordonnées : 9 chiffres, 6 décimales (~0,11 m).
 LAT_KWARGS = dict(max_digits=9, decimal_places=6)
 LNG_KWARGS = dict(max_digits=9, decimal_places=6)
+
+
+def _point_from(latitude, longitude):
+    """Construit un Point PostGIS (lng, lat) depuis des coords lat/lng, ou None."""
+    if latitude is None or longitude is None:
+        return None
+    from django.contrib.gis.geos import Point
+
+    return Point(float(longitude), float(latitude), srid=4326)
+
+
+def _polygon_from(polygon):
+    """Construit un Polygon PostGIS depuis un polygone JSON [[lat, lng], ...], ou None.
+
+    L'anneau est fermé automatiquement ; ordre GEOS = (x=lng, y=lat).
+    """
+    if not polygon or len(polygon) < 3:
+        return None
+    from django.contrib.gis.geos import LinearRing, Polygon
+
+    ring = [(float(p[1]), float(p[0])) for p in polygon]
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    try:
+        return Polygon(LinearRing(ring), srid=4326)
+    except (ValueError, TypeError, IndexError):
+        return None
+
+
+def _with_geo_update_field(kwargs, source_fields, geo_field):
+    """Ajoute la colonne géométrique à update_fields si une source y figure."""
+    uf = kwargs.get("update_fields")
+    if uf is not None:
+        uf = set(uf)
+        if uf & set(source_fields) and geo_field not in uf:
+            uf.add(geo_field)
+            kwargs["update_fields"] = list(uf)
+    return kwargs
 
 
 class DriverDevice(TimeStampedModel):
@@ -70,6 +112,8 @@ class VehicleLocation(TimeStampedModel):
     )
     latitude = models.DecimalField("latitude", **LAT_KWARGS)
     longitude = models.DecimalField("longitude", **LNG_KWARGS)
+    # Colonne spatiale (synchronisée depuis lat/lng) : distances en mètres.
+    location = gis_models.PointField("position", geography=True, srid=4326, null=True, blank=True)
     speed_kmh = models.DecimalField("vitesse (km/h)", max_digits=6, decimal_places=2, null=True, blank=True)
     heading = models.DecimalField("cap (°)", max_digits=5, decimal_places=1, null=True, blank=True)
     recorded_at = models.DateTimeField("horodatage GPS", db_index=True)
@@ -77,6 +121,11 @@ class VehicleLocation(TimeStampedModel):
     class Meta:
         verbose_name = "position véhicule"
         verbose_name_plural = "positions véhicule"
+
+    def save(self, *args, **kwargs):
+        self.location = _point_from(self.latitude, self.longitude)
+        kwargs = _with_geo_update_field(kwargs, ("latitude", "longitude"), "location")
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.vehicle.registration} @ {self.latitude},{self.longitude}"
@@ -173,6 +222,7 @@ class TripLocationPoint(TimeStampedModel):
     )
     latitude = models.DecimalField("latitude", **LAT_KWARGS)
     longitude = models.DecimalField("longitude", **LNG_KWARGS)
+    point = gis_models.PointField("position", geography=True, srid=4326, null=True, blank=True)
     speed_kmh = models.DecimalField("vitesse (km/h)", max_digits=6, decimal_places=2, null=True, blank=True)
     accuracy_m = models.DecimalField("précision (m)", max_digits=7, decimal_places=2, null=True, blank=True)
     recorded_at = models.DateTimeField("horodatage GPS", db_index=True)
@@ -183,25 +233,37 @@ class TripLocationPoint(TimeStampedModel):
         ordering = ["session", "recorded_at"]
         indexes = [models.Index(fields=["session", "recorded_at"])]
 
+    def save(self, *args, **kwargs):
+        self.point = _point_from(self.latitude, self.longitude)
+        kwargs = _with_geo_update_field(kwargs, ("latitude", "longitude"), "point")
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.latitude},{self.longitude} @ {self.recorded_at:%H:%M:%S}"
 
 
 class GeofenceZone(TenantScopedModel):
-    """Zone géographique (polygone en JSON en Phase 1)."""
+    """Zone géographique : polygone JSON (contrat frontend) + géométrie PostGIS."""
 
     name = models.CharField("nom", max_length=120)
     zone_type = models.CharField(
         "type de zone", max_length=12, choices=GeofenceType.choices, default=GeofenceType.MISSION
     )
-    # Polygone GeoJSON [[lng, lat], ...] stocké en JSON (PostGIS plus tard).
-    polygon = models.JSONField("polygone (GeoJSON)", default=list)
+    # Polygone éditable côté UI : liste de [lat, lng] (ordre Leaflet).
+    polygon = models.JSONField("polygone", default=list)
+    # Géométrie spatiale synchronisée depuis `polygon` : géofencing par ST_Covers.
+    area = gis_models.PolygonField("zone", geography=True, srid=4326, null=True, blank=True)
     is_active = models.BooleanField("active", default=True)
 
     class Meta:
         verbose_name = "zone géographique"
         verbose_name_plural = "zones géographiques"
         ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        self.area = _polygon_from(self.polygon)
+        kwargs = _with_geo_update_field(kwargs, ("polygon",), "area")
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.name} ({self.get_zone_type_display()})"

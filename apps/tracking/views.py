@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.tracking.live import compute_positions, record_position, trip_route
+from apps.tracking.live import compute_positions, record_position, trip_replay, trip_route
 
 
 class FleetPositionsView(APIView):
@@ -48,6 +48,18 @@ class TripRouteView(APIView):
 
     def get(self, request, trip_id):
         data = trip_route(request.user, trip_id)
+        if data is None:
+            return Response({"detail": "Course introuvable."}, status=404)
+        return Response(data)
+
+
+class TripReplayView(APIView):
+    """Trace GPS complète horodatée d'une course (relecture temporelle)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, trip_id):
+        data = trip_replay(request.user, trip_id)
         if data is None:
             return Response({"detail": "Course introuvable."}, status=404)
         return Response(data)

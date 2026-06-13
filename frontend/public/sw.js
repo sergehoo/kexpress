@@ -1,5 +1,6 @@
-/* Service worker Kaydan Express — cache app shell + données API (offline partiel). */
-const VERSION = "kx-v2";
+/* Service worker Kaydan Express — cache app shell + données API (offline partiel)
+   + Background Sync (vidange des files réservations/GPS, même onglet fermé). */
+const VERSION = "kx-v3";
 const SHELL_CACHE = `${VERSION}-shell`;
 const API_CACHE = `${VERSION}-api`;
 const OFFLINE_URL = "/offline";
@@ -95,4 +96,98 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(self.clients.openWindow(event.notification.data || "/dashboard"));
+});
+
+/* --- Background Sync : vidange des files hors-ligne (même onglet fermé) -------
+   Réplique la définition IndexedDB de src/lib/offlineDb.ts (mêmes noms + version). */
+const SYNC_DB = "kx-offline";
+const SYNC_DB_VERSION = 2;
+
+function syncOpenDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(SYNC_DB, SYNC_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("reservations-outbox"))
+        db.createObjectStore("reservations-outbox", { autoIncrement: true });
+      if (!db.objectStoreNames.contains("gps-outbox"))
+        db.createObjectStore("gps-outbox", { autoIncrement: true });
+      if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function syncGet(db, store, key) {
+  return new Promise((resolve) => {
+    const r = db.transaction(store, "readonly").objectStore(store).get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => resolve(undefined);
+  });
+}
+
+function syncReadAll(db, store) {
+  return new Promise((resolve, reject) => {
+    const out = [];
+    const cur = db.transaction(store, "readonly").objectStore(store).openCursor();
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (c) { out.push({ key: c.key, value: c.value }); c.continue(); }
+      else resolve(out);
+    };
+    cur.onerror = () => reject(cur.error);
+  });
+}
+
+function syncDelete(db, store, key) {
+  return new Promise((resolve) => {
+    const t = db.transaction(store, "readwrite");
+    t.objectStore(store).delete(key);
+    t.oncomplete = () => resolve();
+    t.onerror = () => resolve();
+  });
+}
+
+// 401/403/408/429 = on conserve (auth/temporaire) ; autres 4xx = rejet définitif.
+function isPermanentReject(status) {
+  return status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
+}
+
+async function flushQueues() {
+  const db = await syncOpenDb();
+  const token = await syncGet(db, "meta", "token");
+  const apiBase = await syncGet(db, "meta", "apiBase");
+  if (!apiBase) return;
+  const headers = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: "Bearer " + token } : {}),
+  };
+
+  for (const e of await syncReadAll(db, "reservations-outbox")) {
+    try {
+      const r = await fetch(apiBase + "/reservations/", {
+        method: "POST", headers, body: JSON.stringify(e.value.payload),
+      });
+      if (r.ok || isPermanentReject(r.status)) await syncDelete(db, "reservations-outbox", e.key);
+    } catch (_) { /* réseau : on garde pour réessai */ }
+  }
+
+  for (const e of await syncReadAll(db, "gps-outbox")) {
+    try {
+      const r = await fetch(apiBase + "/tracking/trips/" + e.value.trip_id + "/position/", {
+        method: "POST", headers, body: JSON.stringify(e.value.payload),
+      });
+      if (r.ok || isPermanentReject(r.status)) await syncDelete(db, "gps-outbox", e.key);
+    } catch (_) { /* réseau : on garde pour réessai */ }
+  }
+
+  const clients = await self.clients.matchAll();
+  clients.forEach((c) => c.postMessage({ type: "kx-synced" }));
+}
+
+self.addEventListener("sync", (event) => {
+  if (event.tag === "kx-sync-reservations" || event.tag === "kx-sync-gps") {
+    event.waitUntil(flushQueues());
+  }
 });

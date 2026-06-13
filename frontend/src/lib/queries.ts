@@ -291,6 +291,35 @@ export function useBreakdownTypes() {
   });
 }
 
+export interface MaintenanceForecast {
+  vehicle: string;
+  registration: string;
+  subsidiary_name: string;
+  mileage: number;
+  km_per_day: number;
+  next_revision_km: number;
+  revision_remaining_km: number;
+  days_to_revision: number | null;
+  revision_eta: string | null;
+  breakdowns_180d: number;
+  breakdown_risk: string;
+  next_breakdown_km_estimate: number | null;
+}
+
+export function useMaintenanceForecast(enabled = true) {
+  return useQuery({
+    queryKey: ["maintenance-forecast"],
+    enabled,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data } = await api.get<{ count: number; results: MaintenanceForecast[]; note: string }>(
+        "/maintenance-forecast/",
+      );
+      return data;
+    },
+  });
+}
+
 export function useMaintenanceTypes() {
   return useQuery({
     queryKey: ["maintenance-types"],
@@ -323,6 +352,30 @@ export function useTripRoute(tripId?: string | null) {
     refetchInterval: 5_000,
     queryFn: async () => {
       const { data } = await api.get<TripRouteData>(`/tracking/trips/${tripId}/route/`);
+      return data;
+    },
+  });
+}
+
+// --- Relecture d'itinéraire (trace GPS horodatée) ----------------------
+
+export interface TripReplayData {
+  trip_id: string;
+  destination: string;
+  vehicle_registration: string | null;
+  planned: [number, number][];
+  points: [number, number, string, number | null][]; // [lat, lng, ISO, speed]
+  distance_km: number;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export function useTripReplay(tripId?: string | null, enabled = false) {
+  return useQuery({
+    queryKey: ["trip-replay", tripId],
+    enabled: !!tripId && enabled,
+    queryFn: async () => {
+      const { data } = await api.get<TripReplayData>(`/tracking/trips/${tripId}/replay/`);
       return data;
     },
   });

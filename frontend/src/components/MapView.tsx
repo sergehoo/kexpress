@@ -107,6 +107,14 @@ function pinIcon(color: string, glyph: string) {
   });
 }
 const ORIGIN_ICON = pinIcon("#10b981", "📍");
+const REPLAY_ICON = L.divIcon({
+  className: "",
+  html:
+    '<div style="display:flex;align-items:center;justify-content:center;width:20px;height:20px;' +
+    'border-radius:9999px;background:#f97316;border:3px solid #fff;box-shadow:0 0 0 3px rgba(249,115,22,.35);"></div>',
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+});
 
 function ClickHandler({ onMapClick }: { onMapClick: (lat: number, lng: number) => void }) {
   useMapEvents({ click: (e) => onMapClick(e.latlng.lat, e.latlng.lng) });
@@ -143,6 +151,7 @@ export default function MapView({
   onMapClick,
   recenterTo,
   fitTo,
+  marker,
 }: {
   positions: VehiclePosition[];
   selectedId?: string | null;
@@ -156,6 +165,8 @@ export default function MapView({
   recenterTo?: [number, number] | null;
   /** Cadrage de secours (ex. itinéraire) quand aucune position véhicule. */
   fitTo?: [number, number][];
+  /** Marqueur ponctuel mobile (ex. position courante en relecture d'itinéraire). */
+  marker?: [number, number] | null;
 }) {
   const located = useMemo(
     () => positions.filter((p) => p.latitude && p.longitude),
@@ -199,6 +210,7 @@ export default function MapView({
         {onMapClick && <ClickHandler onMapClick={onMapClick} />}
         <Recenter to={recenterTo} />
         {origin && <Marker position={origin} icon={ORIGIN_ICON} />}
+        {marker && <Marker position={marker} icon={REPLAY_ICON} />}
 
         {/* Zones de géofencing */}
         {zones?.map((z) => {

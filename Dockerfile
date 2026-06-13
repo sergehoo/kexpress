@@ -9,10 +9,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# curl pour les health checks ; le reste (psycopg, Pillow, reportlab, cryptography)
-# s'installe via des wheels binaires, sans dépendances système supplémentaires.
+# curl : health checks. gdal-bin/libgeos-dev/libproj-dev : libs natives requises
+# par GeoDjango (PostGIS) — chargées par ctypes, auto-détectées sous Linux.
+# Le reste (psycopg, Pillow, reportlab, cryptography) vient de wheels binaires.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        curl gdal-bin libgeos-dev libproj-dev binutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Dépendances Python (couche cachée tant que les requirements ne changent pas).

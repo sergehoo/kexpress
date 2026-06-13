@@ -37,6 +37,7 @@ DJANGO_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.gis",  # GeoDjango (PostGIS) : géométries, géofencing, distances
 ]
 
 THIRD_PARTY_APPS = [
@@ -106,13 +107,20 @@ CHANNEL_LAYERS = {
     }
 }
 
-# --- Base de données ------------------------------------------------------
+# --- Base de données (PostGIS) --------------------------------------------
 DATABASES = {
     "default": env.db(
         "DATABASE_URL",
         default="postgres://sergeogah@127.0.0.1:5433/kexpress",
     )
 }
+# Moteur spatial GeoDjango (PointField/PolygonField, géofencing, distances).
+DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
+
+# Bibliothèques natives GDAL/GEOS : auto-détectées sous Linux (Docker) ;
+# chemins explicites possibles via env (utile sous macOS/Homebrew, cf. local.py).
+GDAL_LIBRARY_PATH = env("GDAL_LIBRARY_PATH", default=None)
+GEOS_LIBRARY_PATH = env("GEOS_LIBRARY_PATH", default=None)
 
 # --- Auth -----------------------------------------------------------------
 AUTH_USER_MODEL = "accounts.User"
@@ -138,12 +146,37 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# --- Keycloak / OIDC (SSO) -------------------------------------------------
+# Keycloak authentifie ; Kexpress gère l'autorisation (rôle + filiale).
+OIDC_ENABLED = env.bool("OIDC_ENABLED", default=False)
+OIDC_ISSUER = env("OIDC_ISSUER", default="").rstrip("/")
+OIDC_JWKS_URL = env(
+    "OIDC_JWKS_URL",
+    default=(f"{OIDC_ISSUER}/protocol/openid-connect/certs" if OIDC_ISSUER else ""),
+)
+OIDC_CLIENT_ID = env("OIDC_CLIENT_ID", default="kexpress-web")
+# Auditoires acceptés (claim `aud`). Vide → on n'exige pas d'audience mais on
+# vérifie que `azp`/`aud` correspond au client (cf. authentication.py).
+OIDC_AUDIENCE = env.list("OIDC_AUDIENCE", default=[])
+# Rôle attribué au 1er login SSO (un admin ajuste rôle + filiale ensuite).
+OIDC_DEFAULT_ROLE = env("OIDC_DEFAULT_ROLE", default="requester")
+# Connexion locale par mot de passe. Quand OIDC est actif, /api/auth/token/
+# n'accepte plus que les super-admins (accès de secours « break-glass »).
+LOCAL_LOGIN_ENABLED = env.bool("LOCAL_LOGIN_ENABLED", default=True)
+
 # --- Django REST Framework ------------------------------------------------
+_AUTH_CLASSES = []
+if OIDC_ENABLED:
+    _AUTH_CLASSES.append("apps.accounts.authentication.KeycloakAuthentication")
+_AUTH_CLASSES.append("rest_framework_simplejwt.authentication.JWTAuthentication")
+if not OIDC_ENABLED:
+    # SessionAuthentication (cookie + CSRF) uniquement hors SSO : évite une voie
+    # d'authentification non-OIDC lorsque le SSO est obligatoire. (Le site /admin
+    # Django reste fonctionnel : il n'en dépend pas.)
+    _AUTH_CLASSES.append("rest_framework.authentication.SessionAuthentication")
+
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
-    ),
+    "DEFAULT_AUTHENTICATION_CLASSES": tuple(_AUTH_CLASSES),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),

@@ -123,3 +123,33 @@ def test_end_trip_uses_real_distance(db, trip_in_progress, requester_a):
     assert trip.distance_km == Decimal("10")
     session = trip.tracking_sessions.get()
     assert session.status == "ended" and float(session.total_distance_km) == pytest.approx(10.0, abs=0.1)
+
+
+def test_buffered_point_keeps_timestamp_and_bypasses_antispam(db, trip_in_progress, requester_a):
+    """Un point GPS tamponné hors-ligne conserve son horodatage et n'est pas filtré
+    par l'anti-spam (rejeu de plusieurs points rapprochés)."""
+    t1 = timezone.now() - timedelta(minutes=5)
+    t2 = t1 + timedelta(seconds=1)  # < MIN_INTERVAL_S : serait filtré pour un point live
+    record_position(requester_a, trip_in_progress.id, 5.3450, -4.0240, recorded_at=t1)
+    record_position(requester_a, trip_in_progress.id, 5.3460, -4.0240, recorded_at=t2)
+
+    points = list(trip_in_progress.tracking_sessions.get().points.order_by("recorded_at"))
+    assert len(points) == 2  # les deux points tamponnés sont conservés
+    assert abs((points[0].recorded_at - t1).total_seconds()) < 2  # horodatage d'origine préservé
+
+
+def test_trip_replay_returns_ordered_timestamped_trace(db, trip_in_progress, requester_a):
+    """La relecture renvoie les points ordonnés dans le temps avec horodatage."""
+    from apps.tracking.live import trip_replay
+
+    base = timezone.now() - timedelta(minutes=3)
+    record_position(requester_a, trip_in_progress.id, 5.3450, -4.0240, recorded_at=base)
+    record_position(requester_a, trip_in_progress.id, 5.3460, -4.0245, recorded_at=base + timedelta(seconds=30))
+
+    rep = trip_replay(requester_a, trip_in_progress.id)
+    assert rep is not None
+    assert len(rep["points"]) == 2
+    # [lat, lng, t(ISO), speed]
+    assert rep["points"][0][2] <= rep["points"][1][2]  # ordre temporel
+    assert rep["started_at"] == rep["points"][0][2]
+    assert rep["ended_at"] == rep["points"][-1][2]

@@ -20,6 +20,7 @@ import {
 import { Button, Card, CardBody, EmptyState, Spinner } from "@/components/ui";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EndTripModal, StartTripModal } from "@/components/trip-modals";
+import { TripReplay } from "@/components/TripReplay";
 import { useGpsTracker } from "@/lib/useGpsTracker";
 import { useTrip, useTripAction, useTripRoute } from "@/lib/queries";
 import { apiError } from "@/lib/api";
@@ -221,6 +222,9 @@ export default function TripDetailPage() {
           )}
         </CardBody>
       </Card>
+
+      {/* Relecture d'itinéraire (trace GPS rejouable) — hors courses simplement planifiées */}
+      {t.status !== "scheduled" && <TripReplay tripId={t.id} />}
 
       {/* Incidents */}
       <Card>
