@@ -217,21 +217,16 @@ def _fresh_speed(loc, now=None):
     return loc.speed_kmh
 
 
-def compute_positions(user, subsidiary_id=None) -> list[dict]:
-    """Dernières positions réelles connues des véhicules du périmètre (lecture seule)."""
-    now = timezone.now()
-    vehicles = Vehicle.objects.for_user(user).select_related("subsidiary")
-    if subsidiary_id and user.has_company_scope:
-        vehicles = vehicles.filter(subsidiary_id=subsidiary_id)
+def _position_rows(vehicles, now=None) -> list[dict]:
+    """Construit les lignes de position pour une liste de véhicules (lecture seule)."""
+    now = now or timezone.now()
     vehicles = list(vehicles)
-
     locations = {l.vehicle_id: l for l in VehicleLocation.objects.filter(vehicle__in=vehicles)}
     active = {
         t.vehicle_id: t
         for t in Trip.objects.filter(vehicle__in=vehicles, status="in_progress")
         .select_related("driver", "reservation", "route")
     }
-
     rows = []
     for v in vehicles:
         loc = locations.get(v.id)
@@ -245,6 +240,7 @@ def compute_positions(user, subsidiary_id=None) -> list[dict]:
             "model": v.model,
             "status": v.status,
             "status_display": v.get_status_display(),
+            "subsidiary": str(v.subsidiary_id),  # pour le filtrage côté consumer (fan-out)
             "subsidiary_name": v.subsidiary.name,
             "driver_name": trip.driver.full_name if (trip and trip.driver) else None,
             "destination": trip.destination if trip else None,
@@ -259,13 +255,39 @@ def compute_positions(user, subsidiary_id=None) -> list[dict]:
     return rows
 
 
+def compute_positions(user, subsidiary_id=None) -> list[dict]:
+    """Dernières positions réelles connues des véhicules du périmètre (lecture seule).
+
+    Utilisé par l'API REST (chargement initial / repli). Le temps réel passe par le
+    diffuseur (broadcast_tracking) + groupes Redis.
+    """
+    vehicles = Vehicle.objects.for_user(user).select_related("subsidiary")
+    if subsidiary_id and user.has_company_scope:
+        vehicles = vehicles.filter(subsidiary_id=subsidiary_id)
+    return _position_rows(vehicles)
+
+
+def compute_all_positions() -> list[dict]:
+    """Positions de TOUTE la flotte (sans scoping) — source du diffuseur temps réel.
+
+    La flotte est mutualisée : tous les véhicules sont visibles par tous. Le filtrage
+    éventuel par filiale est appliqué côté consumer à partir du champ `subsidiary`.
+    """
+    return _position_rows(Vehicle.objects.select_related("subsidiary").all())
+
+
 AVG_SPEED_KMH = 28.0
 
 
 def trip_tracking(user, trip_id) -> dict | None:
-    """Instantané de suivi d'une course : position véhicule réelle, état, ETA, itinéraire."""
+    """Instantané de suivi d'une course : position véhicule réelle, état, ETA, itinéraire.
+
+    `user=None` : pas de scoping (réservé au diffuseur ; l'accès est déjà contrôlé à la
+    connexion WebSocket avant de rejoindre le groupe).
+    """
+    base = Trip.objects.all() if user is None else Trip.objects.for_user(user)
     trip = (
-        Trip.objects.for_user(user).filter(pk=trip_id)
+        base.filter(pk=trip_id)
         .select_related("vehicle", "driver", "reservation", "route").first()
     )
     if trip is None:
@@ -304,9 +326,12 @@ def trip_tracking(user, trip_id) -> dict | None:
 
 
 def trip_route(user, trip_id) -> dict | None:
-    """Itinéraire prévu (tracé routier) + trace GPS réelle + distance/progression/vitesse."""
+    """Itinéraire prévu (tracé routier) + trace GPS réelle + distance/progression/vitesse.
+
+    `user=None` : pas de scoping (utilisé par le diffuseur temps réel)."""
+    base = Trip.objects.all() if user is None else Trip.objects.for_user(user)
     trip = (
-        Trip.objects.for_user(user).filter(pk=trip_id)
+        base.filter(pk=trip_id)
         .select_related("route", "vehicle", "driver").first()
     )
     if trip is None:

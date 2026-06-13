@@ -63,6 +63,10 @@ x-django-env: &django-env
   SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-True}
   CONN_MAX_AGE: ${CONN_MAX_AGE:-60}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Monitoring Sentry (optionnel — actif si SENTRY_DSN renseigné)
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
+  SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
 
 services:
   kexpress-db:
@@ -164,6 +168,47 @@ services:
         condition: service_healthy
     networks: [kexpress-internal]
 
+  kexpress-broadcaster:
+    # Diffuseur temps réel : calcule les positions une fois par tick et les pousse aux
+    # groupes Redis. UN SEUL exemplaire (ne pas répliquer) ; le backend, lui, peut être
+    # mis à l'échelle sur plusieurs workers/replicas — tous reçoivent via le channel layer.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["python", "manage.py", "broadcast_tracking"]
+    depends_on:
+      kexpress-db:
+        condition: service_healthy
+      kexpress-redis:
+        condition: service_healthy
+    networks: [kexpress-internal]
+
+  kexpress-backup:
+    # Sauvegardes PostgreSQL planifiées (pg_dump compressé + rétention).
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: kexpress-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-kexpress}
+      POSTGRES_USER: ${POSTGRES_USER:-kexpress}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["sh", "/usr/local/bin/backup.sh"]
+    volumes:
+      - kexpress_backups:/backups
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./docker/restore.sh:/usr/local/bin/restore.sh:ro
+    depends_on:
+      kexpress-db:
+        condition: service_healthy
+    networks: [kexpress-internal]
+
   kexpress-frontend:
     build:
       context: ./frontend
@@ -198,6 +243,7 @@ volumes:
   kexpress_redis:
   kexpress_media:
   kexpress_static:
+  kexpress_backups:
 
 networks:
   # Réseau privé inter-conteneurs (kexpress-db, kexpress-redis, app).

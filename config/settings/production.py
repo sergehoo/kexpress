@@ -66,6 +66,26 @@ if NOTIFY_EMAIL_ENABLED:
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
+# --- Sentry (monitoring erreurs + performance, optionnel) -----------------
+# Activé uniquement si SENTRY_DSN est défini. Instrumente Django et Celery.
+SENTRY_DSN = env("SENTRY_DSN", default="")
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.django import DjangoIntegration
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[DjangoIntegration(), CeleryIntegration()],
+            traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.0),
+            send_default_pii=env.bool("SENTRY_SEND_PII", default=False),
+            environment=env("SENTRY_ENVIRONMENT", default="production"),
+            release=env("SENTRY_RELEASE", default=None),
+        )
+    except ImportError:
+        pass  # sentry-sdk absent : monitoring désactivé, l'app démarre normalement
+
 # --- Journalisation (stdout, capté par Docker / Dokploy) ------------------
 LOGGING = {
     "version": 1,
