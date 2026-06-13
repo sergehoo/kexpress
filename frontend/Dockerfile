@@ -35,6 +35,8 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Sonde de santé (utilisée par le healthcheck du compose).
+COPY healthcheck.js ./healthcheck.js
 USER nextjs
 EXPOSE 3000
 CMD ["node", "server.js"]
