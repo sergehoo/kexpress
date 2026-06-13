@@ -21,7 +21,7 @@ frontend
 # Données & secrets locaux
 .env
 .env.*
-!.env.production.example
+.env.production.example
 media
 staticfiles
 db.sqlite3
