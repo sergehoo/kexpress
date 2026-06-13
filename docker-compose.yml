@@ -1,39 +1,9 @@
-# =============================================================================
-# Kaydan Express — déploiement production (Docker Compose / Dokploy)
-#
-# Tous les services, réseaux et volumes sont préfixés « kexpress(-/_) » pour
-# éviter toute collision avec d'autres piles déployées sur le même hôte.
-#
-# Services : kexpress-db (PostgreSQL 16) · kexpress-redis · kexpress-backend
-#            (Daphne ASGI) · kexpress-worker (Celery) · kexpress-beat (Celery beat)
-#            · kexpress-frontend (Next.js standalone).
-#
-# Déploiement Dokploy :
-#   1. Créer une application « Compose » pointant sur ce dépôt.
-#   2. Renseigner les variables d'environnement (cf. .env.production.example) dans
-#      l'onglet « Environment » de Dokploy (elles alimentent les ${...} ci-dessous).
-#   3. Ajouter deux domaines dans Dokploy :
-#        - kexpress-frontend → port 3000   (ex. https://app.exemple.com)
-#        - kexpress-backend  → port 8000   (ex. https://api.exemple.com)
-#      Dokploy génère les labels Traefik et les certificats Let's Encrypt.
-#   4. NEXT_PUBLIC_API_BASE doit valoir https://<domaine-backend>/api (figé au build).
-#
-# Le réseau externe « dokploy-network » est créé par Dokploy ; il permet à Traefik
-# d'atteindre les conteneurs web. En dehors de Dokploy, créez-le une fois :
-#   docker network create dokploy-network
-# =============================================================================
-
 name: kexpress
-
-# NB : l'environnement Django est INLINÉ dans chaque service (cf. services.*.environment).
-# On n'utilise PAS d'anchor x-* / merge YAML : Dokploy ignore les clés d'extension x-* au
-# déploiement (l'environnement des conteneurs serait vide). L'interpolation ${VAR} (renseignée
-# dans l'onglet Environment de Dokploy) reste, elle, prise en charge normalement.
 
 services:
   kexpress-db:
-    # PostGIS (GeoDjango) : fournit l'extension spatiale + outils géo.
     image: postgis/postgis:16-3.5
+    container_name: kexpress-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-kexpress}
@@ -47,10 +17,14 @@ services:
       timeout: 5s
       retries: 10
     networks:
-      - kexpress-internal
+      kexpress-internal:
+        aliases:
+          - kexpress-db
+          - db
 
   kexpress-redis:
     image: redis:7-alpine
+    container_name: kexpress-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -61,32 +35,38 @@ services:
       timeout: 5s
       retries: 10
     networks:
-      - kexpress-internal
+      kexpress-internal:
+        aliases:
+          - kexpress-redis
+          - redis
 
   kexpress-backend:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: kexpress-backend
     restart: unless-stopped
     environment:
-      # Inliné par service (PAS d'anchor x-* : Dokploy ignore ces clés au déploiement,
-      # d'où un environnement vide). Interpolation ${VAR} = renseignée dans Dokploy.
       DJANGO_SETTINGS_MODULE: config.settings.production
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS requis}
       CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS requis}
+
       DATABASE_URL: postgres://${POSTGRES_USER:-kexpress}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@kexpress-db:5432/${POSTGRES_DB:-kexpress}
       REDIS_URL: redis://kexpress-redis:6379/0
+
       OIDC_ENABLED: ${OIDC_ENABLED:-False}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-kexpress-web}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
       OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-requester}
       LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-True}
+
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_ADMIN_EMAIL: ${VAPID_ADMIN_EMAIL:-admin@example.com}
+
       NOTIFY_EMAIL_ENABLED: ${NOTIFY_EMAIL_ENABLED:-False}
       DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@kaydan-express.ci}
       EMAIL_HOST: ${EMAIL_HOST:-}
@@ -95,23 +75,28 @@ services:
       EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
       EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
       EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
+
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
+
       OSRM_URL: ${OSRM_URL:-https://router.project-osrm.org}
       MAP_COST_PER_KM: ${MAP_COST_PER_KM:-350.0}
       FUEL_PRICE_SOURCE_URL: ${FUEL_PRICE_SOURCE_URL:-}
       FUEL_PRICE_SUPER: ${FUEL_PRICE_SUPER:-875}
       FUEL_PRICE_GASOIL: ${FUEL_PRICE_GASOIL:-655}
       REVISION_ALERT_PCTS: ${REVISION_ALERT_PCTS:-20,10,5}
+
       SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
       SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-2592000}
       SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-True}
       SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-True}
       CONN_MAX_AGE: ${CONN_MAX_AGE:-60}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+
       DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
       DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
       SEED_DEMO: ${SEED_DEMO:-false}
@@ -130,23 +115,18 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 40s
-    networks: [kexpress-internal, dokploy-network]
-    # Routage : ajouter le domaine API dans l'UI Dokploy (service kexpress-backend, port 8000).
-    # Hors Dokploy, décommenter les labels Traefik ci-dessous (adapter le domaine) :
-    # labels:
-    #   - "traefik.enable=true"
-    #   - "traefik.docker.network=dokploy-network"
-    #   - "traefik.http.routers.kexpress-api.rule=Host(`api.exemple.com`)"
-    #   - "traefik.http.routers.kexpress-api.entrypoints=websecure"
-    #   - "traefik.http.routers.kexpress-api.tls.certresolver=letsencrypt"
-    #   - "traefik.http.services.kexpress-api.loadbalancer.server.port=8000"
+      start_period: 60s
+    networks:
+      - kexpress-internal
+      - dokploy-network
 
   kexpress-worker:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: kexpress-worker
     restart: unless-stopped
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "${CELERY_CONCURRENCY:-4}"]
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis}
@@ -155,44 +135,7 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS requis}
       DATABASE_URL: postgres://${POSTGRES_USER:-kexpress}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@kexpress-db:5432/${POSTGRES_DB:-kexpress}
       REDIS_URL: redis://kexpress-redis:6379/0
-      OIDC_ENABLED: ${OIDC_ENABLED:-False}
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-kexpress-web}
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
-      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-requester}
-      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-True}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_ADMIN_EMAIL: ${VAPID_ADMIN_EMAIL:-admin@example.com}
-      NOTIFY_EMAIL_ENABLED: ${NOTIFY_EMAIL_ENABLED:-False}
-      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@kaydan-express.ci}
-      EMAIL_HOST: ${EMAIL_HOST:-}
-      EMAIL_PORT: ${EMAIL_PORT:-587}
-      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
-      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
-      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
-      EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
-      OSRM_URL: ${OSRM_URL:-https://router.project-osrm.org}
-      MAP_COST_PER_KM: ${MAP_COST_PER_KM:-350.0}
-      FUEL_PRICE_SOURCE_URL: ${FUEL_PRICE_SOURCE_URL:-}
-      FUEL_PRICE_SUPER: ${FUEL_PRICE_SUPER:-875}
-      FUEL_PRICE_GASOIL: ${FUEL_PRICE_GASOIL:-655}
-      REVISION_ALERT_PCTS: ${REVISION_ALERT_PCTS:-20,10,5}
-      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
-      SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-2592000}
-      SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-True}
-      SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-True}
-      CONN_MAX_AGE: ${CONN_MAX_AGE:-60}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
-      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
-      SEED_DEMO: ${SEED_DEMO:-false}
-    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "${CELERY_CONCURRENCY:-4}"]
     depends_on:
       kexpress-db:
         condition: service_healthy
@@ -207,7 +150,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: kexpress-beat
     restart: unless-stopped
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis}
@@ -216,44 +161,7 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS requis}
       DATABASE_URL: postgres://${POSTGRES_USER:-kexpress}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@kexpress-db:5432/${POSTGRES_DB:-kexpress}
       REDIS_URL: redis://kexpress-redis:6379/0
-      OIDC_ENABLED: ${OIDC_ENABLED:-False}
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-kexpress-web}
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
-      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-requester}
-      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-True}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_ADMIN_EMAIL: ${VAPID_ADMIN_EMAIL:-admin@example.com}
-      NOTIFY_EMAIL_ENABLED: ${NOTIFY_EMAIL_ENABLED:-False}
-      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@kaydan-express.ci}
-      EMAIL_HOST: ${EMAIL_HOST:-}
-      EMAIL_PORT: ${EMAIL_PORT:-587}
-      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
-      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
-      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
-      EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
-      OSRM_URL: ${OSRM_URL:-https://router.project-osrm.org}
-      MAP_COST_PER_KM: ${MAP_COST_PER_KM:-350.0}
-      FUEL_PRICE_SOURCE_URL: ${FUEL_PRICE_SOURCE_URL:-}
-      FUEL_PRICE_SUPER: ${FUEL_PRICE_SUPER:-875}
-      FUEL_PRICE_GASOIL: ${FUEL_PRICE_GASOIL:-655}
-      REVISION_ALERT_PCTS: ${REVISION_ALERT_PCTS:-20,10,5}
-      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
-      SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-2592000}
-      SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-True}
-      SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-True}
-      CONN_MAX_AGE: ${CONN_MAX_AGE:-60}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
-      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
-      SEED_DEMO: ${SEED_DEMO:-false}
-    command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
     depends_on:
       kexpress-db:
         condition: service_healthy
@@ -263,13 +171,12 @@ services:
       - kexpress-internal
 
   kexpress-broadcaster:
-    # Diffuseur temps réel : calcule les positions une fois par tick et les pousse aux
-    # groupes Redis. UN SEUL exemplaire (ne pas répliquer) ; le backend, lui, peut être
-    # mis à l'échelle sur plusieurs workers/replicas — tous reçoivent via le channel layer.
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: kexpress-broadcaster
     restart: unless-stopped
+    command: ["python", "manage.py", "broadcast_tracking"]
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis}
@@ -278,44 +185,7 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS requis}
       DATABASE_URL: postgres://${POSTGRES_USER:-kexpress}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@kexpress-db:5432/${POSTGRES_DB:-kexpress}
       REDIS_URL: redis://kexpress-redis:6379/0
-      OIDC_ENABLED: ${OIDC_ENABLED:-False}
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-kexpress-web}
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
-      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-requester}
-      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-True}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_ADMIN_EMAIL: ${VAPID_ADMIN_EMAIL:-admin@example.com}
-      NOTIFY_EMAIL_ENABLED: ${NOTIFY_EMAIL_ENABLED:-False}
-      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@kaydan-express.ci}
-      EMAIL_HOST: ${EMAIL_HOST:-}
-      EMAIL_PORT: ${EMAIL_PORT:-587}
-      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
-      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
-      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
-      EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
-      OSRM_URL: ${OSRM_URL:-https://router.project-osrm.org}
-      MAP_COST_PER_KM: ${MAP_COST_PER_KM:-350.0}
-      FUEL_PRICE_SOURCE_URL: ${FUEL_PRICE_SOURCE_URL:-}
-      FUEL_PRICE_SUPER: ${FUEL_PRICE_SUPER:-875}
-      FUEL_PRICE_GASOIL: ${FUEL_PRICE_GASOIL:-655}
-      REVISION_ALERT_PCTS: ${REVISION_ALERT_PCTS:-20,10,5}
-      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
-      SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-2592000}
-      SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-True}
-      SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-True}
-      CONN_MAX_AGE: ${CONN_MAX_AGE:-60}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
-      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
-      SEED_DEMO: ${SEED_DEMO:-false}
-    command: ["python", "manage.py", "broadcast_tracking"]
     depends_on:
       kexpress-db:
         condition: service_healthy
@@ -325,8 +195,8 @@ services:
       - kexpress-internal
 
   kexpress-backup:
-    # Sauvegardes PostgreSQL planifiées (pg_dump compressé + rétention).
     image: postgres:16-alpine
+    container_name: kexpress-backup
     restart: unless-stopped
     environment:
       POSTGRES_HOST: kexpress-db
@@ -345,18 +215,19 @@ services:
     depends_on:
       kexpress-db:
         condition: service_healthy
-    networks: [kexpress-internal]
+    networks:
+      - kexpress-internal
 
   kexpress-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE requis (ex. https://api.exemple.com/api)}
-        # SSO Keycloak (figé au build) — laisser vide pour conserver la connexion locale.
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE requis}
         NEXT_PUBLIC_OIDC_AUTHORITY: ${NEXT_PUBLIC_OIDC_AUTHORITY:-}
         NEXT_PUBLIC_OIDC_CLIENT_ID: ${NEXT_PUBLIC_OIDC_CLIENT_ID:-kexpress-web}
         NEXT_PUBLIC_LOCAL_LOGIN: ${NEXT_PUBLIC_LOCAL_LOGIN:-true}
+    container_name: kexpress-frontend
     restart: unless-stopped
     depends_on:
       kexpress-backend:
@@ -368,21 +239,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
     networks:
       - kexpress-internal
       - dokploy-network
-
-
-    # Routage : ajouter le domaine applicatif dans l'UI Dokploy (service kexpress-frontend, port 3000).
-    # Hors Dokploy, décommenter les labels Traefik ci-dessous (adapter le domaine) :
-    # labels:
-    #   - "traefik.enable=true"
-    #   - "traefik.docker.network=dokploy-network"
-    #   - "traefik.http.routers.kexpress-app.rule=Host(`app.exemple.com`)"
-    #   - "traefik.http.routers.kexpress-app.entrypoints=websecure"
-    #   - "traefik.http.routers.kexpress-app.tls.certresolver=letsencrypt"
-    #   - "traefik.http.services.kexpress-app.loadbalancer.server.port=3000"
 
 volumes:
   kexpress_db:
@@ -392,8 +252,9 @@ volumes:
   kexpress_backups:
 
 networks:
-  # Réseau privé inter-conteneurs (kexpress-db, kexpress-redis, app).
   kexpress-internal:
-  # Réseau d'ingress géré par Dokploy/Traefik (créé hors de ce fichier).
+    name: kexpress-internal
+    driver: bridge
+
   dokploy-network:
     external: true
