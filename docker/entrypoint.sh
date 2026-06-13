@@ -9,6 +9,10 @@ import os, sys, time
 import psycopg
 
 url = os.environ.get("DATABASE_URL", "")
+if not url:
+    print("❌ DATABASE_URL absent du conteneur : l'environnement n'a pas été "
+          "propagé (vérifier le compose / les variables Dokploy).")
+    sys.exit(1)
 for attempt in range(60):
     try:
         psycopg.connect(url, connect_timeout=3).close()
@@ -23,6 +27,12 @@ else:
 PY
 
 # Bootstrap réservé au service web (évite les courses migrations entre conteneurs).
+# Détecté via la commande : seul le serveur web (daphne) l'exécute ; worker, beat
+# et broadcaster partagent le même environnement mais NE bootstrapent pas.
+case "$*" in
+    *daphne*) RUN_BOOTSTRAP="true" ;;
+esac
+
 if [ "$RUN_BOOTSTRAP" = "true" ]; then
     echo "🛠  Migrations…"
     python manage.py migrate --noinput

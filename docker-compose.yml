@@ -75,6 +75,11 @@ x-django-env: &django-env
   SENTRY_DSN: ${SENTRY_DSN:-}
   SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+  # Bootstrap du service web (migrations/collectstatic/rôles) — l'entrypoint
+  # ne l'exécute que pour la commande daphne. Superutilisateur initial optionnel.
+  DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
+  DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
+  SEED_DEMO: ${SEED_DEMO:-false}
 
 services:
   kexpress-db:
@@ -112,12 +117,9 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      <<: *django-env
-      RUN_BOOTSTRAP: "true"          # migrations + collectstatic + rôles (web uniquement)
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
-      SEED_DEMO: ${SEED_DEMO:-false}
+    # Alias pur (et non merge `<<:`) : la valeur est résolue au parse, donc elle
+    # survit à la re-sérialisation du compose par Dokploy.
+    environment: *django-env
     depends_on:
       kexpress-db:
         condition: service_healthy
@@ -150,8 +152,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      <<: *django-env
+    environment: *django-env
     command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "${CELERY_CONCURRENCY:-4}"]
     depends_on:
       kexpress-db:
@@ -167,8 +168,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      <<: *django-env
+    environment: *django-env
     command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
     depends_on:
       kexpress-db:
@@ -185,8 +185,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      <<: *django-env
+    environment: *django-env
     command: ["python", "manage.py", "broadcast_tracking"]
     depends_on:
       kexpress-db:
