@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-"""Utilitaire de ligne de commande Django pour Kaydan Express."""
 import os
 import sys
 

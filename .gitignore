@@ -30,11 +30,11 @@ frontend/.env.local
 
 # Docker
 *.pid
-
-# Documentation Markdown (non versionnée) — sauf le README racine (page d'accueil GitHub)
 *.md
 !/README.md
 
 # OS / IDE
 .DS_Store
 .idea/
+
+.claude
