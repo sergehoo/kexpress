@@ -101,12 +101,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   return (
     <>
       {open && (
-        <div className="fixed inset-0 z-30 bg-navy-950/60 backdrop-blur-sm lg:hidden" onClick={onClose} aria-hidden />
+        <div className="fixed inset-0 z-[1090] bg-navy-950/60 backdrop-blur-sm lg:hidden" onClick={onClose} aria-hidden />
       )}
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-navy-900 text-slate-300 transition-transform lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-[1100] flex w-64 flex-col bg-navy-900 text-slate-300 transition-transform lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
