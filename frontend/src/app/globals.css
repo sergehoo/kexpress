@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/* Mode sombre piloté par la classe .dark sur <html> */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Marque — orange premium */
+  --color-brand-50: #fff7ed;
+  --color-brand-100: #ffedd5;
+  --color-brand-200: #fed7aa;
+  --color-brand-300: #fdba74;
+  --color-brand-400: #fb923c;
+  --color-brand-500: #f97316;
+  --color-brand-600: #ea580c;
+  --color-brand-700: #c2410c;
+  --color-brand-800: #9a3412;
+  --color-brand-900: #7c2d12;
+
+  /* Bleu nuit — surfaces sombres & sidebar */
+  --color-navy-600: #1e2a47;
+  --color-navy-700: #182238;
+  --color-navy-800: #111a2e;
+  --color-navy-900: #0b1322;
+  --color-navy-950: #070d18;
+
+  /* Jetons sémantiques (clair par défaut) */
+  --color-canvas: #f4f6fb;
+  --color-surface: #ffffff;
+  --color-surface2: #eef2f8;
+  --color-line: #e3e8f0;
+  --color-ink: #0f172a;
+  --color-muted: #5b6b85;
+  --color-faint: #94a3b8;
+
+  --radius-card: 1rem;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Surcharge des jetons sémantiques en mode sombre */
+.dark {
+  --color-canvas: #0a1120;
+  --color-surface: #111b2e;
+  --color-surface2: #0e1626;
+  --color-line: #233149;
+  --color-ink: #e8edf6;
+  --color-muted: #9fb0c9;
+  --color-faint: #6b7c98;
+}
+
+:root {
+  color-scheme: light;
+}
+.dark {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-faint);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* Animations légères */
+@keyframes kx-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: kx-fade-up 0.35s ease-out both;
+}
+@keyframes kx-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-pop {
+  animation: kx-pop 0.2s ease-out both;
+}
+
+/* Conteneur carte en plein écran : occupe tout l'écran, sans coins arrondis */
+.kx-mapfs:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  border-radius: 0 !important;
+  background: var(--color-surface);
+}
+.kx-mapfs:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  border-radius: 0 !important;
+}
+
+/* FullCalendar — adaptation au thème clair/sombre */
+.kx-fc {
+  --fc-border-color: var(--color-line);
+  --fc-page-bg-color: var(--color-surface);
+  --fc-neutral-bg-color: var(--color-surface2);
+  --fc-today-bg-color: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+  --fc-list-event-hover-bg-color: var(--color-surface2);
+  --fc-now-indicator-color: var(--color-brand-600);
+  font-size: 0.85rem;
+  color: var(--color-ink);
+}
+.kx-fc .fc .fc-toolbar-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.kx-fc .fc .fc-col-header-cell-cushion,
+.kx-fc .fc .fc-daygrid-day-number,
+.kx-fc .fc .fc-timegrid-slot-label-cushion,
+.kx-fc .fc .fc-list-day-text,
+.kx-fc .fc .fc-list-day-side-text {
+  color: var(--color-muted);
+  text-decoration: none;
+}
+.kx-fc .fc .fc-button {
+  background: var(--color-surface2);
+  border: 1px solid var(--color-line);
+  color: var(--color-ink);
+  text-transform: capitalize;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.6rem;
+  box-shadow: none;
+}
+.kx-fc .fc .fc-button:hover {
+  background: var(--color-line);
+}
+.kx-fc .fc .fc-button-primary:not(:disabled).fc-button-active,
+.kx-fc .fc .fc-button-primary:not(:disabled):active {
+  background: var(--color-brand-600);
+  border-color: var(--color-brand-600);
+  color: #fff;
+}
+.kx-fc .fc-theme-standard td,
+.kx-fc .fc-theme-standard th,
+.kx-fc .fc-theme-standard .fc-scrollgrid {
+  border-color: var(--color-line);
+}
+.kx-fc .fc-event {
+  border: none;
+  padding: 1px 4px;
+  font-weight: 500;
+}

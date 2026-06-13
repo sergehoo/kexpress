@@ -1,0 +1,5 @@
+# Kaydan Express — dépendances de production
+-r base.txt
+
+# Service de fichiers statiques (admin, DRF, OpenAPI) intégré à l'app ASGI
+whitenoise>=6.7

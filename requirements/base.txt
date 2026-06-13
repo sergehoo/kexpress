@@ -1,0 +1,27 @@
+# Kaydan Express — dépendances de base (Phase 1)
+Django==6.0.6
+djangorestframework>=3.16
+djangorestframework-simplejwt>=5.5
+django-environ>=0.12
+psycopg[binary]>=3.2
+django-cors-headers>=4.7
+django-filter>=25.1
+drf-spectacular>=0.28
+Pillow>=11.0
+channels>=4.1
+channels-redis>=4.2
+daphne>=4.1
+
+# Temps réel asynchrone & tâches périodiques
+celery>=5.4
+redis>=5.0
+
+# Optionnel — K-BOT sur LLM réel (activé si ANTHROPIC_API_KEY est défini) :
+#   pip install anthropic
+# (import paresseux : l'absence du paquet/clé fait basculer K-BOT sur le moteur heuristique)
+
+# Différé : psycopg avec PostGIS (GeoDjango)
+
+openpyxl>=3.1
+reportlab>=4.0
+pywebpush>=2.0

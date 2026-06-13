@@ -1,0 +1,432 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  Calendar,
+  Car,
+  CheckCircle2,
+  Clock,
+  LocateFixed,
+  Navigation,
+  Sparkles,
+  Users,
+  Wallet,
+} from "lucide-react";
+
+import { Button, Input, Select, Spinner } from "@/components/ui";
+import { PlaceSearch, type Point } from "@/components/PlaceSearch";
+import { api, apiError } from "@/lib/api";
+import { useFleetLive } from "@/lib/useFleetLive";
+import { useGpsTracker } from "@/lib/useGpsTracker";
+import { useTripTracking } from "@/lib/useTripTracking";
+import { useActiveTrip, useNearbyVehicles } from "@/lib/queries";
+import type { RouteEstimate, VehiclePosition } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+const MapView = dynamic(() => import("@/components/MapView"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-surface2"><Spinner className="h-7 w-7" /></div>
+  ),
+});
+
+
+export default function MapPage() {
+
+  // Suivi temps réel : si l'utilisateur a une course en cours, on bascule en mode suivi.
+  const { data: activeTrip } = useActiveTrip();
+  const { data: track, connected: trackConnected } = useTripTracking(activeTrip?.id);
+  const trackingMode = Boolean(activeTrip && track);
+  const { positions: fleetPositions } = useFleetLive(undefined, !trackingMode);
+  // GPS réel : l'appareil du demandeur alimente le tracking pendant la course.
+  const gps = useGpsTracker(activeTrip?.id, activeTrip?.status === "in_progress");
+
+  // Véhicule suivi représenté comme une position de flotte (pour MapView).
+  const trackedPositions: VehiclePosition[] = track && track.vehicle.latitude
+    ? [{
+        id: track.trip_id, registration: track.vehicle.registration, brand: "", model: "",
+        status: "on_trip", status_display: track.status_display, subsidiary_name: "",
+        driver_name: track.driver_name, destination: track.destination, trip_id: track.trip_id,
+        latitude: track.vehicle.latitude, longitude: track.vehicle.longitude,
+        speed_kmh: track.vehicle.speed_kmh, heading: null,
+        recorded_at: new Date().toISOString(), is_late: false,
+      }]
+    : [];
+  const positions = trackingMode ? trackedPositions : fleetPositions;
+
+  const [origin, setOrigin] = useState<Point | null>(null);
+  const [destination, setDestination] = useState<Point | null>(null);
+  const [recenter, setRecenter] = useState<[number, number] | null>(null);
+  const [estimate, setEstimate] = useState<RouteEstimate | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  const [reserving, setReserving] = useState(false);
+  const [reserved, setReserved] = useState<{ id: string; status: string } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [error, setError] = useState("");
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({
+    date: today, time: "08:00", purpose: "", passengers: 1,
+    needs_driver: true, priority: "normal",
+  });
+  const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+
+  const nearby = useNearbyVehicles(origin?.lat, origin?.lng);
+
+  // Estimation automatique dès que départ + destination sont définis.
+  useEffect(() => {
+    if (!origin || !destination) { setEstimate(null); return; }
+    setEstimating(true);
+    api.post<RouteEstimate>("/routes/estimate/", {
+      origin: [origin.lat, origin.lng], destination: [destination.lat, destination.lng],
+    }).then(({ data }) => setEstimate(data)).catch(() => setEstimate(null)).finally(() => setEstimating(false));
+  }, [origin, destination]);
+
+  function useMyPosition() {
+    if (!navigator.geolocation) { setError("Géolocalisation indisponible."); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude, lng = pos.coords.longitude;
+        // Géocodage inverse : remplit le champ départ avec l'adresse réelle.
+        let label = "Ma position actuelle";
+        try {
+          const { data } = await api.get<{ label: string | null }>("/places/reverse/", { params: { lat, lng } });
+          if (data.label) label = data.label;
+        } catch { /* repli : libellé générique */ }
+        setOrigin({ lat, lng, label });
+        setRecenter([lat, lng]);
+        setLocating(false);
+      },
+      () => { setError("Position refusée. Choisissez un point de départ manuellement."); setLocating(false); },
+    );
+  }
+
+  async function onMapClick(lat: number, lng: number) {
+    let label = "Point sélectionné sur la carte";
+    try {
+      const { data } = await api.get<{ label: string | null }>("/places/reverse/", { params: { lat, lng } });
+      if (data.label) label = data.label;
+    } catch { /* repli : libellé générique */ }
+    setDestination({ lat, lng, label });
+  }
+
+  async function reserve(submit: boolean) {
+    setError("");
+    if (!origin || !destination) { setError("Définissez un point de départ et une destination."); return; }
+    if (!form.purpose) { setError("Précisez le motif de la course."); return; }
+    const dep = new Date(`${form.date}T${form.time}:00`);
+    const ret = new Date(dep.getTime() + (estimate ? estimate.duration_min + 30 : 60) * 60000);
+    setReserving(true);
+    try {
+      const { data } = await api.post("/reservations/from-map/", {
+        origin: origin.label, destination: destination.label,
+        departure_time: dep.toISOString(), estimated_return: ret.toISOString(),
+        purpose: form.purpose, passengers: form.passengers, needs_driver: form.needs_driver,
+        priority: form.priority, submit,
+      });
+      setReserved({ id: data.id, status: data.status_display });
+    } catch (e) { setError(apiError(e)); } finally { setReserving(false); }
+  }
+
+  function reset() {
+    setReserved(null); setOrigin(null); setDestination(null); setEstimate(null);
+    setForm((f) => ({ ...f, purpose: "" }));
+  }
+
+  return (
+    <div className="relative h-[calc(100vh-8rem)] min-h-[28rem] overflow-hidden rounded-[var(--radius-card)] border border-line">
+      <MapView
+        positions={positions}
+        origin={trackingMode ? null : origin ? [origin.lat, origin.lng] : null}
+        destination={
+          trackingMode
+            ? track?.destination_point ?? null
+            : destination ? [destination.lat, destination.lng] : null
+        }
+        planned={trackingMode ? track?.planned : estimate?.geometry}
+        actual={trackingMode ? track?.actual : undefined}
+        recenterTo={
+          trackingMode && track?.vehicle.latitude
+            ? [Number(track.vehicle.latitude), Number(track.vehicle.longitude)]
+            : recenter
+        }
+        onMapClick={trackingMode || reserved ? undefined : onMapClick}
+      />
+
+      {trackingMode && track ? (
+        <TrackingPanel track={track} connected={trackConnected} gpsActive={gps.active} gpsError={gps.error} />
+      ) : (
+        <div className="absolute inset-x-2 bottom-2 z-[500] max-h-[64vh] overflow-y-auto rounded-2xl border border-line bg-surface/95 p-4 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:max-h-[calc(100%-2rem)] lg:w-[24rem]">
+        {!reserved ? (
+          <>
+            <div className="mb-3 flex items-center gap-2">
+              <Navigation className="h-5 w-5 text-brand-500" />
+              <h2 className="text-base font-semibold text-ink">Réserver une course</h2>
+            </div>
+
+            {/* Départ */}
+            <label className="mb-1 block text-xs font-medium text-muted">Point de départ</label>
+            <div className="space-y-1.5">
+              <PlaceSearch
+                placeholder="Rechercher un départ…"
+                externalValue={origin?.label}
+                onSelect={(p) => { setOrigin(p); setRecenter([p.lat, p.lng]); }}
+              />
+              <button onClick={useMyPosition} disabled={locating} className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:underline disabled:opacity-60">
+                <LocateFixed className="h-3.5 w-3.5" /> {locating ? "Localisation en cours…" : "Utiliser ma position actuelle"}
+              </button>
+              {origin && <p className="truncate text-[11px] text-emerald-600">📍 {origin.label}</p>}
+            </div>
+
+            {/* Destination */}
+            <label className="mb-1 mt-3 block text-xs font-medium text-muted">Destination</label>
+            <PlaceSearch
+              placeholder="Rechercher une destination…"
+              externalValue={destination?.label}
+              onSelect={(p) => { setDestination(p); setRecenter([p.lat, p.lng]); }}
+            />
+            {destination && <p className="mt-1 truncate text-[11px] text-brand-600">🏁 {destination.label}</p>}
+            <p className="mt-1 text-[11px] text-faint">Astuce : cliquez sur la carte pour choisir la destination.</p>
+
+            {/* Estimation */}
+            {estimating && <div className="mt-3 flex items-center gap-2 text-xs text-muted"><Spinner className="h-4 w-4" /> Estimation du trajet…</div>}
+            {estimate && (
+              <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-surface2 p-3 text-center">
+                <div><p className="text-sm font-bold text-ink">{estimate.distance_km} km</p><p className="text-[10px] text-faint">distance</p></div>
+                <div><p className="text-sm font-bold text-ink">~{Math.round(estimate.duration_min)} min</p><p className="text-[10px] text-faint">durée</p></div>
+                <div><p className="text-sm font-bold text-emerald-600">{estimate.fuel_liters.toLocaleString("fr-FR")} L</p><p className="text-[10px] text-faint">conso. estimée</p></div>
+              </div>
+            )}
+
+            {/* Suggestion K-BOT (ancrée sur les véhicules autour du point de départ) */}
+            {origin && nearby.data?.suggestion && (
+              <div className="mt-3 rounded-xl border border-brand-500/20 bg-gradient-to-br from-brand-500/10 to-transparent p-3">
+                <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-brand-600">
+                  <Sparkles className="h-3.5 w-3.5" /> Suggestion K-BOT
+                </p>
+                <p className="text-xs leading-relaxed text-muted">{nearby.data.suggestion}</p>
+              </div>
+            )}
+
+            {/* Véhicules proches */}
+            {origin && (nearby.data?.results.length ?? 0) > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs font-medium text-muted">{nearby.data!.results.length} véhicule(s) disponible(s) à proximité</p>
+                <div className="space-y-1">
+                  {nearby.data!.results.slice(0, 3).map((v) => (
+                    <div key={v.id} className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5 text-xs">
+                      <Car className="h-3.5 w-3.5 text-sky-600" />
+                      <span className="font-medium text-ink">{v.registration}</span>
+                      <span className="text-faint">{v.vehicle_type_display}</span>
+                      <span className="ml-auto flex items-center gap-1 text-muted"><Clock className="h-3 w-3" />{v.eta_min} min · {v.distance_km} km</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Détails course */}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div><label className="mb-1 block text-[11px] text-muted"><Calendar className="mr-1 inline h-3 w-3" />Date</label><Input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} /></div>
+              <div><label className="mb-1 block text-[11px] text-muted"><Clock className="mr-1 inline h-3 w-3" />Heure</label><Input type="time" value={form.time} onChange={(e) => set("time", e.target.value)} /></div>
+            </div>
+            <div className="mt-2"><Input placeholder="Motif de la course *" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} /></div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="relative"><Users className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" /><Input type="number" min={1} value={form.passengers} onChange={(e) => set("passengers", Number(e.target.value))} className="pl-9" /></div>
+              <Select value={form.priority} onChange={(e) => set("priority", e.target.value)}>
+                <option value="low">Basse</option><option value="normal">Normale</option><option value="high">Haute</option><option value="urgent">Urgente</option>
+              </Select>
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-sm text-muted">
+              <input type="checkbox" checked={form.needs_driver} onChange={(e) => set("needs_driver", e.target.checked)} /> Besoin d&apos;un chauffeur
+            </label>
+
+            {error && <p className="mt-2 rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-600">{error}</p>}
+
+            <div className="mt-3 flex gap-2">
+              <Button className="flex-1" disabled={reserving} onClick={() => reserve(true)}>
+                {reserving ? <Spinner className="h-4 w-4 border-white/50 border-t-white" /> : "Réserver maintenant"}
+              </Button>
+              <Button variant="secondary" disabled={reserving} onClick={() => reserve(false)}>Planifier</Button>
+            </div>
+          </>
+        ) : (
+          <div className="space-y-3 text-center">
+            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"><CheckCircle2 className="h-7 w-7" /></span>
+            <div>
+              <h2 className="text-base font-semibold text-ink">Demande enregistrée</h2>
+              <p className="text-sm text-muted">Statut : <span className="font-medium text-ink">{reserved.status}</span></p>
+            </div>
+            <div className="rounded-xl bg-surface2 p-3 text-left text-xs text-muted">
+              <p>📍 {origin?.label}</p>
+              <p className="mt-1">🏁 {destination?.label}</p>
+              {estimate && <p className="mt-1">{estimate.distance_km} km · ~{Math.round(estimate.duration_min)} min · {estimate.fuel_liters.toLocaleString("fr-FR")} L</p>}
+            </div>
+            <div className="flex gap-2">
+              <Link href="/reservations" className="flex-1 rounded-lg bg-brand-600 px-3 py-2 text-center text-sm font-medium text-white hover:bg-brand-700">Suivre ma demande</Link>
+              <Button variant="secondary" onClick={reset}>Nouvelle course</Button>
+            </div>
+          </div>
+        )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TrackingPanel({
+  track,
+  connected,
+  gpsActive,
+  gpsError,
+}: {
+  track: import("@/lib/types").TripTracking;
+  connected: boolean;
+  gpsActive?: boolean;
+  gpsError?: string;
+}) {
+  const STEPS = [
+    { key: "scheduled", label: "Chauffeur affecté" },
+    { key: "departed", label: "Chauffeur en route" },
+    { key: "in_progress", label: "Course en cours" },
+    { key: "returned", label: "Arrivée" },
+  ];
+  const order: Record<string, number> = { scheduled: 0, departed: 1, in_progress: 2, returned: 3, closed: 3 };
+  const cur = order[track.status] ?? 2;
+
+  const qc = useQueryClient();
+  const [endKm, setEndKm] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  async function runAction(action: "end" | "close") {
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const body = action === "end" && endKm ? { end_mileage: Number(endKm) } : {};
+      await api.post(`/trips/${track.trip_id}/${action}/`, body);
+      // Rafraîchit la course active : après clôture, /map repasse en mode réservation.
+      qc.invalidateQueries({ queryKey: ["active-trip"] });
+      qc.invalidateQueries({ queryKey: ["trips"] });
+      qc.invalidateQueries({ queryKey: ["fleet-positions"] });
+    } catch (e) {
+      setActionError(apiError(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  return (
+    <div className="absolute inset-x-2 bottom-2 z-[500] max-h-[70vh] overflow-y-auto rounded-2xl border border-line bg-surface/95 p-4 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:w-[24rem]">
+      <div className="mb-3 flex items-center gap-2">
+        <Navigation className="h-5 w-5 text-brand-500" />
+        <h2 className="text-base font-semibold text-ink">Course en cours</h2>
+        <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-muted">
+          <span className={cn("h-2 w-2 rounded-full", connected ? "animate-pulse bg-emerald-500" : "bg-amber-500")} />
+          {connected ? "En direct" : "…"}
+        </span>
+      </div>
+
+      {/* État de l'émetteur GPS de l'appareil (source des positions réelles) */}
+      <p className={cn("mb-2 flex items-center gap-1.5 text-[11px]", gpsActive ? "text-emerald-600" : "text-faint")}>
+        <LocateFixed className="h-3 w-3" />
+        {gpsActive
+          ? "GPS de l'appareil actif — positions réelles transmises"
+          : gpsError
+            ? `GPS indisponible : ${gpsError}`
+            : "En attente du GPS de l'appareil…"}
+      </p>
+
+      {/* ETA + progression */}
+      <div className="rounded-xl bg-gradient-to-br from-brand-500/10 to-transparent p-4 text-center">
+        <p className="text-3xl font-bold text-ink">{track.eta_min} min</p>
+        <p className="text-xs text-muted">arrivée estimée à {track.destination}</p>
+        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-surface2">
+          <div className="h-full rounded-full bg-brand-500 transition-all duration-700" style={{ width: `${Math.round(track.progress * 100)}%` }} />
+        </div>
+        <div className="mt-1 flex justify-between text-[11px] text-muted">
+          <span>{track.traveled_km} km parcourus</span>
+          <span>{track.remaining_km} km restants</span>
+        </div>
+      </div>
+
+      {/* Véhicule + chauffeur */}
+      <div className="mt-3 flex items-center gap-3 rounded-xl border border-line p-3">
+        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-sky-500/10 text-sky-600"><Car className="h-5 w-5" /></span>
+        <div className="min-w-0">
+          <p className="font-semibold text-ink">{track.vehicle.registration}</p>
+          <p className="text-xs text-muted">{track.driver_name ?? "Conduite personnelle"}</p>
+        </div>
+        <span className="ml-auto text-right text-xs text-muted">
+          <span className="flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            {track.vehicle.speed_kmh != null ? `${track.vehicle.speed_kmh} km/h` : "vitesse —"}
+          </span>
+        </span>
+      </div>
+
+      {/* Étapes */}
+      <div className="mt-4 space-y-3">
+        {STEPS.map((s, i) => {
+          const done = i < cur, active = i === cur;
+          return (
+            <div key={s.key} className="flex items-center gap-3">
+              <span className={cn(
+                "flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold",
+                done ? "bg-emerald-500 text-white" : active ? "bg-brand-500 text-white" : "bg-surface2 text-faint",
+              )}>
+                {done ? "✓" : i + 1}
+              </span>
+              <span className={cn("text-sm", active ? "font-semibold text-ink" : done ? "text-muted" : "text-faint")}>{s.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Actions de fin de course */}
+      {track.status === "in_progress" && (
+        <div className="mt-4 space-y-2 rounded-xl border border-line p-3">
+          <p className="text-xs font-medium text-muted">Arrivé à destination ?</p>
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min={0}
+              placeholder="Km au retour (optionnel)"
+              value={endKm}
+              onChange={(e) => setEndKm(e.target.value)}
+              className="h-9 flex-1 text-xs"
+            />
+            <Button size="sm" variant="success" disabled={actionBusy} onClick={() => runAction("end")}>
+              {actionBusy ? "…" : "Terminer la course"}
+            </Button>
+          </div>
+          <p className="text-[10px] text-faint">Sans kilométrage, la distance est estimée depuis l&apos;itinéraire.</p>
+        </div>
+      )}
+      {track.status === "returned" && (
+        <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+          <p className="mb-2 text-xs text-muted">Course terminée — clôturez-la pour libérer le véhicule définitivement.</p>
+          <Button size="sm" className="w-full" disabled={actionBusy} onClick={() => runAction("close")}>
+            {actionBusy ? "…" : "Clôturer la course"}
+          </Button>
+        </div>
+      )}
+      {actionError && (
+        <p className="mt-2 rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-600">{actionError}</p>
+      )}
+
+      <div className="mt-4 flex gap-2">
+        <Link href="/trips" className="flex-1 rounded-lg border border-line px-3 py-2 text-center text-sm font-medium text-ink hover:bg-surface2">Détails course</Link>
+        {track.driver_name && (
+          <button className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">
+            <Navigation className="h-4 w-4" /> Contacter
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}

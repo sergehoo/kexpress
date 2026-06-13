@@ -1,0 +1,6 @@
+-r base.txt
+
+# Dev / tests
+pytest>=8.3
+pytest-django>=4.9
+django-extensions>=4.1

@@ -1,0 +1,353 @@
+"""Service temps réel : routage routier (OSRM), itinéraire prévu vs réel,
+distance / progression / vitesse calculées depuis les positions GPS RÉELLES.
+
+Aucune donnée n'est simulée : les positions proviennent des appareils
+(PWA chauffeur/demandeur via l'endpoint d'ingestion) ou d'un boîtier télématique.
+Sortie déjà sérialisable JSON. Partagé entre le consumer WebSocket et l'API REST.
+"""
+from __future__ import annotations
+
+import math
+from decimal import Decimal
+
+from django.utils import timezone
+
+from apps.tracking.models import TripLocationPoint, TripTrackingSession, VehicleLocation
+from apps.tracking.osrm import road_route
+from apps.trips.models import Trip
+from apps.vehicles.models import Vehicle
+
+# Au-delà de ce délai sans nouvelle position GPS, la vitesse est considérée inconnue.
+STALE_AFTER_S = 180
+# Deux envois espacés de moins de ce délai sont ignorés (anti-spam appareil).
+MIN_INTERVAL_S = 3
+# Au-delà de cette vitesse implicite entre deux points, on considère un saut GPS
+# (perte de signal, recalage) : segment exclu de la distance, vitesse inconnue.
+MAX_PLAUSIBLE_KMH = 160
+
+
+# --- Géométrie ----------------------------------------------------------
+
+
+def _haversine(a, b):
+    """Distance en km entre [lat,lng] a et b."""
+    r = 6371.0
+    dlat = math.radians(b[0] - a[0])
+    dlng = math.radians(b[1] - a[1])
+    h = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlng / 2) ** 2
+    )
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def ensure_geometry(route):
+    """Calcule et met en cache le tracé routier (OSRM) si nécessaire."""
+    if route.geometry:
+        return route.geometry
+    pts = []
+    if route.origin_lat is not None:
+        pts.append((float(route.origin_lat), float(route.origin_lng)))
+    for wp in route.waypoints.order_by("order"):
+        if wp.latitude is not None:
+            pts.append((float(wp.latitude), float(wp.longitude)))
+    if route.destination_lat is not None:
+        pts.append((float(route.destination_lat), float(route.destination_lng)))
+
+    result = road_route(pts)
+    route.geometry = result["geometry"]
+    if result["distance_km"]:
+        route.planned_distance_km = Decimal(str(result["distance_km"]))
+    if result["duration_min"]:
+        route.planned_duration_min = int(result["duration_min"])
+    # Estimation carburant (moteur apprenant) pour la course planifiée.
+    try:
+        from apps.fuelintel.engine import estimate_fuel
+
+        trip = route.trip
+        est = estimate_fuel(
+            float(route.planned_distance_km or 0),
+            vehicle=trip.vehicle, driver=trip.driver,
+            subsidiary_id=trip.subsidiary_id,
+            departure_time=trip.actual_departure,
+        )
+        route.estimated_fuel_l = est["liters"]
+    except Exception:
+        pass
+    route.save(update_fields=[
+        "geometry", "planned_distance_km", "planned_duration_min",
+        "estimated_fuel_l", "updated_at",
+    ])
+    return route.geometry
+
+
+# --- Ingestion des positions réelles -------------------------------------
+
+
+def _get_session(trip):
+    session = trip.tracking_sessions.filter(status="active").first()
+    if session is None:
+        session = TripTrackingSession.objects.create(
+            subsidiary=trip.subsidiary, trip=trip, status="active",
+            started_at=trip.actual_departure or timezone.now(),
+        )
+    return session
+
+
+def real_traveled_km(trip) -> float:
+    """Distance réellement parcourue : somme des segments entre points GPS enregistrés.
+
+    Les sauts GPS (vitesse implicite > MAX_PLAUSIBLE_KMH) sont exclus du cumul.
+    """
+    total = 0.0
+    for session in trip.tracking_sessions.all():
+        prev = prev_t = None
+        for lat, lng, t in session.points.order_by("recorded_at").values_list(
+            "latitude", "longitude", "recorded_at"
+        ):
+            cur = [float(lat), float(lng)]
+            if prev is not None:
+                d = _haversine(prev, cur)
+                dt = (t - prev_t).total_seconds() if prev_t else 0
+                implied = d / (dt / 3600.0) if dt > 0 else float("inf")
+                if implied <= MAX_PLAUSIBLE_KMH:
+                    total += d
+            prev, prev_t = cur, t
+    return round(total, 2)
+
+
+def close_tracking_sessions(trip):
+    """Clôt les sessions actives en figeant distance réelle et vitesse moyenne."""
+    now = timezone.now()
+    for session in trip.tracking_sessions.filter(status="active"):
+        speeds = [
+            float(s) for s in session.points.exclude(speed_kmh=None).values_list("speed_kmh", flat=True)
+        ]
+        session.status = "ended"
+        session.ended_at = now
+        session.total_distance_km = Decimal(str(real_traveled_km(trip)))
+        if speeds:
+            session.average_speed_kmh = Decimal(str(round(sum(speeds) / len(speeds), 2)))
+        session.save(update_fields=[
+            "status", "ended_at", "total_distance_km", "average_speed_kmh", "updated_at",
+        ])
+
+
+def record_position(
+    user, trip_id, latitude, longitude,
+    speed_kmh=None, heading=None, accuracy_m=None,
+) -> dict:
+    """Enregistre une position GPS réelle envoyée par l'appareil d'un participant.
+
+    Retourne {"ok": bool, "detail": str} ; vitesse dérivée du point précédent si
+    l'appareil ne la fournit pas (GPS navigateur sans capteur de vitesse).
+    """
+    trip = (
+        Trip.objects.for_user(user).filter(pk=trip_id)
+        .select_related("vehicle", "subsidiary", "driver").first()
+    )
+    if trip is None:
+        return {"ok": False, "status": 404, "detail": "Course introuvable."}
+    if trip.status != "in_progress":
+        return {"ok": False, "status": 409, "detail": "La course n'est pas en cours."}
+
+    is_participant = (
+        user.id == trip.requester_id
+        or (trip.driver and trip.driver.user_id == user.id)
+        or user.is_superuser or user.has_company_scope
+        or user.role in ("fleet_manager", "subsidiary_admin")
+    )
+    if not is_participant:
+        return {"ok": False, "status": 403, "detail": "Vous ne participez pas à cette course."}
+
+    now = timezone.now()
+    session = _get_session(trip)
+    last = session.points.order_by("-recorded_at").first()
+    if last and (now - last.recorded_at).total_seconds() < MIN_INTERVAL_S:
+        return {"ok": True, "detail": "Position ignorée (trop rapprochée)."}
+
+    lat, lng = float(latitude), float(longitude)
+    # Vitesse réelle : fournie par le capteur, sinon dérivée de l'intervalle précédent.
+    if speed_kmh is None and last:
+        dt = (now - last.recorded_at).total_seconds()
+        if 1 <= dt <= STALE_AFTER_S:
+            d = _haversine([float(last.latitude), float(last.longitude)], [lat, lng])
+            derived = round(d / (dt / 3600.0), 2)
+            # Saut GPS : vitesse implicite impossible → vitesse inconnue.
+            speed_kmh = derived if derived <= MAX_PLAUSIBLE_KMH else None
+
+    TripLocationPoint.objects.create(
+        session=session,
+        latitude=Decimal(str(round(lat, 6))), longitude=Decimal(str(round(lng, 6))),
+        speed_kmh=Decimal(str(speed_kmh)) if speed_kmh is not None else None,
+        accuracy_m=Decimal(str(accuracy_m)) if accuracy_m is not None else None,
+        recorded_at=now,
+    )
+    loc, _ = VehicleLocation.objects.update_or_create(
+        vehicle=trip.vehicle,
+        defaults={
+            "latitude": Decimal(str(round(lat, 6))),
+            "longitude": Decimal(str(round(lng, 6))),
+            "speed_kmh": Decimal(str(speed_kmh)) if speed_kmh is not None else None,
+            "heading": Decimal(str(heading)) if heading is not None else None,
+            "recorded_at": now,
+        },
+    )
+    # Géofencing : alertes d'entrée/sortie de zone sur transition (positions réelles).
+    try:
+        from apps.tracking.geofence import check_geofences
+
+        check_geofences(trip.vehicle, loc, trip)
+    except Exception:
+        pass
+    return {"ok": True, "detail": "Position enregistrée.",
+            "speed_kmh": float(speed_kmh) if speed_kmh is not None else None}
+
+
+# --- Lectures (flotte, course) -------------------------------------------
+
+
+def _fresh_speed(loc, now=None):
+    """Vitesse uniquement si la position est récente — sinon inconnue (None)."""
+    if not loc or loc.speed_kmh is None or not loc.recorded_at:
+        return None
+    now = now or timezone.now()
+    if (now - loc.recorded_at).total_seconds() > STALE_AFTER_S:
+        return None
+    return loc.speed_kmh
+
+
+def compute_positions(user, subsidiary_id=None) -> list[dict]:
+    """Dernières positions réelles connues des véhicules du périmètre (lecture seule)."""
+    now = timezone.now()
+    vehicles = Vehicle.objects.for_user(user).select_related("subsidiary")
+    if subsidiary_id and user.has_company_scope:
+        vehicles = vehicles.filter(subsidiary_id=subsidiary_id)
+    vehicles = list(vehicles)
+
+    locations = {l.vehicle_id: l for l in VehicleLocation.objects.filter(vehicle__in=vehicles)}
+    active = {
+        t.vehicle_id: t
+        for t in Trip.objects.filter(vehicle__in=vehicles, status="in_progress")
+        .select_related("driver", "reservation", "route")
+    }
+
+    rows = []
+    for v in vehicles:
+        loc = locations.get(v.id)
+        trip = active.get(v.id)
+        speed = _fresh_speed(loc, now)
+        is_late = bool(trip and trip.reservation.estimated_return and trip.reservation.estimated_return < now)
+        rows.append({
+            "id": str(v.id),
+            "registration": v.registration,
+            "brand": v.brand,
+            "model": v.model,
+            "status": v.status,
+            "status_display": v.get_status_display(),
+            "subsidiary_name": v.subsidiary.name,
+            "driver_name": trip.driver.full_name if (trip and trip.driver) else None,
+            "destination": trip.destination if trip else None,
+            "trip_id": str(trip.id) if trip else None,
+            "latitude": str(loc.latitude) if loc else None,
+            "longitude": str(loc.longitude) if loc else None,
+            "speed_kmh": str(speed) if speed is not None else None,
+            "heading": str(loc.heading) if (loc and loc.heading is not None) else None,
+            "recorded_at": loc.recorded_at.isoformat() if (loc and loc.recorded_at) else None,
+            "is_late": is_late,
+        })
+    return rows
+
+
+AVG_SPEED_KMH = 28.0
+
+
+def trip_tracking(user, trip_id) -> dict | None:
+    """Instantané de suivi d'une course : position véhicule réelle, état, ETA, itinéraire."""
+    trip = (
+        Trip.objects.for_user(user).filter(pk=trip_id)
+        .select_related("vehicle", "driver", "reservation", "route").first()
+    )
+    if trip is None:
+        return None
+
+    loc = VehicleLocation.objects.filter(vehicle=trip.vehicle).first()
+    speed = _fresh_speed(loc)
+
+    rt = trip_route(user, trip_id) or {}
+    remaining = rt.get("remaining_km", 0.0)
+    # ETA depuis la vitesse réelle courante, sinon vitesse urbaine de référence.
+    ref_speed = float(speed) if (speed is not None and float(speed) > 5) else AVG_SPEED_KMH
+    eta = max(1, round(remaining / ref_speed * 60)) if remaining else 0
+
+    return {
+        "trip_id": str(trip.id),
+        "status": trip.status,
+        "status_display": trip.get_status_display(),
+        "destination": trip.destination,
+        "driver_name": trip.driver.full_name if trip.driver_id else None,
+        "vehicle": {
+            "registration": trip.vehicle.registration,
+            "latitude": str(loc.latitude) if loc else None,
+            "longitude": str(loc.longitude) if loc else None,
+            "speed_kmh": str(speed) if speed is not None else None,
+        },
+        "eta_min": eta,
+        "distance_km": rt.get("distance_km", 0.0),
+        "traveled_km": rt.get("traveled_km", 0.0),
+        "remaining_km": remaining,
+        "progress": rt.get("progress", 0.0),
+        "planned": rt.get("planned", []),
+        "actual": rt.get("actual", []),
+        "destination_point": rt.get("destination_point"),
+    }
+
+
+def trip_route(user, trip_id) -> dict | None:
+    """Itinéraire prévu (tracé routier) + trace GPS réelle + distance/progression/vitesse."""
+    trip = (
+        Trip.objects.for_user(user).filter(pk=trip_id)
+        .select_related("route", "vehicle", "driver").first()
+    )
+    if trip is None:
+        return None
+
+    route = getattr(trip, "route", None)
+    planned = ensure_geometry(route) if route else []
+    distance_km = float(route.planned_distance_km) if (route and route.planned_distance_km) else 0.0
+    duration_min = route.planned_duration_min if route else None
+
+    dest_point = None
+    if route and route.destination_lat is not None:
+        dest_point = [float(route.destination_lat), float(route.destination_lng)]
+    elif planned:
+        dest_point = planned[-1]
+
+    # Trace réelle (150 derniers points par session)
+    actual: list[list[float]] = []
+    for session in trip.tracking_sessions.all():
+        recent = list(session.points.order_by("-recorded_at")[:150])
+        recent.reverse()
+        actual.extend([float(p.latitude), float(p.longitude)] for p in recent)
+
+    # Progression réelle : km parcourus (GPS) rapportés à l'itinéraire prévu.
+    traveled_km = real_traveled_km(trip)
+    progress = min(1.0, traveled_km / distance_km) if distance_km else 0.0
+
+    loc = getattr(trip.vehicle, "last_location", None)
+    speed = _fresh_speed(loc)
+
+    return {
+        "trip_id": str(trip.id),
+        "destination": trip.destination,
+        "destination_point": dest_point,
+        "planned": planned,
+        "actual": actual,
+        "distance_km": distance_km,
+        "traveled_km": traveled_km,
+        "remaining_km": round(max(0.0, distance_km - traveled_km), 2),
+        "duration_min": duration_min,
+        "progress": round(progress, 3),
+        "speed_kmh": float(speed) if speed is not None else None,
+        "driver_name": trip.driver.full_name if trip.driver else None,
+    }

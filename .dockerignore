@@ -1,0 +1,32 @@
+# Contexte de build backend — exclut tout ce qui n'est pas nécessaire à l'image Python
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov
+
+# Frontend (image séparée)
+frontend
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+
+# Données & secrets locaux
+.env
+.env.*
+!.env.production.example
+media
+staticfiles
+db.sqlite3
+celerybeat-schedule
+celerybeat-schedule.*
+
+# Docs
+*.md
