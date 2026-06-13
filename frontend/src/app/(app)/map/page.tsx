@@ -8,6 +8,7 @@ import {
   Calendar,
   Car,
   CheckCircle2,
+  ChevronDown,
   Clock,
   LocateFixed,
   Navigation,
@@ -66,6 +67,8 @@ export default function MapPage() {
   const [reserved, setReserved] = useState<{ id: string; status: string } | null>(null);
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState("");
+  // Panneau de réservation repliable (mobile) pour libérer la vue de la carte.
+  const [collapsed, setCollapsed] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
@@ -86,22 +89,58 @@ export default function MapPage() {
   }, [origin, destination]);
 
   function useMyPosition() {
-    if (!navigator.geolocation) { setError("Géolocalisation indisponible."); return; }
+    setError("");
+    // La géolocalisation exige un contexte sécurisé (HTTPS) — fréquent sur mobile en HTTP.
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setError("La géolocalisation nécessite une connexion sécurisée (HTTPS).");
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setError("Géolocalisation indisponible sur cet appareil.");
+      return;
+    }
     setLocating(true);
+
+    const onOk = async (pos: GeolocationPosition) => {
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
+      // Géocodage inverse : remplit le champ départ avec l'adresse réelle.
+      let label = "Ma position actuelle";
+      try {
+        const { data } = await api.get<{ label: string | null }>("/places/reverse/", { params: { lat, lng } });
+        if (data.label) label = data.label;
+      } catch { /* repli : libellé générique */ }
+      setOrigin({ lat, lng, label });
+      setRecenter([lat, lng]);
+      setLocating(false);
+    };
+
+    const onErr = (err: GeolocationPositionError, isRetry: boolean) => {
+      // Sur mobile, la haute précision (GPS) expire souvent : 2e essai en précision
+      // réduite (Wi-Fi/réseau), plus tolérant, avant d'abandonner.
+      if (err.code === err.TIMEOUT && !isRetry) {
+        navigator.geolocation.getCurrentPosition(
+          onOk,
+          (e) => onErr(e, true),
+          { enableHighAccuracy: false, timeout: 20_000, maximumAge: 120_000 },
+        );
+        return;
+      }
+      setLocating(false);
+      if (err.code === err.PERMISSION_DENIED) {
+        setError("Accès à la position refusé. Autorisez la localisation pour ce site (icône cadenas → Autorisations) puis réessayez, ou choisissez le départ manuellement.");
+      } else if (err.code === err.POSITION_UNAVAILABLE) {
+        setError("Position introuvable (signal GPS faible). Réessayez à l'extérieur, ou choisissez le départ manuellement.");
+      } else if (err.code === err.TIMEOUT) {
+        setError("La localisation a expiré. Réessayez, ou choisissez le départ manuellement.");
+      } else {
+        setError("Localisation impossible. Choisissez un point de départ manuellement.");
+      }
+    };
+
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        // Géocodage inverse : remplit le champ départ avec l'adresse réelle.
-        let label = "Ma position actuelle";
-        try {
-          const { data } = await api.get<{ label: string | null }>("/places/reverse/", { params: { lat, lng } });
-          if (data.label) label = data.label;
-        } catch { /* repli : libellé générique */ }
-        setOrigin({ lat, lng, label });
-        setRecenter([lat, lng]);
-        setLocating(false);
-      },
-      () => { setError("Position refusée. Choisissez un point de départ manuellement."); setLocating(false); },
+      onOk,
+      (e) => onErr(e, false),
+      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 },
     );
   }
 
@@ -160,14 +199,27 @@ export default function MapPage() {
       {trackingMode && track ? (
         <TrackingPanel track={track} connected={trackConnected} gpsActive={gps.active} gpsError={gps.error} />
       ) : (
-        <div className="absolute inset-x-2 bottom-2 z-[500] max-h-[64vh] overflow-y-auto rounded-2xl border border-line bg-surface/95 p-4 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:max-h-[calc(100%-2rem)] lg:w-[24rem]">
+        <div className="absolute inset-x-2 bottom-2 z-[500] rounded-2xl border border-line bg-surface/95 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:w-[24rem]">
+          {/* En-tête : réductible en mobile pour libérer la carte ; toujours ouvert en desktop. */}
+          <div className="flex items-center gap-2 px-4 py-3">
+            <Navigation className="h-5 w-5 shrink-0 text-brand-500" />
+            <h2 className="text-base font-semibold text-ink">{reserved ? "Demande enregistrée" : "Réserver une course"}</h2>
+            {collapsed && origin && destination && (
+              <span className="hidden min-w-0 flex-1 truncate text-xs text-muted sm:inline">→ {destination.label}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setCollapsed((c) => !c)}
+              aria-label={collapsed ? "Agrandir le panneau" : "Réduire le panneau"}
+              aria-expanded={!collapsed}
+              className="ml-auto shrink-0 rounded-md p-1 text-muted hover:bg-surface2 lg:hidden"
+            >
+              <ChevronDown className={cn("h-5 w-5 transition-transform", !collapsed && "rotate-180")} />
+            </button>
+          </div>
+          <div className={cn("max-h-[52vh] overflow-y-auto px-4 pb-4 lg:max-h-[calc(100vh-13rem)]", collapsed && "hidden lg:block")}>
         {!reserved ? (
           <>
-            <div className="mb-3 flex items-center gap-2">
-              <Navigation className="h-5 w-5 text-brand-500" />
-              <h2 className="text-base font-semibold text-ink">Réserver une course</h2>
-            </div>
-
             {/* Départ */}
             <label className="mb-1 block text-xs font-medium text-muted">Point de départ</label>
             <div className="space-y-1.5">
@@ -257,10 +309,7 @@ export default function MapPage() {
         ) : (
           <div className="space-y-3 text-center">
             <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"><CheckCircle2 className="h-7 w-7" /></span>
-            <div>
-              <h2 className="text-base font-semibold text-ink">Demande enregistrée</h2>
-              <p className="text-sm text-muted">Statut : <span className="font-medium text-ink">{reserved.status}</span></p>
-            </div>
+            <p className="text-sm text-muted">Statut : <span className="font-medium text-ink">{reserved.status}</span></p>
             <div className="rounded-xl bg-surface2 p-3 text-left text-xs text-muted">
               <p>📍 {origin?.label}</p>
               <p className="mt-1">🏁 {destination?.label}</p>
@@ -272,6 +321,7 @@ export default function MapPage() {
             </div>
           </div>
         )}
+          </div>
         </div>
       )}
     </div>
@@ -299,6 +349,7 @@ function TrackingPanel({
   const cur = order[track.status] ?? 2;
 
   const qc = useQueryClient();
+  const [tcollapsed, setTcollapsed] = useState(false);
   const [endKm, setEndKm] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -321,16 +372,26 @@ function TrackingPanel({
   }
 
   return (
-    <div className="absolute inset-x-2 bottom-2 z-[500] max-h-[70vh] overflow-y-auto rounded-2xl border border-line bg-surface/95 p-4 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:w-[24rem]">
-      <div className="mb-3 flex items-center gap-2">
-        <Navigation className="h-5 w-5 text-brand-500" />
+    <div className="absolute inset-x-2 bottom-2 z-[500] rounded-2xl border border-line bg-surface/95 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:w-[24rem]">
+      <div className="flex items-center gap-2 px-4 py-3">
+        <Navigation className="h-5 w-5 shrink-0 text-brand-500" />
         <h2 className="text-base font-semibold text-ink">Course en cours</h2>
         <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-muted">
           <span className={cn("h-2 w-2 rounded-full", connected ? "animate-pulse bg-emerald-500" : "bg-amber-500")} />
           {connected ? "En direct" : "…"}
         </span>
+        <button
+          type="button"
+          onClick={() => setTcollapsed((c) => !c)}
+          aria-label={tcollapsed ? "Agrandir le panneau" : "Réduire le panneau"}
+          aria-expanded={!tcollapsed}
+          className="shrink-0 rounded-md p-1 text-muted hover:bg-surface2 lg:hidden"
+        >
+          <ChevronDown className={cn("h-5 w-5 transition-transform", !tcollapsed && "rotate-180")} />
+        </button>
       </div>
 
+      <div className={cn("max-h-[58vh] overflow-y-auto px-4 pb-4 lg:max-h-[calc(100vh-13rem)]", tcollapsed && "hidden lg:block")}>
       {/* État de l'émetteur GPS de l'appareil (source des positions réelles) */}
       <p className={cn("mb-2 flex items-center gap-1.5 text-[11px]", gpsActive ? "text-emerald-600" : "text-faint")}>
         <LocateFixed className="h-3 w-3" />
@@ -426,6 +487,7 @@ function TrackingPanel({
             <Navigation className="h-4 w-4" /> Contacter
           </button>
         )}
+      </div>
       </div>
     </div>
   );

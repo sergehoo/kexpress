@@ -3,11 +3,31 @@ import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { saveSyncMeta } from "@/lib/offlineDb";
 import { OIDC_ENABLED, oidcSilentRenew } from "@/lib/oidc";
 
-// On retire tout slash final pour éviter les `//` quand on concatène les chemins
-// (ex. `${API_BASE}/auth/token/`). La base DOIT inclure le préfixe `/api`.
-export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api"
-).replace(/\/+$/, "");
+/**
+ * Normalise la base de l'API.
+ * - Retire tout slash final (évite les `//` lors de la concaténation `${API_BASE}/auth/token/`).
+ * - Le backend Django sert TOUTES ses routes sous le préfixe `/api` (cf. config/urls.py).
+ *   Si l'on fournit une URL d'hôte nu (ex. `https://api.exemple.com`, sans chemin),
+ *   on ajoute automatiquement `/api` — garde-fou contre une variable d'env mal
+ *   renseignée en production. Une URL qui contient déjà un chemin est laissée telle quelle.
+ */
+function normalizeApiBase(raw: string): string {
+  const base = raw.trim().replace(/\/+$/, "");
+  try {
+    const u = new URL(base);
+    if (u.pathname === "" || u.pathname === "/") {
+      u.pathname = "/api";
+      return u.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    /* valeur relative/invalide : on la laisse telle quelle */
+  }
+  return base;
+}
+
+export const API_BASE = normalizeApiBase(
+  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api",
+);
 
 const ACCESS_KEY = "kx_access";
 const REFRESH_KEY = "kx_refresh";
