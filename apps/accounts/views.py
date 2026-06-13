@@ -7,32 +7,27 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from apps.accounts.serializers import MeSerializer
 
 
-class BreakGlassTokenSerializer(TokenObtainPairSerializer):
-    """Connexion locale par mot de passe.
+class LocalTokenSerializer(TokenObtainPairSerializer):
+    """Connexion locale par mot de passe — alternative au SSO Keycloak.
 
-    Quand le SSO Keycloak est actif, cette voie est réservée à l'accès de secours
-    (super-admin) — sauf si la connexion locale a été entièrement désactivée.
+    Disponible pour tout utilisateur actif disposant d'un mot de passe Django
+    (les comptes provisionnés par SSO n'en ont pas et passent par Keycloak).
+    Désactivable globalement via LOCAL_LOGIN_ENABLED=False (SSO exclusif).
     """
 
     def validate(self, attrs):
         data = super().validate(attrs)  # vérifie identifiants + compte actif
-        if getattr(settings, "OIDC_ENABLED", False):
-            if not getattr(settings, "LOCAL_LOGIN_ENABLED", True):
-                raise serializers.ValidationError(
-                    "Connexion locale désactivée. Utilisez le SSO."
-                )
-            if not self.user.is_superuser:
-                raise serializers.ValidationError(
-                    "Connexion locale réservée à l'accès de secours (super-admin). "
-                    "Utilisez le SSO."
-                )
+        if not getattr(settings, "LOCAL_LOGIN_ENABLED", True):
+            raise serializers.ValidationError(
+                "Connexion par mot de passe désactivée. Utilisez le SSO."
+            )
         return data
 
 
-class BreakGlassTokenView(TokenObtainPairView):
-    """Émission de jetons locaux (SimpleJWT) — voie de secours quand OIDC actif."""
+class LocalTokenView(TokenObtainPairView):
+    """Émission de jetons locaux (SimpleJWT) par mot de passe."""
 
-    serializer_class = BreakGlassTokenSerializer
+    serializer_class = LocalTokenSerializer
 
 
 class MeView(generics.RetrieveAPIView):

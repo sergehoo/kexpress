@@ -210,21 +210,23 @@ def test_drf_authentication_via_bearer_header(db, keys):
 # --- Accès de secours (break-glass) -----------------------------------------
 
 @override_settings(**OIDC)
-def test_break_glass_blocks_non_superuser(db):
+def test_local_login_allows_any_active_user(db):
+    """Connexion locale par mot de passe ouverte à tout utilisateur (même avec OIDC actif)."""
     from apps.accounts.models import User
-    from apps.accounts.views import BreakGlassTokenSerializer
+    from apps.accounts.views import LocalTokenSerializer
 
     User.objects.create_user(email="emp@kaydan.ci", password="motdepasse1")
-    ser = BreakGlassTokenSerializer(data={"email": "emp@kaydan.ci", "password": "motdepasse1"})
-    assert not ser.is_valid()  # OIDC actif + non super-admin → refusé
-
-
-@override_settings(**OIDC)
-def test_break_glass_allows_superuser(db):
-    from apps.accounts.models import User
-    from apps.accounts.views import BreakGlassTokenSerializer
-
-    User.objects.create_superuser(email="root@kaydan.ci", password="motdepasse1")
-    ser = BreakGlassTokenSerializer(data={"email": "root@kaydan.ci", "password": "motdepasse1"})
+    ser = LocalTokenSerializer(data={"email": "emp@kaydan.ci", "password": "motdepasse1"})
     assert ser.is_valid(), ser.errors
     assert "access" in ser.validated_data
+
+
+@override_settings(**dict(OIDC, LOCAL_LOGIN_ENABLED=False))
+def test_local_login_disabled_blocks(db):
+    """LOCAL_LOGIN_ENABLED=False → connexion par mot de passe refusée (SSO exclusif)."""
+    from apps.accounts.models import User
+    from apps.accounts.views import LocalTokenSerializer
+
+    User.objects.create_superuser(email="root@kaydan.ci", password="motdepasse1")
+    ser = LocalTokenSerializer(data={"email": "root@kaydan.ci", "password": "motdepasse1"})
+    assert not ser.is_valid()

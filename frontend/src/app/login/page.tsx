@@ -21,7 +21,7 @@ export default function LoginPage() {
   const [redirecting, setRedirecting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [capsLock, setCapsLock] = useState(false);
-  // Formulaire local affiché d'office sans SSO ; sinon repli « accès secours ».
+  // Formulaire mot de passe affiché d'office sans SSO ; sinon proposé en option.
   const [showLocal, setShowLocal] = useState(!ssoEnabled);
 
   const emailRef = useRef<HTMLInputElement>(null);
@@ -129,14 +129,14 @@ export default function LoginPage() {
               </Button>
             )}
 
-            {/* Bascule vers l'accès de secours (connexion locale). */}
+            {/* Bascule vers la connexion par mot de passe (auth Django locale). */}
             {ssoEnabled && localLoginEnabled && !showLocal && (
               <button
                 type="button"
                 onClick={() => setShowLocal(true)}
                 className="mt-4 w-full text-center text-xs text-white/55 underline-offset-4 transition-colors hover:text-white/80 hover:underline"
               >
-                Accès de secours (connexion locale)
+                Connexion par mot de passe
               </button>
             )}
 
@@ -146,7 +146,7 @@ export default function LoginPage() {
                 {ssoEnabled && (
                   <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-wide text-white/40">
                     <span className="h-px flex-1 bg-white/15" />
-                    Accès de secours
+                    ou par mot de passe
                     <span className="h-px flex-1 bg-white/15" />
                   </div>
                 )}
