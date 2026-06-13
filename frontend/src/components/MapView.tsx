@@ -187,8 +187,10 @@ export default function MapView({
         @keyframes kxpulse { 0%,100% { box-shadow:0 0 0 0 rgba(244,63,94,.6);} 50% { box-shadow:0 0 0 8px rgba(244,63,94,0);} }
       `}</style>
 
-      {/* Sélecteur de fond de carte */}
-      <div className="absolute bottom-6 left-3 z-[600] flex overflow-hidden rounded-lg border border-line bg-surface/95 shadow-lg backdrop-blur">
+      {/* Sélecteur de fond de carte.
+          Mobile : en haut à droite (le panneau de commande occupe le bas, le zoom Leaflet le haut-gauche).
+          Desktop : en bas à gauche (le panneau est en haut à droite → coin libre). */}
+      <div className="absolute right-3 top-3 z-[600] flex overflow-hidden rounded-lg border border-line bg-surface/95 shadow-lg backdrop-blur lg:bottom-6 lg:left-3 lg:right-auto lg:top-auto">
         {(Object.keys(BASE_LAYERS) as LayerKey[]).map((k) => (
           <button
             key={k}
