@@ -3,8 +3,11 @@ import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { saveSyncMeta } from "@/lib/offlineDb";
 import { OIDC_ENABLED, oidcSilentRenew } from "@/lib/oidc";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api";
+// On retire tout slash final pour éviter les `//` quand on concatène les chemins
+// (ex. `${API_BASE}/auth/token/`). La base DOIT inclure le préfixe `/api`.
+export const API_BASE = (
+  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api"
+).replace(/\/+$/, "");
 
 const ACCESS_KEY = "kx_access";
 const REFRESH_KEY = "kx_refresh";
