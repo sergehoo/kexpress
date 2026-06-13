@@ -46,7 +46,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: [kexpress-internal]
+    networks:
+      - kexpress-internal
 
   kexpress-redis:
     image: redis:7-alpine
@@ -59,7 +60,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: [kexpress-internal]
+    networks:
+      - kexpress-internal
 
   kexpress-backend:
     build:
@@ -198,7 +200,8 @@ services:
         condition: service_healthy
     volumes:
       - kexpress_media:/app/media
-    networks: [kexpress-internal]
+    networks:
+      - kexpress-internal
 
   kexpress-beat:
     build:
@@ -256,7 +259,8 @@ services:
         condition: service_healthy
       kexpress-redis:
         condition: service_healthy
-    networks: [kexpress-internal]
+    networks:
+      - kexpress-internal
 
   kexpress-broadcaster:
     # Diffuseur temps réel : calcule les positions une fois par tick et les pousse aux
@@ -317,7 +321,8 @@ services:
         condition: service_healthy
       kexpress-redis:
         condition: service_healthy
-    networks: [kexpress-internal]
+    networks:
+      - kexpress-internal
 
   kexpress-backup:
     # Sauvegardes PostgreSQL planifiées (pg_dump compressé + rétention).
@@ -364,7 +369,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    networks: [kexpress-internal, dokploy-network]
+    networks:
+      - kexpress-internal
+      - dokploy-network
+
+
     # Routage : ajouter le domaine applicatif dans l'UI Dokploy (service kexpress-frontend, port 3000).
     # Hors Dokploy, décommenter les labels Traefik ci-dessous (adapter le domaine) :
     # labels:
