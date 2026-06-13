@@ -33,7 +33,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body>
+      {/* suppressHydrationWarning : des extensions de navigateur (gestionnaires de
+          mots de passe, Grammarly, traducteurs) injectent des attributs/nœuds dans
+          <body> avant l'hydratation. Sans cela, React 19 lève une erreur #418 et
+          peut boucler en essayant de ré-hydrater. */}
+      <body suppressHydrationWarning>
         <Providers>{children}</Providers>
         <SWRegister />
       </body>

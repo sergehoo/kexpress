@@ -168,6 +168,7 @@ export default function LoginPage() {
                         name="email"
                         type="email"
                         inputMode="email"
+                        suppressHydrationWarning
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         autoComplete="username"
@@ -194,6 +195,7 @@ export default function LoginPage() {
                         id="password"
                         name="password"
                         type={showPassword ? "text" : "password"}
+                        suppressHydrationWarning
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         onKeyUp={handleCapsLock}

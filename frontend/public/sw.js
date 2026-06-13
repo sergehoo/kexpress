@@ -1,6 +1,6 @@
 /* Service worker Kaydan Express — cache app shell + données API (offline partiel)
    + Background Sync (vidange des files réservations/GPS, même onglet fermé). */
-const VERSION = "kx-v3";
+const VERSION = "kx-v4";
 const SHELL_CACHE = `${VERSION}-shell`;
 const API_CACHE = `${VERSION}-api`;
 const OFFLINE_URL = "/offline";
