@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CloudUpload } from "lucide-react";
 
-import { flushOutbox, outboxCount } from "@/lib/outbox";
+import { flushGpsOutbox, flushOutbox, gpsOutboxCount, outboxCount } from "@/lib/outbox";
 
-/** Synchronise l'outbox hors-ligne au montage et à chaque retour de connexion. */
+/** Synchronise les files hors-ligne (réservations + GPS) au montage et à chaque retour
+ *  de connexion. La synchro en arrière-plan (onglet fermé) est gérée par le service
+ *  worker via Background Sync ; ce composant couvre le cas « application ouverte ». */
 export function OfflineSync() {
   const [pending, setPending] = useState(0);
   const [justSynced, setJustSynced] = useState(0);
@@ -16,16 +18,17 @@ export function OfflineSync() {
     let alive = true;
 
     async function refresh() {
-      if (alive) setPending(await outboxCount());
+      if (alive) setPending((await outboxCount()) + (await gpsOutboxCount()));
     }
 
     async function sync() {
       if (!navigator.onLine) return refresh();
-      const { sent, remaining } = await flushOutbox();
+      const res = await flushOutbox();
+      const gps = await flushGpsOutbox();
       if (!alive) return;
-      setPending(remaining);
-      if (sent > 0) {
-        setJustSynced(sent);
+      setPending(res.remaining + gps.remaining);
+      if (res.sent > 0) {
+        setJustSynced(res.sent);
         qc.invalidateQueries({ queryKey: ["reservations"] });
         setTimeout(() => alive && setJustSynced(0), 5000);
       }
@@ -33,10 +36,16 @@ export function OfflineSync() {
 
     sync();
     window.addEventListener("online", sync);
+    // Le SW signale la fin d'une synchro en arrière-plan → on rafraîchit le compteur.
+    const onMsg = (e: MessageEvent) => {
+      if (e.data?.type === "kx-synced") refresh();
+    };
+    navigator.serviceWorker?.addEventListener("message", onMsg);
     const interval = setInterval(refresh, 30_000);
     return () => {
       alive = false;
       window.removeEventListener("online", sync);
+      navigator.serviceWorker?.removeEventListener("message", onMsg);
       clearInterval(interval);
     };
   }, [qc]);

@@ -135,12 +135,14 @@ def close_tracking_sessions(trip):
 
 def record_position(
     user, trip_id, latitude, longitude,
-    speed_kmh=None, heading=None, accuracy_m=None,
+    speed_kmh=None, heading=None, accuracy_m=None, recorded_at=None,
 ) -> dict:
     """Enregistre une position GPS réelle envoyée par l'appareil d'un participant.
 
-    Retourne {"ok": bool, "detail": str} ; vitesse dérivée du point précédent si
-    l'appareil ne la fournit pas (GPS navigateur sans capteur de vitesse).
+    `recorded_at` (datetime, optionnel) : horodatage GPS d'origine pour les points
+    mis en tampon hors-ligne et rejoués au retour réseau. Sans lui, l'instant courant
+    est utilisé (point « live ») avec anti-spam et dérivation de vitesse.
+    Retourne {"ok": bool, "detail": str}.
     """
     trip = (
         Trip.objects.for_user(user).filter(pk=trip_id)
@@ -161,14 +163,18 @@ def record_position(
         return {"ok": False, "status": 403, "detail": "Vous ne participez pas à cette course."}
 
     now = timezone.now()
+    buffered = recorded_at is not None  # point rejoué depuis le tampon hors-ligne
+    stamp = recorded_at or now
     session = _get_session(trip)
     last = session.points.order_by("-recorded_at").first()
-    if last and (now - last.recorded_at).total_seconds() < MIN_INTERVAL_S:
+
+    # Anti-spam : uniquement pour les points live (les points tamponnés sont rejoués tels quels).
+    if not buffered and last and (now - last.recorded_at).total_seconds() < MIN_INTERVAL_S:
         return {"ok": True, "detail": "Position ignorée (trop rapprochée)."}
 
     lat, lng = float(latitude), float(longitude)
-    # Vitesse réelle : fournie par le capteur, sinon dérivée de l'intervalle précédent.
-    if speed_kmh is None and last:
+    # Vitesse : fournie par le capteur, sinon dérivée de l'intervalle (points live seulement).
+    if speed_kmh is None and last and not buffered:
         dt = (now - last.recorded_at).total_seconds()
         if 1 <= dt <= STALE_AFTER_S:
             d = _haversine([float(last.latitude), float(last.longitude)], [lat, lng])
@@ -181,25 +187,28 @@ def record_position(
         latitude=Decimal(str(round(lat, 6))), longitude=Decimal(str(round(lng, 6))),
         speed_kmh=Decimal(str(speed_kmh)) if speed_kmh is not None else None,
         accuracy_m=Decimal(str(accuracy_m)) if accuracy_m is not None else None,
-        recorded_at=now,
+        recorded_at=stamp,
     )
-    loc, _ = VehicleLocation.objects.update_or_create(
-        vehicle=trip.vehicle,
-        defaults={
-            "latitude": Decimal(str(round(lat, 6))),
-            "longitude": Decimal(str(round(lng, 6))),
-            "speed_kmh": Decimal(str(speed_kmh)) if speed_kmh is not None else None,
-            "heading": Decimal(str(heading)) if heading is not None else None,
-            "recorded_at": now,
-        },
-    )
-    # Géofencing : alertes d'entrée/sortie de zone sur transition (positions réelles).
-    try:
-        from apps.tracking.geofence import check_geofences
+    # Position « dernière connue » : ne recule jamais dans le temps (rejeu tardif).
+    loc = VehicleLocation.objects.filter(vehicle=trip.vehicle).first()
+    if loc is None or loc.recorded_at is None or stamp >= loc.recorded_at:
+        loc, _ = VehicleLocation.objects.update_or_create(
+            vehicle=trip.vehicle,
+            defaults={
+                "latitude": Decimal(str(round(lat, 6))),
+                "longitude": Decimal(str(round(lng, 6))),
+                "speed_kmh": Decimal(str(speed_kmh)) if speed_kmh is not None else None,
+                "heading": Decimal(str(heading)) if heading is not None else None,
+                "recorded_at": stamp,
+            },
+        )
+        # Géofencing : alertes d'entrée/sortie sur transition (sur la position la plus récente).
+        try:
+            from apps.tracking.geofence import check_geofences
 
-        check_geofences(trip.vehicle, loc, trip)
-    except Exception:
-        pass
+            check_geofences(trip.vehicle, loc, trip)
+        except Exception:
+            pass
     return {"ok": True, "detail": "Position enregistrée.",
             "speed_kmh": float(speed_kmh) if speed_kmh is not None else None}
 

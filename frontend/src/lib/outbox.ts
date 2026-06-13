@@ -1,82 +1,98 @@
 "use client";
 
 import { api } from "@/lib/api";
+import {
+  STORE_GPS,
+  STORE_RESERVATIONS,
+  SYNC_TAG_GPS,
+  SYNC_TAG_RESERVATIONS,
+  openDb,
+  requestBackgroundSync,
+  txStore,
+} from "@/lib/offlineDb";
 
-/** Outbox hors ligne (IndexedDB) : les réservations créées sans réseau sont mises
- *  en file et synchronisées automatiquement au retour de la connexion. */
+/** Files d'attente hors-ligne (IndexedDB) : réservations + points GPS créés sans
+ *  réseau, synchronisés au retour de connexion (event `online`) et/ou en arrière-plan
+ *  (Background Sync, même onglet fermé). */
 
-const DB_NAME = "kx-offline";
-const STORE = "reservations-outbox";
+export type QueuedReservation = { payload: Record<string, unknown>; queued_at: string };
+export type QueuedGpsPoint = { trip_id: string; payload: Record<string, unknown> };
 
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE)) {
-        req.result.createObjectStore(STORE, { autoIncrement: true });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+function countStore(store: string): Promise<number> {
+  return txStore(store, "readonly", (s) => s.count()).catch(() => 0);
 }
 
-function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+function entriesOf<T>(store: string): Promise<{ key: IDBValidKey; value: T }[]> {
   return openDb().then(
     (db) =>
-      new Promise<T>((resolve, reject) => {
-        const t = db.transaction(STORE, mode);
-        const req = fn(t.objectStore(STORE));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+      new Promise((resolve, reject) => {
+        const out: { key: IDBValidKey; value: T }[] = [];
+        const cur = db.transaction(store, "readonly").objectStore(store).openCursor();
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (c) { out.push({ key: c.key, value: c.value as T }); c.continue(); }
+          else resolve(out);
+        };
+        cur.onerror = () => reject(cur.error);
       }),
   );
 }
 
-export type QueuedReservation = { payload: Record<string, unknown>; queued_at: string };
+// --- Réservations ---------------------------------------------------------
 
 export async function queueReservation(payload: Record<string, unknown>): Promise<void> {
-  await tx("readwrite", (s) => s.add({ payload, queued_at: new Date().toISOString() }));
-}
-
-export async function outboxCount(): Promise<number> {
-  try {
-    return await tx("readonly", (s) => s.count());
-  } catch {
-    return 0;
-  }
-}
-
-/** Envoie toutes les réservations en attente ; retire celles acceptées par le serveur. */
-export async function flushOutbox(): Promise<{ sent: number; remaining: number }> {
-  const db = await openDb();
-  const entries: { key: IDBValidKey; value: QueuedReservation }[] = await new Promise(
-    (resolve, reject) => {
-      const out: { key: IDBValidKey; value: QueuedReservation }[] = [];
-      const cur = db.transaction(STORE, "readonly").objectStore(STORE).openCursor();
-      cur.onsuccess = () => {
-        const c = cur.result;
-        if (c) { out.push({ key: c.key, value: c.value }); c.continue(); }
-        else resolve(out);
-      };
-      cur.onerror = () => reject(cur.error);
-    },
+  await txStore(STORE_RESERVATIONS, "readwrite", (s) =>
+    s.add({ payload, queued_at: new Date().toISOString() }),
   );
+  requestBackgroundSync(SYNC_TAG_RESERVATIONS);
+}
 
+export const outboxCount = () => countStore(STORE_RESERVATIONS);
+
+export async function flushOutbox(): Promise<{ sent: number; remaining: number }> {
+  const entries = await entriesOf<QueuedReservation>(STORE_RESERVATIONS);
   let sent = 0;
   for (const e of entries) {
     try {
       await api.post("/reservations/", e.value.payload);
-      await tx("readwrite", (s) => s.delete(e.key));
+      await txStore(STORE_RESERVATIONS, "readwrite", (s) => s.delete(e.key));
       sent += 1;
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;
-      // Erreur de validation définitive (4xx) → abandonner l'entrée pour ne pas bloquer la file.
+      // 4xx = rejet définitif → on retire l'entrée pour ne pas bloquer la file.
       if (status && status >= 400 && status < 500) {
-        await tx("readwrite", (s) => s.delete(e.key));
+        await txStore(STORE_RESERVATIONS, "readwrite", (s) => s.delete(e.key));
       }
-      // Erreur réseau → on garde l'entrée pour la prochaine tentative.
+      // Erreur réseau → conservée pour la prochaine tentative.
     }
   }
   return { sent, remaining: await outboxCount() };
+}
+
+// --- Points GPS -----------------------------------------------------------
+
+export async function queueGpsPoint(tripId: string, payload: Record<string, unknown>): Promise<void> {
+  await txStore(STORE_GPS, "readwrite", (s) => s.add({ trip_id: tripId, payload }));
+  requestBackgroundSync(SYNC_TAG_GPS);
+}
+
+export const gpsOutboxCount = () => countStore(STORE_GPS);
+
+export async function flushGpsOutbox(): Promise<{ sent: number; remaining: number }> {
+  const entries = await entriesOf<QueuedGpsPoint>(STORE_GPS);
+  let sent = 0;
+  for (const e of entries) {
+    try {
+      await api.post(`/tracking/trips/${e.value.trip_id}/position/`, e.value.payload);
+      await txStore(STORE_GPS, "readwrite", (s) => s.delete(e.key));
+      sent += 1;
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      // 4xx/409 (course terminée, point invalide) → on retire l'entrée.
+      if (status && status >= 400 && status < 500) {
+        await txStore(STORE_GPS, "readwrite", (s) => s.delete(e.key));
+      }
+    }
+  }
+  return { sent, remaining: await gpsOutboxCount() };
 }

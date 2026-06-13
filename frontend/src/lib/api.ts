@@ -1,5 +1,7 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 
+import { saveSyncMeta } from "@/lib/offlineDb";
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api";
 
@@ -16,10 +18,13 @@ export const tokens = {
   set(access: string, refresh?: string) {
     localStorage.setItem(ACCESS_KEY, access);
     if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+    // Miroir vers IndexedDB pour le service worker (Background Sync authentifié).
+    void saveSyncMeta(access, API_BASE);
   },
   clear() {
     localStorage.removeItem(ACCESS_KEY);
     localStorage.removeItem(REFRESH_KEY);
+    void saveSyncMeta(null, API_BASE);
   },
 };
 

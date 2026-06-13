@@ -59,6 +59,8 @@ class PositionInputSerializer(serializers.Serializer):
     speed_kmh = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, min_value=0)
     heading = serializers.DecimalField(max_digits=5, decimal_places=1, required=False)
     accuracy_m = serializers.DecimalField(max_digits=7, decimal_places=2, required=False, min_value=0)
+    # Horodatage GPS d'origine pour les points mis en tampon hors-ligne (rejeu).
+    recorded_at = serializers.DateTimeField(required=False)
 
 
 class TripPositionIngestView(APIView):
@@ -70,11 +72,17 @@ class TripPositionIngestView(APIView):
         ser = PositionInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
+        # Un horodatage client trop ancien (> 6 h) ou futur est ignoré → instant serveur.
+        from django.utils import timezone
+
+        rec = d.get("recorded_at")
+        if rec and (rec > timezone.now() or (timezone.now() - rec).total_seconds() > 21600):
+            rec = None
         result = record_position(
             request.user, trip_id,
             latitude=d["latitude"], longitude=d["longitude"],
             speed_kmh=d.get("speed_kmh"), heading=d.get("heading"),
-            accuracy_m=d.get("accuracy_m"),
+            accuracy_m=d.get("accuracy_m"), recorded_at=rec,
         )
         if not result["ok"]:
             return Response({"detail": result["detail"]}, status=result.get("status", 400))
