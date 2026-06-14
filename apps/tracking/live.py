@@ -8,6 +8,7 @@ Sortie déjà sérialisable JSON. Partagé entre le consumer WebSocket et l'API 
 from __future__ import annotations
 
 import math
+from datetime import timedelta
 from decimal import Decimal
 
 from django.utils import timezone
@@ -25,6 +26,15 @@ MIN_INTERVAL_S = 3
 # (perte de signal, recalage) : segment exclu de la distance, vitesse inconnue.
 MAX_PLAUSIBLE_KMH = 160
 
+# --- Détection d'anomalies (#12) -----------------------------------------
+# Écart maxi toléré (m) à l'itinéraire prévu avant alerte de détour.
+DEVIATION_THRESHOLD_M = 1000
+# Immobilité (≤ STOP_SPEED_KMH) au-delà de cette durée = arrêt anormal.
+STOP_MIN_MINUTES = 15
+STOP_SPEED_KMH = 3
+# Anti-spam : un même type d'alerte n'est pas recréé avant ce délai.
+ALERT_DEDUP_MINUTES = 15
+
 
 # --- Géométrie ----------------------------------------------------------
 
@@ -39,6 +49,90 @@ def _haversine(a, b):
         + math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlng / 2) ** 2
     )
     return 2 * r * math.asin(math.sqrt(h))
+
+
+def _point_to_polyline_m(lat, lng, polyline) -> float | None:
+    """Distance minimale (m) d'un point aux sommets de l'itinéraire (approximation)."""
+    if not polyline:
+        return None
+    return min(_haversine([lat, lng], [float(p[0]), float(p[1])]) for p in polyline) * 1000.0
+
+
+def _notify_managers_anomaly(trip, ntype, title, message):
+    from apps.notifications.events import managers_of
+    from apps.notifications.services import notify_many
+
+    notify_many(
+        managers_of(trip.subsidiary_id), ntype,
+        title=title, message=message, link=f"/trips/{trip.id}", severity="warning",
+    )
+
+
+def detect_anomalies(trip, lat, lng, speed_kmh, now=None) -> list[str]:
+    """#12 — Détecte détour (écart à l'itinéraire prévu) et arrêt anormal, et alerte
+    les gestionnaires (dédupliqué). Retourne la liste des anomalies déclenchées.
+
+    L'alerte de détour porte un `deviation_m` ; l'arrêt anormal a `deviation_m=NULL`
+    (marqueur), ce qui permet de dédupliquer chaque type indépendamment sans nouveau modèle.
+    """
+    from apps.core.enums import NotificationType
+    from apps.tracking.models import RouteDeviationAlert
+
+    now = now or timezone.now()
+    created: list[str] = []
+    dedup_since = now - timedelta(minutes=ALERT_DEDUP_MINUTES)
+
+    # --- Détour : position trop éloignée de l'itinéraire prévu ---
+    route = getattr(trip, "route", None)
+    geometry = route.geometry if (route and route.geometry) else None
+    if geometry:
+        off_m = _point_to_polyline_m(lat, lng, geometry)
+        if off_m is not None and off_m > DEVIATION_THRESHOLD_M:
+            already = RouteDeviationAlert.objects.filter(
+                trip=trip, deviation_m__isnull=False, occurred_at__gte=dedup_since,
+            ).exists()
+            if not already:
+                RouteDeviationAlert.objects.create(
+                    trip=trip, severity="warning", deviation_m=Decimal(str(round(off_m, 2))),
+                    latitude=Decimal(str(round(lat, 6))), longitude=Decimal(str(round(lng, 6))),
+                    occurred_at=now,
+                )
+                _notify_managers_anomaly(
+                    trip, NotificationType.ROUTE_DEVIATION,
+                    f"Véhicule hors itinéraire — {trip.vehicle.registration}",
+                    f"Course « {trip.destination} » : écart d'environ "
+                    f"{round(off_m / 1000, 1)} km par rapport à l'itinéraire prévu.",
+                )
+                created.append("deviation")
+
+    # --- Arrêt anormal : immobilité prolongée (hors saut GPS) ---
+    if speed_kmh is not None and float(speed_kmh) <= STOP_SPEED_KMH:
+        session = _get_session(trip)
+        pts = session.points.order_by("recorded_at")
+        last_moving = pts.filter(speed_kmh__gt=STOP_SPEED_KMH).last()
+        first = pts.first()
+        # Immobile depuis le dernier point en mouvement (ou le 1er point observé).
+        since = last_moving.recorded_at if last_moving else (first.recorded_at if first else None)
+        stationary_long = since is not None and (now - since).total_seconds() >= STOP_MIN_MINUTES * 60
+        if stationary_long:
+            already = RouteDeviationAlert.objects.filter(
+                trip=trip, deviation_m__isnull=True, occurred_at__gte=dedup_since,
+            ).exists()
+            if not already:
+                RouteDeviationAlert.objects.create(
+                    trip=trip, severity="warning", deviation_m=None,
+                    latitude=Decimal(str(round(lat, 6))), longitude=Decimal(str(round(lng, 6))),
+                    occurred_at=now,
+                )
+                _notify_managers_anomaly(
+                    trip, NotificationType.OTHER,
+                    f"Arrêt prolongé — {trip.vehicle.registration}",
+                    f"Course « {trip.destination} » : véhicule à l'arrêt depuis plus de "
+                    f"{STOP_MIN_MINUTES} minutes.",
+                )
+                created.append("stop")
+
+    return created
 
 
 def ensure_geometry(route):
@@ -207,6 +301,13 @@ def record_position(
             from apps.tracking.geofence import check_geofences
 
             check_geofences(trip.vehicle, loc, trip)
+        except Exception:
+            pass
+
+    # #12 — détection d'anomalies (détour / arrêt prolongé) sur les points live.
+    if not buffered:
+        try:
+            detect_anomalies(trip, lat, lng, speed_kmh, now)
         except Exception:
             pass
     return {"ok": True, "detail": "Position enregistrée.",
