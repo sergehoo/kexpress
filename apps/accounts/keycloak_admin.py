@@ -112,15 +112,34 @@ def _api(method: str, path: str, body=None, params: dict | None = None, _retry: 
         if e.code == 401 and _retry:
             _admin_token(force=True)  # jeton expiré/révoqué → on retente une fois
             return _api(method, path, body=body, params=params, _retry=False)
-        detail = e.read().decode("utf-8", "ignore")[:300] if hasattr(e, "read") else ""
-        raise KeycloakAdminError(f"Keycloak {method} {path} → HTTP {e.code} {detail}") from e
+        # Corps d'erreur Keycloak journalisé CÔTÉ BACKEND seulement (révèle realm/chemins
+        # internes) ; le message d'exception renvoyé au client reste générique.
+        body_txt = e.read().decode("utf-8", "ignore")[:500] if hasattr(e, "read") else ""
+        logger.warning("Keycloak %s %s → HTTP %s : %s", method, path, e.code, body_txt)
+        raise KeycloakAdminError(f"Keycloak {method} {path} → HTTP {e.code}") from e
     except Exception as e:
         raise KeycloakAdminError(f"Keycloak {method} {path} échec : {e}") from e
 
 
 # --- Représentation utilisateur -------------------------------------------
 
-def _user_representation(user) -> dict:
+def _sub_value(user) -> str:
+    """Valeur d'attribut filiale STABLE (code, pas le nom modifiable)."""
+    if not user.subsidiary_id:
+        return ""
+    return getattr(user.subsidiary, "code", "") or str(user.subsidiary_id)
+
+
+def _managed_attrs(user) -> dict:
+    """Attributs Keycloak gérés par K-Express (les autres sont préservés à l'update)."""
+    return {
+        "phone": [user.phone or ""],
+        "kx_role": [user.role or ""],
+        "subsidiary": [_sub_value(user)],
+    }
+
+
+def _create_representation(user) -> dict:
     return {
         "username": user.email,
         "email": user.email,
@@ -128,11 +147,7 @@ def _user_representation(user) -> dict:
         "lastName": user.last_name or "",
         "enabled": bool(user.is_active),
         "emailVerified": False,
-        "attributes": {
-            "phone": [user.phone or ""],
-            "kx_role": [user.role or ""],
-            "subsidiary": [user.subsidiary.name if user.subsidiary_id else ""],
-        },
+        "attributes": _managed_attrs(user),
     }
 
 
@@ -147,13 +162,13 @@ def get_user_by_email(email: str) -> dict | None:
 
 def create_user(user) -> str:
     """Crée l'utilisateur Keycloak ; renvoie son id. Si déjà présent, le récupère."""
-    status, _data, headers = _api("POST", "/users", body=_user_representation(user))
+    status, _data, headers = _api("POST", "/users", body=_create_representation(user))
     if status == 201:
         location = headers.get("Location") or headers.get("location") or ""
         kc_id = location.rstrip("/").rsplit("/", 1)[-1]
         if kc_id:
             return kc_id
-    # 409 ou Location absente → on relit par email.
+    # 409 ou Location absente → on relit par email (idempotence).
     existing = get_user_by_email(user.email)
     if existing and existing.get("id"):
         update_user(existing["id"], user)
@@ -162,7 +177,22 @@ def create_user(user) -> str:
 
 
 def update_user(kc_id: str, user) -> None:
-    _api("PUT", f"/users/{kc_id}", body=_user_representation(user))
+    """Met à jour en READ-MODIFY-WRITE : ne touche QUE les champs gérés par K-Express,
+    préserve `emailVerified` et les attributs Keycloak hors périmètre (locale, MFA…)."""
+    _s, current, _h = _api("GET", f"/users/{kc_id}")
+    current = current if isinstance(current, dict) else {}
+    attrs = dict(current.get("attributes") or {})
+    attrs.update(_managed_attrs(user))  # fusionne nos clés, conserve les autres
+    payload = {
+        **current,  # conserve emailVerified, requiredActions, groups, etc.
+        "firstName": user.first_name or "",
+        "lastName": user.last_name or "",
+        "email": user.email,
+        "username": current.get("username") or user.email,
+        "enabled": bool(user.is_active),
+        "attributes": attrs,
+    }
+    _api("PUT", f"/users/{kc_id}", body=payload)
 
 
 def disable_user(kc_id: str) -> None:
@@ -196,15 +226,24 @@ def remove_roles(kc_id: str, role_names: list[str]) -> None:
 
 
 def _sync_realm_role(kc_id: str, desired: str) -> None:
-    """Garantit que l'utilisateur porte EXACTEMENT le rôle realm géré `desired`
-    (retire les autres rôles gérés, conserve les rôles non gérés comme default-roles)."""
+    """Garantit que l'utilisateur porte EXACTEMENT le rôle realm géré `desired`.
+
+    On RÉSOUT et AJOUTE d'abord le rôle cible (échec bruyant s'il n'existe pas dans le
+    realm → retry/ERROR), PUIS on retire les autres rôles gérés. Ainsi un rôle cible
+    manquant ne laisse jamais l'utilisateur sans aucun rôle. Les rôles non gérés
+    (default-roles, etc.) sont conservés."""
+    rep = _realm_role(desired)
+    if rep is None:
+        raise KeycloakAdminError(
+            f"Rôle realm '{desired}' introuvable dans Keycloak — créez-le avant la synchro."
+        )
     _s, current, _h = _api("GET", f"/users/{kc_id}/role-mappings/realm")
     current_names = {r["name"] for r in current} if isinstance(current, list) else set()
+    if desired not in current_names:
+        _api("POST", f"/users/{kc_id}/role-mappings/realm", body=[{"id": rep["id"], "name": rep["name"]}])
     to_remove = [n for n in current_names if n in MANAGED_REALM_ROLES and n != desired]
     if to_remove:
         remove_roles(kc_id, to_remove)
-    if desired not in current_names:
-        assign_roles(kc_id, [desired])
 
 
 def send_reset_password_email(kc_id: str, actions: list[str] | None = None) -> None:

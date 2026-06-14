@@ -1,3 +1,4 @@
+import logging
 import secrets
 
 from django.db import transaction
@@ -13,6 +14,8 @@ from apps.accounts.serializers import EmployeeWriteSerializer, UserSerializer
 from apps.accounts.tasks import apply_sync, schedule_user_sync, send_action_email
 from apps.audit import services as audit
 from apps.core.enums import COMPANY_SCOPE_ROLES, AuditAction, RoleChoices
+
+logger = logging.getLogger("apps.accounts.api_views")
 
 ADMIN_ROLES = COMPANY_SCOPE_ROLES | {RoleChoices.SUBSIDIARY_ADMIN}
 
@@ -76,8 +79,12 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_admin()
         self._check_role_assignable(serializer.validated_data.get("role"))
         u = self.request.user
-        # Un admin de filiale crée dans sa propre filiale.
-        if not u.has_company_scope and u.subsidiary_id and not serializer.validated_data.get("subsidiary"):
+        sub = serializer.validated_data.get("subsidiary")
+        # Un admin de filiale ne crée QUE dans SA filiale (refuse une autre filiale
+        # explicitement fournie ; isolation non garantie par le seul scoping de lecture).
+        if not u.has_company_scope and u.subsidiary_id:
+            if sub and str(sub.id) != str(u.subsidiary_id):
+                raise PermissionDenied("Vous ne pouvez créer un utilisateur que dans votre filiale.")
             user = serializer.save(subsidiary_id=u.subsidiary_id)
         else:
             user = serializer.save()
@@ -91,6 +98,12 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         new_role = serializer.validated_data.get("role")
         if new_role and new_role != serializer.instance.role:
             self._check_role_assignable(new_role)
+        u = self.request.user
+        # Un admin de filiale ne peut pas déplacer un utilisateur vers une autre filiale.
+        if not u.has_company_scope and u.subsidiary_id:
+            new_sub = serializer.validated_data.get("subsidiary", serializer.instance.subsidiary)
+            if new_sub and str(new_sub.id) != str(u.subsidiary_id):
+                raise PermissionDenied("Vous ne pouvez pas affecter un utilisateur à une autre filiale.")
         user = serializer.save()
         audit.record(self.request.user, AuditAction.UPDATE, user,
                      changes={"action": "update_user", "role": user.role})
@@ -121,18 +134,18 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def _keycloak_disable_best_effort(instance):
-        """Désactive le compte Keycloak (jamais supprimé) — best-effort, ne bloque pas."""
-        if not kc.enabled():
-            return
-        kc_id = instance.keycloak_id or (kc.get_user_by_email(instance.email) or {}).get("id")
-        if not kc_id:
+        """Désactive le compte Keycloak (jamais supprimé) — best-effort, ne bloque pas.
+
+        On agit UNIQUEMENT sur un keycloak_id établi par K-Express (jamais résolu par
+        email, pour ne pas désactiver un compte étranger homonyme)."""
+        if not kc.enabled() or not instance.keycloak_id:
             return
         try:
-            kc.disable_user(kc_id)
+            kc.disable_user(instance.keycloak_id)
             KeycloakSyncLog.objects.create(user=instance, action="disable", status="ok",
                                            detail="Compte Keycloak désactivé (conservation).")
         except Exception:
-            pass
+            logger.warning("Désactivation Keycloak échouée pour %s — à désactiver manuellement.", instance.email)
 
     # --- Actions de gestion --------------------------------------------------
 
@@ -197,8 +210,9 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Synchronisation Keycloak non configurée.", "status": "disabled"}, status=400)
         try:
             result = apply_sync(str(user.pk), action="sync")  # inline : retour immédiat à l'admin
-        except kc.KeycloakAdminError as exc:
-            return Response({"detail": f"Échec de synchronisation : {exc}", "status": "error"}, status=502)
+        except kc.KeycloakAdminError:
+            # Détail déjà journalisé côté backend (keycloak_admin) ; message client générique.
+            return Response({"detail": "Échec de la synchronisation Keycloak.", "status": "error"}, status=502)
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "keycloak_sync"})
         user.refresh_from_db()
         return Response({"detail": "Synchronisé avec Keycloak.", "result": result,
@@ -222,8 +236,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Synchronisation Keycloak non configurée.", "status": "disabled"}, status=400)
         try:
             result = send_action_email(str(user.pk), actions, label)
-        except kc.KeycloakAdminError as exc:
-            return Response({"detail": f"Échec d'envoi : {exc}", "status": "error"}, status=502)
+        except kc.KeycloakAdminError:
+            return Response({"detail": "Échec de l'envoi de l'email Keycloak.", "status": "error"}, status=502)
         if result.get("status") == "no_account":
             return Response({"detail": "Aucun compte Keycloak : synchronisez d'abord l'utilisateur."}, status=400)
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": label})

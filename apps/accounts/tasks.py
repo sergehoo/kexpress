@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 
 from celery import shared_task
+from django.db import IntegrityError
 from django.utils import timezone
 
 from apps.accounts import keycloak_admin as kc
@@ -51,10 +52,22 @@ def apply_sync(user_id: str, *, action: str = "sync") -> dict:
         "keycloak_sync_status": KeycloakSyncStatus.SYNCED,
         "keycloak_sync_error": "",
     }
-    # Lie le compte SSO si ce n'est pas déjà fait (le sub Keycloak == id du user créé).
-    if result["kc_id"] and not user.keycloak_sub:
+    # Lien SSO (keycloak_sub) UNIQUEMENT si K-Express a CRÉÉ le compte dans cette
+    # opération. On n'adopte jamais le sub d'un compte Keycloak préexistant trouvé par
+    # email (anti-prise de contrôle : aligne le sync sur la garde du flux OIDC).
+    if result.get("created") and result["kc_id"] and not user.keycloak_sub:
         fields["keycloak_sub"] = result["kc_id"]
-    User.objects.filter(pk=user.pk).update(**fields)
+    try:
+        User.objects.filter(pk=user.pk).update(**fields)
+    except IntegrityError:
+        # keycloak_sub déjà lié à un autre utilisateur → ne pas adopter, signaler.
+        User.objects.filter(pk=user.pk).update(
+            keycloak_id=result["kc_id"], keycloak_synced_at=timezone.now(),
+            keycloak_sync_status=KeycloakSyncStatus.ERROR,
+            keycloak_sync_error="Identifiant Keycloak déjà lié à un autre utilisateur.",
+        )
+        _log(user, "sync", "error", "KC id déjà lié à un autre utilisateur")
+        return {"status": "error", "kc_id": result["kc_id"]}
     _log(user, "create" if result.get("created") else "update", "ok", result.get("detail", ""))
     return {"status": "ok", **result}
 
@@ -89,9 +102,12 @@ def send_action_email(user_id: str, actions: list[str], label: str) -> dict:
         return {"status": "missing"}
     if not kc.enabled():
         return {"status": "disabled"}
-    kc_id = user.keycloak_id or (kc.get_user_by_email(user.email) or {}).get("id")
-    if not kc_id:
+    # Action mutante (email reset/activation) : on n'agit QUE sur un compte que
+    # K-Express a établi (keycloak_id stocké) — jamais résolu par email seul, pour ne
+    # pas piloter un compte Keycloak étranger qui partagerait l'adresse.
+    if not user.keycloak_id:
         return {"status": "no_account"}
+    kc_id = user.keycloak_id
     try:
         kc.send_reset_password_email(kc_id, actions)
     except kc.KeycloakAdminError as exc:
