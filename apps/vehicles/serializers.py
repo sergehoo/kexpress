@@ -1,10 +1,14 @@
 from rest_framework import serializers
 
 from apps.vehicles.models import (
+    InspectionCenter,
+    InsuranceCompany,
     InsurancePolicy,
     TechnicalInspection,
     Vehicle,
+    VehicleBrand,
     VehicleDocument,
+    VehicleModel,
     VehicleRevision,
     VehicleStatusLog,
 )
@@ -92,3 +96,30 @@ class VehicleRevisionSerializer(serializers.ModelSerializer):
             "id", "vehicle", "vehicle_registration", "date", "mileage_at_revision",
             "cost", "provider", "document", "notes", "created_at",
         ]
+
+
+# --- Référentiels (autocomplétion) ---------------------------------------
+
+
+class VehicleBrandSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VehicleBrand
+        fields = ["id", "name"]
+
+
+class VehicleModelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VehicleModel
+        fields = ["id", "name", "brand"]
+
+
+class InsuranceCompanySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InsuranceCompany
+        fields = ["id", "name"]
+
+
+class InspectionCenterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InspectionCenter
+        fields = ["id", "name", "city"]

@@ -179,3 +179,75 @@ class VehicleRevision(TimeStampedModel):
 
     def __str__(self):
         return f"Révision {self.mileage_at_revision} km — {self.vehicle.registration}"
+
+
+# --- Référentiels (autocomplétion des formulaires) ------------------------
+# Données de référence partagées par toutes les filiales. Elles ALIMENTENT
+# l'autocomplétion ; les champs texte des modèles (Vehicle.brand/model,
+# InsurancePolicy.company, TechnicalInspection.center) restent libres pour
+# autoriser l'ajout manuel d'une valeur absente du référentiel.
+
+
+class VehicleBrand(TimeStampedModel):
+    """Marque automobile de référence."""
+
+    name = models.CharField("marque", max_length=80, unique=True)
+    is_active = models.BooleanField("active", default=True)
+
+    class Meta:
+        verbose_name = "marque de véhicule"
+        verbose_name_plural = "marques de véhicule"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class VehicleModel(TimeStampedModel):
+    """Modèle rattaché à une marque (filtrage dynamique marque → modèles)."""
+
+    brand = models.ForeignKey(
+        VehicleBrand, on_delete=models.CASCADE, related_name="models", verbose_name="marque"
+    )
+    name = models.CharField("modèle", max_length=80)
+    is_active = models.BooleanField("actif", default=True)
+
+    class Meta:
+        verbose_name = "modèle de véhicule"
+        verbose_name_plural = "modèles de véhicule"
+        ordering = ["name"]
+        unique_together = [("brand", "name")]
+
+    def __str__(self):
+        return f"{self.brand.name} {self.name}"
+
+
+class InsuranceCompany(TimeStampedModel):
+    """Compagnie d'assurance de référence (marché ivoirien préchargé)."""
+
+    name = models.CharField("compagnie d'assurance", max_length=160, unique=True)
+    is_active = models.BooleanField("active", default=True)
+
+    class Meta:
+        verbose_name = "compagnie d'assurance"
+        verbose_name_plural = "compagnies d'assurance"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class InspectionCenter(TimeStampedModel):
+    """Centre / organisme de visite technique de référence."""
+
+    name = models.CharField("centre de visite technique", max_length=160, unique=True)
+    city = models.CharField("ville", max_length=120, blank=True)
+    is_active = models.BooleanField("actif", default=True)
+
+    class Meta:
+        verbose_name = "centre de visite technique"
+        verbose_name_plural = "centres de visite technique"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
