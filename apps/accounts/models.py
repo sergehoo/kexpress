@@ -8,6 +8,13 @@ from apps.accounts.managers import UserManager
 from apps.core.enums import COMPANY_SCOPE_ROLES, RoleChoices
 
 
+class KeycloakSyncStatus(models.TextChoices):
+    PENDING = "pending", "À synchroniser"
+    SYNCED = "synced", "Synchronisé"
+    ERROR = "error", "Erreur"
+    DISABLED = "disabled", "Synchro désactivée"
+
+
 class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField("adresse email", unique=True)
@@ -54,6 +61,19 @@ class User(AbstractBaseUser, PermissionsMixin):
         unique=True, db_index=True, editable=False,
     )
 
+    # --- Synchronisation Keycloak (comptes gérés depuis K-Express) ---
+    # K-Express est l'interface unique : la création/MAJ/désactivation est poussée
+    # vers Keycloak via l'Admin API (cf. apps.accounts.keycloak_admin). keycloak_id
+    # est l'UUID du user Keycloak (== keycloak_sub pour les comptes créés ici).
+    keycloak_id = models.CharField("ID Keycloak", max_length=255, blank=True, default="", db_index=True)
+    keycloak_username = models.CharField("username Keycloak", max_length=255, blank=True, default="")
+    keycloak_synced_at = models.DateTimeField("dernière synchro Keycloak", null=True, blank=True)
+    keycloak_sync_status = models.CharField(
+        "statut synchro Keycloak", max_length=16,
+        choices=KeycloakSyncStatus.choices, default=KeycloakSyncStatus.PENDING,
+    )
+    keycloak_sync_error = models.TextField("erreur de synchro Keycloak", blank=True, default="")
+
     is_active = models.BooleanField("actif", default=True)
     is_staff = models.BooleanField("accès admin", default=False)
     date_joined = models.DateTimeField("date d'inscription", auto_now_add=True)
@@ -81,3 +101,26 @@ class User(AbstractBaseUser, PermissionsMixin):
     def has_company_scope(self):
         """Vrai si l'utilisateur voit toutes les filiales."""
         return self.is_superuser or self.role in COMPANY_SCOPE_ROLES
+
+
+class KeycloakSyncLog(models.Model):
+    """Historique des actions de synchronisation Keycloak (audit + UI admin)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="keycloak_sync_logs", verbose_name="utilisateur"
+    )
+    #: create / update / disable / assign_roles / reset_password / activation_email / sync
+    action = models.CharField("action", max_length=32)
+    status = models.CharField("statut", max_length=16)  # ok | error
+    detail = models.TextField("détail", blank=True, default="")
+    created_at = models.DateTimeField("date", auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "journal de synchro Keycloak"
+        verbose_name_plural = "journaux de synchro Keycloak"
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"KC[{self.action}={self.status}] {self.user_id}"

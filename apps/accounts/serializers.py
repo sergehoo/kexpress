@@ -8,6 +8,9 @@ class UserSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source="get_role_display", read_only=True)
     subsidiary_name = serializers.CharField(source="subsidiary.name", read_only=True, default=None)
     has_company_scope = serializers.BooleanField(read_only=True)
+    keycloak_sync_status_display = serializers.CharField(
+        source="get_keycloak_sync_status_display", read_only=True
+    )
 
     class Meta:
         model = User
@@ -27,8 +30,18 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "has_company_scope",
             "date_joined",
+            # Synchronisation Keycloak (lecture seule — piloté par le backend)
+            "keycloak_id",
+            "keycloak_username",
+            "keycloak_synced_at",
+            "keycloak_sync_status",
+            "keycloak_sync_status_display",
+            "keycloak_sync_error",
         ]
-        read_only_fields = ["id", "date_joined"]
+        read_only_fields = [
+            "id", "date_joined", "keycloak_id", "keycloak_username",
+            "keycloak_synced_at", "keycloak_sync_status", "keycloak_sync_error",
+        ]
 
 
 class EmployeeWriteSerializer(serializers.ModelSerializer):

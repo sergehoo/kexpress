@@ -1,13 +1,16 @@
 import secrets
 
+from django.db import transaction
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.accounts.models import User
+from apps.accounts import keycloak_admin as kc
+from apps.accounts.models import KeycloakSyncLog, User
 from apps.accounts.serializers import EmployeeWriteSerializer, UserSerializer
+from apps.accounts.tasks import apply_sync, schedule_user_sync, send_action_email
 from apps.audit import services as audit
 from apps.core.enums import COMPANY_SCOPE_ROLES, AuditAction, RoleChoices
 
@@ -79,6 +82,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         else:
             user = serializer.save()
         audit.record(u, AuditAction.CREATE, user, changes={"action": "create_user", "role": user.role})
+        # Provisioning Keycloak (création + rôles) après commit, en asynchrone.
+        transaction.on_commit(lambda: schedule_user_sync(user.id))
 
     def perform_update(self, serializer):
         self._check_admin()
@@ -89,6 +94,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         user = serializer.save()
         audit.record(self.request.user, AuditAction.UPDATE, user,
                      changes={"action": "update_user", "role": user.role})
+        # Propage nom/prénom/email/rôle/filiale/téléphone/statut vers Keycloak.
+        transaction.on_commit(lambda: schedule_user_sync(user.id))
 
     def perform_destroy(self, instance):
         self._check_admin()
@@ -99,15 +106,33 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         if hard:
             if not (self.request.user.is_superuser or self.request.user.role == RoleChoices.SUPER_ADMIN):
                 raise PermissionDenied("Suppression définitive réservée au super administrateur.")
+            # Côté Keycloak : on DÉSACTIVE (jamais de suppression) avant le purge local.
+            self._keycloak_disable_best_effort(instance)
             audit.record(self.request.user, AuditAction.DELETE, instance,
                          changes={"action": "hard_delete_user", "email": instance.email})
             instance.delete()
             return
-        # Suppression douce : désactivation (préserve l'historique métier).
+        # Suppression douce : désactivation (préserve l'historique métier) + désactive Keycloak.
         instance.is_active = False
         instance.save(update_fields=["is_active"])
         audit.record(self.request.user, AuditAction.DELETE, instance,
                      changes={"action": "deactivate_user", "email": instance.email})
+        transaction.on_commit(lambda: schedule_user_sync(instance.id))
+
+    @staticmethod
+    def _keycloak_disable_best_effort(instance):
+        """Désactive le compte Keycloak (jamais supprimé) — best-effort, ne bloque pas."""
+        if not kc.enabled():
+            return
+        kc_id = instance.keycloak_id or (kc.get_user_by_email(instance.email) or {}).get("id")
+        if not kc_id:
+            return
+        try:
+            kc.disable_user(kc_id)
+            KeycloakSyncLog.objects.create(user=instance, action="disable", status="ok",
+                                           detail="Compte Keycloak désactivé (conservation).")
+        except Exception:
+            pass
 
     # --- Actions de gestion --------------------------------------------------
 
@@ -121,6 +146,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         user.save(update_fields=["is_active"])
         audit.record(request.user, AuditAction.UPDATE, user,
                      changes={"action": "unblock_user" if active else "block_user"})
+        # Reflète l'état actif/inactif dans Keycloak (enabled).
+        transaction.on_commit(lambda: schedule_user_sync(user.id))
         return Response(UserSerializer(user).data)
 
     @action(detail=True, methods=["post"])
@@ -157,3 +184,60 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         user.save(update_fields=["password"])
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "reset_password"})
         return Response({"detail": "Mot de passe réinitialisé.", "temporary_password": temp})
+
+    # --- Synchronisation Keycloak --------------------------------------------
+
+    @action(detail=True, methods=["post"], url_path="keycloak-sync")
+    def keycloak_sync(self, request, pk=None):
+        """Force la synchronisation du compte avec Keycloak (création/MAJ + rôles)."""
+        self._check_admin()
+        user = self.get_object()
+        self._check_can_manage(user)
+        if not kc.enabled():
+            return Response({"detail": "Synchronisation Keycloak non configurée.", "status": "disabled"}, status=400)
+        try:
+            result = apply_sync(str(user.pk), action="sync")  # inline : retour immédiat à l'admin
+        except kc.KeycloakAdminError as exc:
+            return Response({"detail": f"Échec de synchronisation : {exc}", "status": "error"}, status=502)
+        audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "keycloak_sync"})
+        user.refresh_from_db()
+        return Response({"detail": "Synchronisé avec Keycloak.", "result": result,
+                         "user": UserSerializer(user).data})
+
+    @action(detail=True, methods=["post"], url_path="keycloak-activation-email")
+    def keycloak_activation_email(self, request, pk=None):
+        """Envoie l'email d'activation (vérif email + définition du mot de passe)."""
+        return self._kc_email(request, ["VERIFY_EMAIL", "UPDATE_PASSWORD"], "activation_email")
+
+    @action(detail=True, methods=["post"], url_path="keycloak-reset-password")
+    def keycloak_reset_password(self, request, pk=None):
+        """Envoie un email de réinitialisation de mot de passe via Keycloak."""
+        return self._kc_email(request, ["UPDATE_PASSWORD"], "reset_password_email")
+
+    def _kc_email(self, request, actions, label):
+        self._check_admin()
+        user = self.get_object()
+        self._check_can_manage(user)
+        if not kc.enabled():
+            return Response({"detail": "Synchronisation Keycloak non configurée.", "status": "disabled"}, status=400)
+        try:
+            result = send_action_email(str(user.pk), actions, label)
+        except kc.KeycloakAdminError as exc:
+            return Response({"detail": f"Échec d'envoi : {exc}", "status": "error"}, status=502)
+        if result.get("status") == "no_account":
+            return Response({"detail": "Aucun compte Keycloak : synchronisez d'abord l'utilisateur."}, status=400)
+        audit.record(request.user, AuditAction.UPDATE, user, changes={"action": label})
+        return Response({"detail": "Email envoyé.", "status": result.get("status")})
+
+    @action(detail=True, methods=["get"], url_path="keycloak-history")
+    def keycloak_history(self, request, pk=None):
+        """Historique des synchronisations Keycloak de cet utilisateur."""
+        self._check_admin()
+        user = self.get_object()
+        self._check_can_manage(user)
+        rows = KeycloakSyncLog.objects.filter(user=user).order_by("-created_at")[:50]
+        return Response({"results": [
+            {"id": str(r.id), "action": r.action, "status": r.status,
+             "detail": r.detail, "created_at": r.created_at.isoformat()}
+            for r in rows
+        ]})

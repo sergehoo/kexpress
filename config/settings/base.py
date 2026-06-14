@@ -165,6 +165,23 @@ OIDC_DEFAULT_ROLE = env("OIDC_DEFAULT_ROLE", default="requester")
 # n'accepte plus que les super-admins (accès de secours « break-glass »).
 LOCAL_LOGIN_ENABLED = env.bool("LOCAL_LOGIN_ENABLED", default=True)
 
+# --- Keycloak Admin API (provisioning des comptes depuis K-Express) --------
+# K-Express crée/MAJ/désactive les utilisateurs Keycloak via l'Admin REST API,
+# authentifié par un client CONFIDENTIEL (service account) — jamais exposé au front.
+# Le service account doit porter les rôles realm-management : manage-users (+ view-realm
+# pour résoudre les rôles realm). Désactivé tant que le secret n'est pas fourni.
+_KC_SERVER_DEFAULT = OIDC_ISSUER.split("/realms/")[0] if "/realms/" in OIDC_ISSUER else ""
+_KC_REALM_DEFAULT = OIDC_ISSUER.split("/realms/")[-1] if "/realms/" in OIDC_ISSUER else "kexpress"
+KEYCLOAK_SERVER_URL = env("KEYCLOAK_SERVER_URL", default=_KC_SERVER_DEFAULT).rstrip("/")
+KEYCLOAK_REALM = env("KEYCLOAK_REALM", default=_KC_REALM_DEFAULT)
+KEYCLOAK_ADMIN_CLIENT_ID = env("KEYCLOAK_ADMIN_CLIENT_ID", default="kexpress-admin")
+KEYCLOAK_ADMIN_CLIENT_SECRET = env("KEYCLOAK_ADMIN_CLIENT_SECRET", default="")
+# Client public ciblé par les emails d'action (reset/activation) + redirection retour.
+KEYCLOAK_WEB_CLIENT_ID = env("KEYCLOAK_WEB_CLIENT_ID", default=OIDC_CLIENT_ID)
+KEYCLOAK_ACTION_REDIRECT_URI = env("KEYCLOAK_ACTION_REDIRECT_URI", default="")
+# Activer la création/désactivation effective côté Keycloak (sinon : marquage local).
+KEYCLOAK_ADMIN_ENABLED = bool(KEYCLOAK_SERVER_URL and KEYCLOAK_ADMIN_CLIENT_SECRET)
+
 # --- Django REST Framework ------------------------------------------------
 _AUTH_CLASSES = []
 if OIDC_ENABLED:
