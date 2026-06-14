@@ -94,11 +94,17 @@ class Command(BaseCommand):
             )
 
         # --- Chauffeurs ---
-        Driver.objects.get_or_create(
-            subsidiary=sub_a, license_number="ABJ-DR-001",
-            defaults={"first_name": "Koffi", "last_name": "Yao", "license_category": "B",
-                      "phone": "+225 0700000000", "is_available": True},
-        )
+        # Le compte chauffeur d'Abidjan possède déjà un profil Driver auto-créé par le
+        # signal (rôle = chauffeur) : on l'enrichit plutôt que d'en créer un doublon.
+        drv_abj = Driver.objects.filter(user__email="chauffeur.abj@kaydan.test").first()
+        if drv_abj:
+            drv_abj.first_name = "Koffi"
+            drv_abj.last_name = "Yao"
+            drv_abj.license_number = drv_abj.license_number or "ABJ-DR-001"
+            drv_abj.license_category = drv_abj.license_category or "B"
+            drv_abj.phone = drv_abj.phone or "+225 0700000000"
+            drv_abj.save()
+        # Dakar n'a pas de compte chauffeur dédié : profil créé manuellement.
         Driver.objects.get_or_create(
             subsidiary=sub_b, license_number="DKR-DR-001",
             defaults={"first_name": "Moussa", "last_name": "Diop", "license_category": "D",

@@ -23,6 +23,14 @@ class Driver(TenantScopedModel):
         related_name="driver_profile",
         verbose_name="compte utilisateur",
     )
+    matricule = models.CharField(
+        "matricule",
+        max_length=20,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Identifiant interne du chauffeur (généré automatiquement).",
+    )
     first_name = models.CharField("prénom", max_length=120)
     last_name = models.CharField("nom", max_length=120)
     phone = models.CharField("téléphone", max_length=30, blank=True)
