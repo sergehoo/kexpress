@@ -203,39 +203,29 @@ class NearbyVehiclesView(APIView):
         except (TypeError, ValueError):
             return Response({"detail": "Paramètres lat/lng requis."}, status=400)
 
-        from django.contrib.gis.db.models.functions import Distance
-        from django.contrib.gis.geos import Point
+        from apps.maps.proximity import rank_by_eta
 
-        origin = Point(lng, lat, srid=4326)
-        # Distance calculée et triée par PostGIS (ST_Distance géographique → mètres).
         vehicles = (
             scoped(request.user)["vehicles"]
             .filter(status="available", last_location__isnull=False)
             .select_related("subsidiary", "last_location")
-            .annotate(distance=Distance("last_location__location", origin))
-            .order_by("distance")
         )
-        rows = []
-        for v in vehicles:
-            loc = v.last_location
-            # Repli haversine si la géométrie n'est pas (encore) renseignée.
-            dist = v.distance.km if v.distance is not None else _haversine(
-                [lat, lng], [float(loc.latitude), float(loc.longitude)]
-            )
-            rows.append({
-                "id": str(v.id),
-                "registration": v.registration,
-                "brand": v.brand,
-                "model": v.model,
-                "vehicle_type_display": v.get_vehicle_type_display(),
-                "capacity": v.capacity,
-                "latitude": str(loc.latitude),
-                "longitude": str(loc.longitude),
-                "distance_km": round(dist, 2),
-                "eta_min": max(1, round(dist / AVG_SPEED_KMH * 60)),
-                "subsidiary_name": v.subsidiary.name,
-            })
-        rows.sort(key=lambda r: r["distance_km"])
+        candidates = [{
+            "id": str(v.id),
+            "registration": v.registration,
+            "brand": v.brand,
+            "model": v.model,
+            "vehicle_type_display": v.get_vehicle_type_display(),
+            "capacity": v.capacity,
+            "subsidiary_name": v.subsidiary.name,
+            "lat": float(v.last_location.latitude),
+            "lng": float(v.last_location.longitude),
+        } for v in vehicles]
+        # Classement par ETA routier OSRM (repli haversine si OSRM indisponible).
+        rows = [
+            {**c, "latitude": str(c.pop("lat")), "longitude": str(c.pop("lng"))}
+            for c in rank_by_eta((lat, lng), candidates)
+        ]
 
         # Suggestion K-BOT ancrée sur les données : meilleur véhicule + disponibilité.
         if rows:
@@ -258,3 +248,68 @@ class NearbyVehiclesView(APIView):
             )
 
         return Response({"count": len(rows), "results": rows[:10], "suggestion": suggestion})
+
+
+def _driver_last_location(driver):
+    """Dernière position connue d'un chauffeur, déduite du véhicule de sa course la
+    plus récente (pas de GPS dédié chauffeur à ce stade). (lat, lng) ou None."""
+    from apps.trips.models import Trip
+
+    trip = (
+        Trip.objects.filter(driver=driver, vehicle__last_location__isnull=False)
+        .select_related("vehicle__last_location")
+        .order_by("-created_at")
+        .first()
+    )
+    if trip and trip.vehicle and getattr(trip.vehicle, "last_location", None):
+        loc = trip.vehicle.last_location
+        return (float(loc.latitude), float(loc.longitude))
+    return None
+
+
+class DriversNearestView(APIView):
+    """Chauffeurs disponibles les plus proches d'un point (ETA OSRM).
+
+    La position d'un chauffeur est déduite du véhicule de sa dernière course
+    (faute de GPS chauffeur dédié) : les chauffeurs localisables sont classés par
+    ETA, les autres listés ensuite.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            lat = float(request.query_params.get("lat"))
+            lng = float(request.query_params.get("lng"))
+        except (TypeError, ValueError):
+            return Response({"detail": "Paramètres lat/lng requis."}, status=400)
+
+        from apps.drivers.models import Driver
+        from apps.maps.proximity import rank_by_eta
+
+        drivers = (
+            Driver.objects.for_user(request.user)
+            .filter(is_available=True)
+            .select_related("subsidiary")
+        )
+        candidates, unlocated = [], []
+        for d in drivers:
+            loc = _driver_last_location(d)
+            base = {
+                "id": str(d.id), "full_name": d.full_name, "matricule": d.matricule,
+                "subsidiary_name": d.subsidiary.name,
+            }
+            if loc:
+                candidates.append({**base, "lat": loc[0], "lng": loc[1]})
+            else:
+                unlocated.append(base)
+
+        ranked = [
+            {**c, "latitude": str(c.pop("lat")), "longitude": str(c.pop("lng"))}
+            for c in rank_by_eta((lat, lng), candidates)
+        ]
+        return Response({
+            "count": len(ranked) + len(unlocated),
+            "results": ranked[:10],
+            "unlocated": unlocated[:10],
+        })
