@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   AlertTriangle,
+  Ban,
   Car,
   ClipboardList,
   Clock,
@@ -16,9 +17,11 @@ import {
   Minimize,
   Minimize2,
   MapPin,
+  OctagonAlert,
   Phone,
   Route as RouteIcon,
   Search,
+  ShieldAlert,
   UserRound,
 } from "lucide-react";
 
@@ -32,6 +35,7 @@ import {
 import {
   useFuelIntel,
   useGeofenceZones,
+  useLiveAlerts,
   useReservationAction,
   useReservations,
   useTripRoute,
@@ -41,7 +45,7 @@ import { useFleetLive } from "@/lib/useFleetLive";
 import { useFullscreen } from "@/lib/useFullscreen";
 import { useSubsidiaryFilter } from "@/lib/subsidiary";
 import { apiError } from "@/lib/api";
-import type { Reservation } from "@/lib/types";
+import type { LiveAlert, Reservation } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -65,7 +69,9 @@ export default function FleetControlPage() {
   const { me } = useAuth();
   const { selected: subFilter } = useSubsidiaryFilter();
   const { positions, connected, isLoading } = useFleetLive(subFilter || undefined);
-  const [tab, setTab] = useState<"vehicles" | "requests" | "fuel">("vehicles");
+  const [tab, setTab] = useState<"vehicles" | "requests" | "fuel" | "alerts">("vehicles");
+  const liveAlerts = useLiveAlerts();
+  const alertCount = liveAlerts.data?.count ?? 0;
   // Visibilité des coûts : gestionnaires de flotte / admins / finance uniquement.
   const canSeeFuel = Boolean(
     me?.has_company_scope || ["fleet_manager", "subsidiary_admin", "finance"].includes(me?.role ?? ""),
@@ -184,6 +190,18 @@ export default function FleetControlPage() {
                   <span className="rounded-full bg-brand-500 px-1.5 text-[10px] font-bold text-white">{requests.length}</span>
                 )}
               </button>
+              <button
+                onClick={() => setTab("alerts")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors",
+                  tab === "alerts" ? "border-b-2 border-brand-500 text-brand-600" : "text-muted hover:text-ink",
+                )}
+              >
+                <OctagonAlert className="h-3.5 w-3.5" /> Anomalies
+                {alertCount > 0 && (
+                  <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-bold text-white">{alertCount}</span>
+                )}
+              </button>
               {canSeeFuel && (
                 <button
                   onClick={() => setTab("fuel")}
@@ -298,6 +316,16 @@ export default function FleetControlPage() {
                   ))
                 )}
               </div>
+            ) : tab === "alerts" ? (
+              <LiveAlertsPanel
+                data={liveAlerts.data}
+                loading={liveAlerts.isLoading}
+                selectedTripId={selectedTripId}
+                onSelectTrip={(tripId) => {
+                  const pos = positions.find((p) => p.trip_id === tripId);
+                  if (pos) { setSelectedId(pos.id); setFollow(true); }
+                }}
+              />
             ) : (
               <FuelIntelPanel data={fuelIntel.data} loading={fuelIntel.isLoading} />
             )}
@@ -513,6 +541,83 @@ function FuelIntelPanel({ data, loading }: { data?: import("@/lib/queries").Fuel
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+const ALERT_META: Record<LiveAlert["kind"], { icon: typeof Ban; label: string; tone: string }> = {
+  deviation: { icon: RouteIcon, label: "Hors itinéraire", tone: "text-amber-600 bg-amber-500/10" },
+  stop: { icon: Clock, label: "Arrêt prolongé", tone: "text-amber-600 bg-amber-500/10" },
+  delay: { icon: Clock, label: "Retard", tone: "text-rose-600 bg-rose-500/10" },
+  forbidden_zone: { icon: Ban, label: "Zone interdite", tone: "text-rose-600 bg-rose-500/10" },
+};
+
+/** Flux live des anomalies opérationnelles du centre de contrôle (#3F). */
+function LiveAlertsPanel({
+  data,
+  loading,
+  selectedTripId,
+  onSelectTrip,
+}: {
+  data?: import("@/lib/types").LiveAlertsResponse;
+  loading: boolean;
+  selectedTripId: string | null;
+  onSelectTrip: (tripId: string) => void;
+}) {
+  if (loading && !data) {
+    return <div className="flex flex-1 items-center justify-center py-10"><Spinner className="h-6 w-6" /></div>;
+  }
+  const items = data?.results ?? [];
+  const counts = data?.counts;
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      {counts && (
+        <div className="grid grid-cols-4 gap-1.5 border-b border-line p-2">
+          {(Object.keys(ALERT_META) as LiveAlert["kind"][]).map((k) => {
+            const M = ALERT_META[k];
+            return (
+              <div key={k} className={cn("rounded-lg px-1 py-1.5 text-center", M.tone)}>
+                <M.icon className="mx-auto h-3.5 w-3.5" />
+                <p className="mt-0.5 text-sm font-bold leading-none">{counts[k] ?? 0}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-faint">
+          <ShieldAlert className="h-8 w-8 text-emerald-500/60" />
+          Aucune anomalie en cours 🎉
+        </div>
+      ) : (
+        items.map((a, i) => {
+          const M = ALERT_META[a.kind];
+          const clickable = Boolean(a.trip_id);
+          return (
+            <button
+              key={`${a.kind}-${i}`}
+              disabled={!clickable}
+              onClick={() => a.trip_id && onSelectTrip(a.trip_id)}
+              className={cn(
+                "flex w-full items-start gap-2.5 border-b border-line px-3 py-2.5 text-left",
+                clickable && "hover:bg-surface2",
+                a.trip_id && a.trip_id === selectedTripId && "bg-brand-500/5",
+              )}
+            >
+              <span className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", M.tone)}>
+                <M.icon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-ink">{a.title}</p>
+                <p className="truncate text-[11px] text-muted">{a.detail}</p>
+              </div>
+              <span className="shrink-0 text-[10px] text-faint">{formatDate(a.occurred_at, true)}</span>
+            </button>
+          );
+        })
+      )}
     </div>
   );
 }

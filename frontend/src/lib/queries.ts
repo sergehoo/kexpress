@@ -16,6 +16,7 @@ import type {
   FuelLog,
   Incident,
   KbotAnswer,
+  LiveAlertsResponse,
   MaintenanceRecord,
   NearbyVehicle,
   NotificationItem,
@@ -456,6 +457,21 @@ export function useGeofenceZones() {
       return data.results;
     },
     staleTime: 5 * 60_000,
+  });
+}
+
+// --- Anomalies opérationnelles live (centre de contrôle #3F) -----------
+
+export function useLiveAlerts(enabled = true) {
+  return useQuery({
+    queryKey: ["live-alerts"],
+    enabled,
+    queryFn: async () => {
+      const { data } = await api.get<LiveAlertsResponse>("/tracking/live-alerts/");
+      return data;
+    },
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 }
 

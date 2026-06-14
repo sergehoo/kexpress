@@ -41,6 +41,92 @@ class GeofenceZonesView(APIView):
         })
 
 
+class LiveAlertsView(APIView):
+    """#3F — Flux des anomalies opérationnelles temps réel pour le centre de contrôle :
+    détours, arrêts prolongés, retards, entrées en zone interdite. Scopé, récents d'abord."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.analytics.scope import scoped
+        from apps.tracking.models import GeofenceAlert, RouteDeviationAlert
+
+        qs = scoped(request.user)
+        now = timezone.now()
+        since = now - timedelta(hours=12)
+        trips = qs["trips"]
+        vehicles = qs["vehicles"]
+        items = []
+
+        # Détours & arrêts prolongés (#3C/#12)
+        for a in (
+            RouteDeviationAlert.objects.filter(trip__in=trips, occurred_at__gte=since)
+            .select_related("trip", "trip__vehicle")[:100]
+        ):
+            is_stop = a.deviation_m is None
+            reg = a.trip.vehicle.registration if a.trip.vehicle_id else "—"
+            items.append({
+                "kind": "stop" if is_stop else "deviation",
+                "severity": a.severity,
+                "title": ("Arrêt prolongé" if is_stop else "Hors itinéraire") + f" — {reg}",
+                "detail": (
+                    "Véhicule à l'arrêt depuis plus de 15 min"
+                    if is_stop
+                    else f"Écart d'environ {round(float(a.deviation_m) / 1000, 1)} km par rapport à l'itinéraire"
+                ),
+                "vehicle": reg,
+                "trip_id": str(a.trip_id),
+                "latitude": str(a.latitude),
+                "longitude": str(a.longitude),
+                "occurred_at": a.occurred_at.isoformat(),
+            })
+
+        # Entrées en zone interdite
+        for g in (
+            GeofenceAlert.objects.filter(
+                vehicle__in=vehicles, zone__zone_type="forbidden", event="enter", occurred_at__gte=since
+            ).select_related("vehicle", "zone")[:100]
+        ):
+            items.append({
+                "kind": "forbidden_zone",
+                "severity": "critical",
+                "title": f"Zone interdite — {g.vehicle.registration}",
+                "detail": f"Entrée dans « {g.zone.name} »",
+                "vehicle": g.vehicle.registration,
+                "trip_id": str(g.trip_id) if g.trip_id else None,
+                "latitude": str(g.latitude),
+                "longitude": str(g.longitude),
+                "occurred_at": g.occurred_at.isoformat(),
+            })
+
+        # Retards (courses en cours dont le retour estimé est dépassé)
+        for t in trips.filter(status="in_progress").select_related("vehicle", "reservation"):
+            er = t.reservation.estimated_return if t.reservation_id else None
+            if er and er < now:
+                mins = int((now - er).total_seconds() // 60)
+                items.append({
+                    "kind": "delay",
+                    "severity": "critical" if mins >= 60 else "warning",
+                    "title": f"Retard — {t.vehicle.registration if t.vehicle_id else '—'}",
+                    "detail": f"Retour attendu dépassé de {mins} min — {t.destination}",
+                    "vehicle": t.vehicle.registration if t.vehicle_id else "—",
+                    "trip_id": str(t.id),
+                    "latitude": None,
+                    "longitude": None,
+                    "occurred_at": er.isoformat(),
+                })
+
+        items.sort(key=lambda x: x["occurred_at"], reverse=True)
+        counts = {"deviation": 0, "stop": 0, "delay": 0, "forbidden_zone": 0}
+        for it in items:
+            counts[it["kind"]] = counts.get(it["kind"], 0) + 1
+        return Response({"count": len(items), "counts": counts, "results": items[:80]})
+
+
 class TripRouteView(APIView):
     """Itinéraire prévu (polyline) vs trace réelle GPS d'une course."""
 

@@ -200,6 +200,27 @@ export interface RouteCalculation {
   steps: RouteStep[];
 }
 
+// Anomalie opérationnelle live du centre de contrôle (#3F)
+export type LiveAlertKind = "deviation" | "stop" | "delay" | "forbidden_zone";
+
+export interface LiveAlert {
+  kind: LiveAlertKind;
+  severity: string;
+  title: string;
+  detail: string;
+  vehicle: string;
+  trip_id: string | null;
+  latitude: string | null;
+  longitude: string | null;
+  occurred_at: string;
+}
+
+export interface LiveAlertsResponse {
+  count: number;
+  counts: Record<LiveAlertKind, number>;
+  results: LiveAlert[];
+}
+
 export interface VehiclePosition {
   id: string;
   registration: string;
