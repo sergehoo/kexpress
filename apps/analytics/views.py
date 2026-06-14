@@ -322,7 +322,15 @@ class KBotView(APIView):
         question = (request.data.get("question") or "").strip()
         if not question:
             return Response({"answer": "Posez-moi une question sur votre flotte.", "data": None})
-        result = answer_question(request.user, question)
+        # Position éventuelle du demandeur, pour les intentions « au plus proche » (#3E).
+        origin = None
+        try:
+            lat, lng = request.data.get("lat"), request.data.get("lng")
+            if lat is not None and lng is not None:
+                origin = (float(lat), float(lng))
+        except (TypeError, ValueError):
+            origin = None
+        result = answer_question(request.user, question, origin=origin)
         audit.record(
             request.user, AuditAction.ACCESS, None,
             changes={"kbot_question": question[:255], "intent": result.get("intent")},

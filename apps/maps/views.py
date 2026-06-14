@@ -250,23 +250,6 @@ class NearbyVehiclesView(APIView):
         return Response({"count": len(rows), "results": rows[:10], "suggestion": suggestion})
 
 
-def _driver_last_location(driver):
-    """Dernière position connue d'un chauffeur, déduite du véhicule de sa course la
-    plus récente (pas de GPS dédié chauffeur à ce stade). (lat, lng) ou None."""
-    from apps.trips.models import Trip
-
-    trip = (
-        Trip.objects.filter(driver=driver, vehicle__last_location__isnull=False)
-        .select_related("vehicle__last_location")
-        .order_by("-created_at")
-        .first()
-    )
-    if trip and trip.vehicle and getattr(trip.vehicle, "last_location", None):
-        loc = trip.vehicle.last_location
-        return (float(loc.latitude), float(loc.longitude))
-    return None
-
-
 class DriversNearestView(APIView):
     """Chauffeurs disponibles les plus proches d'un point (ETA OSRM).
 
@@ -285,7 +268,7 @@ class DriversNearestView(APIView):
             return Response({"detail": "Paramètres lat/lng requis."}, status=400)
 
         from apps.drivers.models import Driver
-        from apps.maps.proximity import rank_by_eta
+        from apps.maps.proximity import driver_last_location, rank_by_eta
 
         drivers = (
             Driver.objects.for_user(request.user)
@@ -294,7 +277,7 @@ class DriversNearestView(APIView):
         )
         candidates, unlocated = [], []
         for d in drivers:
-            loc = _driver_last_location(d)
+            loc = driver_last_location(d)
             base = {
                 "id": str(d.id), "full_name": d.full_name, "matricule": d.matricule,
                 "subsidiary_name": d.subsidiary.name,

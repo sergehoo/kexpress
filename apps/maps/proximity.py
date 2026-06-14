@@ -39,3 +39,20 @@ def rank_by_eta(origin: tuple[float, float], candidates: list[dict]) -> list[dic
 
     located.sort(key=lambda c: c["eta_min"])
     return located
+
+
+def driver_last_location(driver):
+    """Dernière position connue d'un chauffeur, déduite du véhicule de sa course la
+    plus récente (pas de GPS dédié chauffeur à ce stade). (lat, lng) ou None."""
+    from apps.trips.models import Trip
+
+    trip = (
+        Trip.objects.filter(driver=driver, vehicle__last_location__isnull=False)
+        .select_related("vehicle__last_location")
+        .order_by("-created_at")
+        .first()
+    )
+    if trip and trip.vehicle and getattr(trip.vehicle, "last_location", None):
+        loc = trip.vehicle.last_location
+        return (float(loc.latitude), float(loc.longitude))
+    return None

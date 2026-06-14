@@ -25,9 +25,48 @@ def _has(q: str, *words: str) -> bool:
     return any(w in q for w in words)
 
 
-def answer_question(user, question: str) -> dict:
+def answer_question(user, question: str, origin: tuple[float, float] | None = None) -> dict:
     q = _norm(question)
     qs = scoped(user)
+
+    # --- Assistant routage (#3E) ----------------------------------------
+
+    # Véhicule le plus proche (ETA routier OSRM) — `origin` = position du demandeur.
+    if _has(q, "plus proche", "proche", "a cote", "pres de") and _has(q, "vehicul", "voiture", "engin"):
+        return _nearest_vehicle(qs, origin)
+
+    # Chauffeur le plus proche
+    if _has(q, "plus proche", "proche", "a cote", "pres de") and _has(q, "chauffeur", "conducteur"):
+        return _nearest_driver(user, qs, origin)
+
+    # Itinéraire le plus rapide / le moins cher
+    if _has(q, "itineraire", "trajet", "route", "chemin") and _has(
+        q, "rapide", "court", "optimal", "meilleur", "moins cher", "economique", "eviter"
+    ):
+        return _r(
+            "route_planning",
+            "Pour l'itinéraire le plus rapide et le coût carburant estimé, ouvrez la carte "
+            "(/map) et placez le départ et la destination : K-Express calcule le tracé routier "
+            "optimal (OSRM), la durée, la distance et l'estimation carburant, puis recalcule "
+            "automatiquement en cas de détour.",
+        )
+
+    # Quelle filiale parcourt le plus de kilomètres
+    if _has(q, "filiale", "agence", "entite") and _has(q, "km", "kilometr", "roule", "parcour", "distance"):
+        rows = [
+            r for r in qs["trips"].values("subsidiary__name").annotate(s=Sum("distance_km")).order_by("-s")[:5]
+            if r["s"]
+        ]
+        if not rows:
+            return _r("km_by_subsidiary", "Aucune distance de course enregistrée pour le moment.")
+        items = [{"label": r["subsidiary__name"], "value": f"{float(r['s']):,.0f} km"} for r in rows]
+        return _r("km_by_subsidiary", "Filiales classées par distance parcourue :", items)
+
+    # Pourquoi en retard / à l'arrêt — diagnostic des courses en cours (données réelles)
+    if _has(q, "retard", "en retard") or (
+        _has(q, "pourquoi", "explique") and _has(q, "arret", "arrete", "immobil", "bloque", "stoppe", "hors itineraire")
+    ):
+        return _trip_diagnosis(qs)
 
     # Véhicules disponibles maintenant
     if _has(q, "disponible") and _has(q, "vehicul", "voiture", "flotte", "maintenant"):
@@ -186,6 +225,102 @@ def _build_context(user, qs) -> str:
     lines.append(f"Coût carburant cumulé : {fuel}. Coût maintenance cumulé : {maint}.")
 
     return "\n".join(lines)
+
+
+def _nearest_vehicle(qs, origin) -> dict:
+    """Véhicule disponible le plus proche par ETA routier OSRM (#3E)."""
+    located = (
+        qs["vehicles"].filter(status="available", last_location__isnull=False)
+        .select_related("last_location")
+    )
+    if origin is None:
+        n = qs["vehicles"].filter(status="available").count()
+        return _r(
+            "nearest_vehicle",
+            f"{n} véhicule(s) disponible(s). Pour le plus proche par temps de trajet réel, "
+            "partagez votre position ou choisissez un point sur la carte (/map).",
+        )
+    from apps.maps.proximity import rank_by_eta
+
+    cands = [{
+        "registration": v.registration, "brand": v.brand, "model": v.model,
+        "lat": float(v.last_location.latitude), "lng": float(v.last_location.longitude),
+    } for v in located]
+    ranked = rank_by_eta(origin, cands)[:5]
+    if not ranked:
+        return _r("nearest_vehicle", "Aucun véhicule disponible avec une position GPS récente.")
+    items = [
+        {"label": f"{c['registration']} — {c['brand']} {c['model']}",
+         "value": f"~{c['eta_min']} min ({c['distance_km']} km)"}
+        for c in ranked
+    ]
+    best = ranked[0]
+    return _r(
+        "nearest_vehicle",
+        f"Véhicule le plus proche : {best['registration']} — arrivée estimée ~{best['eta_min']} min "
+        f"({best['distance_km']} km).",
+        items,
+    )
+
+
+def _nearest_driver(user, qs, origin) -> dict:
+    """Chauffeur disponible le plus proche par ETA (position déduite de sa dernière course)."""
+    drivers = qs["drivers"].filter(is_available=True)
+    if origin is None:
+        return _r(
+            "nearest_driver",
+            f"{drivers.count()} chauffeur(s) disponible(s). Pour le plus proche par temps de "
+            "trajet, partagez votre position ou choisissez un point sur la carte (/map).",
+        )
+    from apps.maps.proximity import driver_last_location, rank_by_eta
+
+    cands = []
+    for d in drivers:
+        loc = driver_last_location(d)
+        if loc:
+            cands.append({"full_name": d.full_name, "lat": loc[0], "lng": loc[1]})
+    ranked = rank_by_eta(origin, cands)[:5]
+    if not ranked:
+        return _r(
+            "nearest_driver",
+            f"{drivers.count()} chauffeur(s) disponible(s), mais aucun localisable (pas de course "
+            "récente avec position GPS). Affectation manuelle conseillée.",
+        )
+    items = [{"label": c["full_name"], "value": f"~{c['eta_min']} min ({c['distance_km']} km)"} for c in ranked]
+    return _r("nearest_driver", f"Chauffeur le plus proche : {ranked[0]['full_name']} — ~{ranked[0]['eta_min']} min.", items)
+
+
+def _trip_diagnosis(qs) -> dict:
+    """Pourquoi des courses sont en retard / à l'arrêt / hors itinéraire (#3E)."""
+    from apps.tracking.models import RouteDeviationAlert
+
+    now = timezone.now()
+    since = now - timedelta(minutes=30)
+    trips = qs["trips"].filter(status="in_progress").select_related("vehicle", "reservation")
+    late, stopped, deviated = [], [], []
+    for t in trips:
+        er = t.reservation.estimated_return if t.reservation_id else None
+        if er and er < now:
+            late.append((t, int((now - er).total_seconds() // 60)))
+        alerts = RouteDeviationAlert.objects.filter(trip=t, occurred_at__gte=since)
+        if alerts.filter(deviation_m__isnull=True).exists():
+            stopped.append(t)
+        elif alerts.filter(deviation_m__isnull=False).exists():
+            deviated.append(t)
+
+    items = (
+        [{"label": f"{t.vehicle.registration} → {t.destination}", "value": f"retard {m} min"} for t, m in late]
+        + [{"label": f"{t.vehicle.registration} → {t.destination}", "value": "à l'arrêt prolongé"} for t in stopped]
+        + [{"label": f"{t.vehicle.registration} → {t.destination}", "value": "hors itinéraire"} for t in deviated]
+    )
+    if not items:
+        return _r("trip_diagnosis", "Aucune course en cours n'est en retard, à l'arrêt prolongé ou hors itinéraire.")
+    return _r(
+        "trip_diagnosis",
+        f"{len(late)} course(s) en retard, {len(stopped)} à l'arrêt prolongé, "
+        f"{len(deviated)} hors itinéraire :",
+        items,
+    )
 
 
 def _r(intent: str, answer: str, items: list | None = None) -> dict:
