@@ -40,19 +40,120 @@ services:
           - kexpress-redis
           - redis
 
-  # Serveur de routage OSRM (auto-hébergé, open source).
-  # Prépare les données AVANT le 1er démarrage : `bash docker/osrm-setup.sh`
-  # (télécharge l'extrait Côte d'Ivoire + osrm-extract/partition/customize).
-  # Le backend l'atteint via OSRM_URL=http://kexpress-osrm:5000 (réseau interne).
+  # === Routage OSRM auto-hébergé (open source) — pipeline auto-amorçant ===
+  # Aucune étape manuelle : au 1er démarrage la stack télécharge l'extrait OSM
+  # puis prépare le graphe MLD (extract → partition → customize). Le résultat est
+  # mis en cache dans le volume nommé `kexpress_osrm` (PAS ./osrm-data), donc les
+  # démarrages suivants sont instantanés. Backend → OSRM_URL=http://kexpress-osrm:5000.
+  #
+  #   1) fetch   : télécharge l'extrait .osm.pbf (+ vérif md5) — image alpine (curl)
+  #   2) prepare : osrm-extract/partition/customize (idempotent + auto-nettoyant)
+  #   3) osrm    : osrm-routed --algorithm mld (sert l'API HTTP)
+  #
+  # RAM : la préparation de l'extrait Côte d'Ivoire (~85 Mo) demande ~2 Go ; prévoir
+  #   ≥2-4 Go de RAM ou un swap sur l'hôte, sinon osrm-customize peut être OOM-killed.
+  # RAFRAÎCHIR LA CARTE (nouveau réseau routier OSM) — les sentinelles figent les
+  #   données ; pour forcer la mise à jour :
+  #     docker compose run --rm --entrypoint sh kexpress-osrm-prepare -c \
+  #       'rm -f /data/.pbf.ok /data/.osrm.ready'
+  #     docker compose up -d --force-recreate kexpress-osrm-fetch kexpress-osrm-prepare kexpress-osrm
+  # Image épinglée (v5.26.0) : un graphe préparé n'est PAS compatible entre versions.
+
+  # 1) Téléchargement de l'extrait OSM (l'image osrm-backend n'a pas de client HTTP).
+  kexpress-osrm-fetch:
+    image: alpine:3.20
+    restart: "no"
+    environment:
+      OSRM_REGION_URL: ${OSRM_REGION_URL:-https://download.geofabrik.de/africa/ivory-coast-latest.osm.pbf}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        cd /data
+        if [ -f cote-divoire-latest.osm.pbf ] && [ -f .pbf.ok ]; then
+          echo "Extrait OSM déjà présent et complet — téléchargement ignoré."
+          exit 0
+        fi
+        rm -f cote-divoire-latest.osm.pbf.part
+        apk add --no-cache ca-certificates curl >/dev/null
+        echo "Téléchargement de l'extrait OSM : $$OSRM_REGION_URL"
+        curl -fSL --retry 5 --retry-delay 5 "$$OSRM_REGION_URL" -o cote-divoire-latest.osm.pbf.part
+        # Intégrité : md5 Geofabrik si disponible (évite qu'un fichier tronqué-mais-200
+        # empoisonne le cache à vie), sinon repli sur un contrôle de taille minimal.
+        if curl -fsSL --retry 3 "$$OSRM_REGION_URL.md5" -o sum.md5 2>/dev/null; then
+          exp=$$(cut -d' ' -f1 sum.md5)
+          act=$$(md5sum cote-divoire-latest.osm.pbf.part | cut -d' ' -f1)
+          if [ "$$exp" != "$$act" ]; then echo "Échec md5 ($$exp != $$act) — abandon."; exit 1; fi
+          echo "md5 vérifié."
+        elif [ "$$(wc -c < cote-divoire-latest.osm.pbf.part)" -lt 1000000 ]; then
+          echo "Téléchargement suspect (trop petit) — abandon."; exit 1
+        fi
+        mv cote-divoire-latest.osm.pbf.part cote-divoire-latest.osm.pbf
+        touch .pbf.ok
+        echo "Extrait OSM prêt."
+    volumes:
+      - kexpress_osrm:/data
+    networks:
+      - kexpress-internal
+
+  # 2) Préparation du graphe MLD (idempotente + auto-nettoyante).
+  kexpress-osrm-prepare:
+    image: osrm/osrm-backend@sha256:af5d4a83fb90086a43b1ae2ca22872e6768766ad5fcbb07a29ff90ec644ee409  # = latest (v5.26.0), épinglé par digest immuable
+    restart: "no"
+    depends_on:
+      kexpress-osrm-fetch:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        cd /data
+        if [ -f .osrm.ready ]; then
+          echo "Graphe OSRM déjà préparé — préparation ignorée."
+          exit 0
+        fi
+        # Repart d'un état propre : purge tout graphe partiel laissé par une
+        # préparation interrompue (OOM/kill mid-customize) pour ne jamais empiler
+        # un nouveau graphe sur des fichiers corrompus.
+        rm -f cote-divoire-latest.osrm*
+        echo "Mémoire disponible :"; head -3 /proc/meminfo || true
+        echo "osrm-extract…"
+        osrm-extract -p /opt/car.lua cote-divoire-latest.osm.pbf
+        echo "osrm-partition…"
+        osrm-partition cote-divoire-latest.osrm
+        echo "osrm-customize…"
+        osrm-customize cote-divoire-latest.osrm
+        # Sentinelle posée seulement si l'artefact MLD final existe réellement
+        # (≠ simple touch) — garantit qu'un graphe incomplet n'est jamais « prêt ».
+        test -s cote-divoire-latest.osrm.mldgr
+        touch .osrm.ready
+        echo "Graphe MLD prêt."
+    volumes:
+      - kexpress_osrm:/data
+    networks:
+      - kexpress-internal
+
+  # 3) Serveur de routage (démarre seulement quand le graphe est prêt).
   kexpress-osrm:
-    image: osrm/osrm-backend:latest
+    image: osrm/osrm-backend@sha256:af5d4a83fb90086a43b1ae2ca22872e6768766ad5fcbb07a29ff90ec644ee409  # = latest (v5.26.0), épinglé par digest immuable
     container_name: kexpress-osrm
     restart: unless-stopped
-    command: ["osrm-routed", "--algorithm", "mld", "/data/cote-divoire-latest.osrm"]
+    depends_on:
+      kexpress-osrm-prepare:
+        condition: service_completed_successfully
+    # --max-table-size : plafond du nombre de coordonnées pour /table (affectation au
+    # plus proche). Défaut OSRM = 100 → bloquerait au-delà de ~99 véhicules localisés.
+    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "5000", "/data/cote-divoire-latest.osrm"]
     volumes:
-      - ./osrm-data:/data
+      - kexpress_osrm:/data
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/5000' 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     networks:
       kexpress-internal:
         aliases:
@@ -98,7 +199,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
 
-      OSRM_URL: ${OSRM_URL:-https://router.project-osrm.org}
+      OSRM_URL: ${OSRM_URL:-http://kexpress-osrm:5000}
       NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org}
       MAP_COST_PER_KM: ${MAP_COST_PER_KM:-350.0}
       FUEL_PRICE_SOURCE_URL: ${FUEL_PRICE_SOURCE_URL:-}
@@ -270,6 +371,7 @@ volumes:
   kexpress_media:
   kexpress_static:
   kexpress_backups:
+  kexpress_osrm:  # graphe OSRM préparé (cache persistant inter-déploiements)
 
 networks:
   kexpress-internal:

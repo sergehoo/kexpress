@@ -9,12 +9,29 @@ matrice de distances/durées (table) pour l'affectation au plus proche.
 from __future__ import annotations
 
 import json
+import logging
 import ssl
+import time
 import urllib.request
 
 from django.conf import settings
 
 OSRM_URL = getattr(settings, "OSRM_URL", "https://router.project-osrm.org")
+
+logger = logging.getLogger("apps.tracking.osrm")
+
+# Anti-spam : on ne journalise l'indisponibilité OSRM qu'une fois par minute, mais
+# c'est CAPITAL pour la visibilité (sinon le repli haversine est totalement silencieux
+# et la dégradation du routage passe inaperçue en production / Sentry).
+_last_warn = 0.0
+
+
+def _warn_unavailable(exc) -> None:
+    global _last_warn
+    now = time.monotonic()
+    if now - _last_warn > 60:
+        _last_warn = now
+        logger.warning("OSRM indisponible (%s) — repli ligne droite/haversine. Cause : %s", OSRM_URL, exc)
 
 # Traduction FR des manœuvres OSRM (type + modifier) → instruction lisible chauffeur.
 _MANEUVER_FR = {
@@ -102,8 +119,9 @@ def road_route(points: list[tuple[float, float]], steps: bool = False) -> dict:
                     })
             result["steps"] = instructions
         return result
-    except Exception:
+    except Exception as exc:
         # Repli : segments droits entre les points fournis.
+        _warn_unavailable(exc)
         return {"geometry": [list(p) for p in pts], "distance_km": 0.0, "duration_min": 0,
                 **({"steps": []} if steps else {})}
 
@@ -140,5 +158,6 @@ def route_matrix(
             for row in data.get("distances", [])
         ]
         return {"durations_min": durations, "distances_km": distances}
-    except Exception:
+    except Exception as exc:
+        _warn_unavailable(exc)
         return {"durations_min": [], "distances_km": []}

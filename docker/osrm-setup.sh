@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 #
-# Prépare les données OSRM (auto-hébergé, open source) pour Kaydan Express.
-# À lancer UNE FOIS avant de démarrer le service `kexpress-osrm`, puis à
-# chaque mise à jour de la carte. Tout est open source (OSRM + données OSM).
+# [OPTIONNEL] Pré-amorçage manuel des données OSRM (auto-hébergé, open source).
+#
+# Depuis la refonte du docker-compose, la stack s'auto-amorce : les services
+# kexpress-osrm-fetch (téléchargement) → kexpress-osrm-prepare
+# (extract/partition/customize) → kexpress-osrm (serveur) préparent le graphe
+# tout seuls au 1er `docker compose up` et le mettent en cache dans le volume
+# nommé `kexpress_osrm`. AUCUNE étape manuelle n'est donc requise.
+#
+# Ce script reste utile pour pré-générer le graphe hors-ligne ou rafraîchir la
+# carte en local (il écrit dans ./osrm-data, pas dans le volume nommé prod).
 #
 # Usage :
 #   bash docker/osrm-setup.sh

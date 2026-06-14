@@ -12,6 +12,9 @@ db.sqlite3
 celerybeat-schedule
 celerybeat-schedule.*
 
+# OSRM : données de routage préparées localement (le prod utilise le volume nommé)
+/osrm-data/
+
 # Env / secrets
 .env
 .env.*
