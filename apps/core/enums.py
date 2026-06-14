@@ -56,6 +56,14 @@ class VehicleDocumentType(models.TextChoices):
     OTHER = "other", "Autre"
 
 
+class DriverDocumentType(models.TextChoices):
+    LICENSE = "license", "Permis de conduire"
+    ID_CARD = "id_card", "Pièce d'identité"
+    CONTRACT = "contract", "Contrat"
+    MEDICAL = "medical", "Certificat médical"
+    OTHER = "other", "Autre"
+
+
 class ReservationStatus(models.TextChoices):
     DRAFT = "draft", "Brouillon"
     SUBMITTED = "submitted", "Soumise"

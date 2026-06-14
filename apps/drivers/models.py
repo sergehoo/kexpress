@@ -1,7 +1,7 @@
 """Gestion des chauffeurs : fiche, disponibilité, évaluations, incidents."""
 from django.db import models
 
-from apps.core.enums import IncidentSeverity
+from apps.core.enums import DriverDocumentType, IncidentSeverity
 from apps.core.models import TenantManager, TenantScopedModel, TimeStampedModel
 
 
@@ -125,3 +125,27 @@ class DriverIncident(TimeStampedModel):
 
     def __str__(self):
         return f"{self.driver} — {self.get_severity_display()}"
+
+
+class DriverDocument(TimeStampedModel):
+    """Dossier documentaire du chauffeur (permis, pièce d'identité, contrat…)."""
+
+    driver = models.ForeignKey(
+        Driver, on_delete=models.CASCADE, related_name="documents", verbose_name="chauffeur"
+    )
+    doc_type = models.CharField(
+        "type de document", max_length=24, choices=DriverDocumentType.choices,
+        default=DriverDocumentType.OTHER,
+    )
+    number = models.CharField("numéro", max_length=120, blank=True)
+    issue_date = models.DateField("date d'émission", null=True, blank=True)
+    expiry_date = models.DateField("date d'expiration", null=True, blank=True, db_index=True)
+    file = models.FileField("fichier", upload_to="drivers/documents/", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "document chauffeur"
+        verbose_name_plural = "documents chauffeur"
+        ordering = ["expiry_date"]
+
+    def __str__(self):
+        return f"{self.get_doc_type_display()} — {self.driver}"
