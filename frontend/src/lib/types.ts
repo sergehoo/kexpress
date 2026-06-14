@@ -49,6 +49,10 @@ export interface Vehicle {
   revision_interval_km: number;
   fuel_type: string;
   fuel_type_display: string;
+  tank_capacity_liters: string | null;
+  fuel_consumption_l100km: string | null;
+  battery_capacity_kwh: string | null;
+  electric_range_km: number | null;
   status: string;
   status_display: string;
   purchase_date: string | null;
@@ -57,6 +61,10 @@ export interface Vehicle {
   notes: string;
   subsidiary: string;
   subsidiary_name: string;
+  documents?: {
+    id: string; doc_type: string; doc_type_display: string; number: string;
+    issue_date: string | null; expiry_date: string | null; file: string | null;
+  }[];
   compliance: VehicleCompliance;
   created_at: string;
   updated_at: string;
