@@ -167,6 +167,7 @@ class NotificationType(models.TextChoices):
     TRIP_ARRIVED = "trip_arrived", "Arrivée destination"
     GEOFENCE_EXIT = "geofence_exit", "Sortie de zone"
     ROUTE_DEVIATION = "route_deviation", "Véhicule hors itinéraire"
+    ROUTE_RECALCULATED = "route_recalculated", "Itinéraire recalculé"
     GPS_SIGNAL_LOST = "gps_signal_lost", "Perte de signal GPS"
     INCIDENT_REPORTED = "incident_reported", "Incident déclaré"
     REVISION_DUE = "revision_due", "Révision à prévoir"

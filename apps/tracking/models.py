@@ -157,6 +157,19 @@ class TripRoute(TimeStampedModel):
     estimated_fuel_l = models.DecimalField(
         "carburant estimé (L)", max_digits=7, decimal_places=1, null=True, blank=True
     )
+    # --- Recalcul automatique sur déviation (#3C) ---
+    # Itinéraire actuellement suivi, recalculé depuis la position courante vers la
+    # destination en cas de détour. Le tracé prévu d'origine (`geometry`) est conservé
+    # pour la comparaison prévu/réel ; `active_geometry` prime quand il est renseigné.
+    active_geometry = models.JSONField("tracé recalculé", default=list, blank=True)
+    active_distance_km = models.DecimalField(
+        "distance recalculée (km)", max_digits=8, decimal_places=1, null=True, blank=True
+    )
+    active_duration_min = models.PositiveIntegerField(
+        "durée recalculée (min)", null=True, blank=True
+    )
+    reroute_count = models.PositiveSmallIntegerField("nombre de recalculs", default=0)
+    last_rerouted_at = models.DateTimeField("dernier recalcul", null=True, blank=True)
 
     class Meta:
         verbose_name = "itinéraire de course"
@@ -164,6 +177,10 @@ class TripRoute(TimeStampedModel):
 
     def __str__(self):
         return f"Itinéraire — course {self.trip_id}"
+
+    def current_geometry(self):
+        """Tracé effectivement suivi : itinéraire recalculé s'il existe, sinon prévu."""
+        return self.active_geometry or self.geometry
 
 
 class TripWaypoint(TimeStampedModel):

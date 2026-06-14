@@ -68,6 +68,89 @@ def _notify_managers_anomaly(trip, ntype, title, message):
     )
 
 
+def push_trip_update(trip_id) -> None:
+    """Pousse l'instantané de suivi d'une course aux clients WebSocket (meilleur effort).
+
+    Sans couche de canaux configurée (tests, contexte synchrone), c'est un no-op silencieux.
+    """
+    try:
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+
+        from apps.tracking.consumers import trip_group
+
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        payload = trip_tracking(None, trip_id)
+        if payload:
+            async_to_sync(layer.group_send)(
+                trip_group(str(trip_id)), {"type": "trip.update", "payload": payload}
+            )
+    except Exception:
+        pass
+
+
+def recalculate_route(trip, lat, lng, now=None) -> dict | None:
+    """#3C — Recalcule l'itinéraire OSRM depuis la position courante vers la destination.
+
+    Met à jour le tracé/ETA actifs de la course, notifie le chauffeur et pousse la mise
+    à jour aux clients WebSocket. Renvoie un résumé du recalcul, ou None si non applicable
+    (pas d'itinéraire ou destination inconnue).
+    """
+    from apps.core.enums import NotificationType
+    from apps.notifications.services import notify
+
+    now = now or timezone.now()
+    route = getattr(trip, "route", None)
+    if route is None or route.destination_lat is None or route.destination_lng is None:
+        return None
+
+    dest = (float(route.destination_lat), float(route.destination_lng))
+    result = road_route([(lat, lng), dest])
+    geometry = result.get("geometry") or []
+    distance_km = result.get("distance_km")
+    if distance_km is None:
+        distance_km = round(_haversine([lat, lng], list(dest)), 2)
+    duration_min = result.get("duration_min")
+    if not duration_min:
+        duration_min = max(1, round(distance_km / AVG_SPEED_KMH * 60))
+
+    route.active_geometry = geometry
+    route.active_distance_km = Decimal(str(round(distance_km, 1)))
+    route.active_duration_min = int(round(duration_min))
+    route.reroute_count = (route.reroute_count or 0) + 1
+    route.last_rerouted_at = now
+    route.save(update_fields=[
+        "active_geometry", "active_distance_km", "active_duration_min",
+        "reroute_count", "last_rerouted_at", "updated_at",
+    ])
+
+    # Notifier le chauffeur (s'il a un compte) du nouvel itinéraire et de l'ETA.
+    driver = getattr(trip, "driver", None)
+    if driver and driver.user_id:
+        notify(
+            driver.user,
+            NotificationType.ROUTE_RECALCULATED,
+            title=f"Itinéraire recalculé — {trip.destination}",
+            message=(
+                f"Détour détecté : nouvel itinéraire calculé depuis votre position. "
+                f"Distance restante ~{route.active_distance_km} km, "
+                f"arrivée estimée ~{route.active_duration_min} min."
+            ),
+            link=f"/trips/{trip.id}",
+            severity="warning",
+        )
+
+    push_trip_update(trip.id)
+    return {
+        "reroute_count": route.reroute_count,
+        "distance_km": float(route.active_distance_km),
+        "duration_min": route.active_duration_min,
+        "geometry": geometry,
+    }
+
+
 def detect_anomalies(trip, lat, lng, speed_kmh, now=None) -> list[str]:
     """#12 — Détecte détour (écart à l'itinéraire prévu) et arrêt anormal, et alerte
     les gestionnaires (dédupliqué). Retourne la liste des anomalies déclenchées.
@@ -82,9 +165,9 @@ def detect_anomalies(trip, lat, lng, speed_kmh, now=None) -> list[str]:
     created: list[str] = []
     dedup_since = now - timedelta(minutes=ALERT_DEDUP_MINUTES)
 
-    # --- Détour : position trop éloignée de l'itinéraire prévu ---
+    # --- Détour : position trop éloignée de l'itinéraire suivi ---
     route = getattr(trip, "route", None)
-    geometry = route.geometry if (route and route.geometry) else None
+    geometry = route.current_geometry() if route else None
     if geometry:
         off_m = _point_to_polyline_m(lat, lng, geometry)
         if off_m is not None and off_m > DEVIATION_THRESHOLD_M:
@@ -104,6 +187,11 @@ def detect_anomalies(trip, lat, lng, speed_kmh, now=None) -> list[str]:
                     f"{round(off_m / 1000, 1)} km par rapport à l'itinéraire prévu.",
                 )
                 created.append("deviation")
+                # #3C — recalcul auto de l'itinéraire depuis la position courante.
+                try:
+                    recalculate_route(trip, lat, lng, now)
+                except Exception:
+                    pass
 
     # --- Arrêt anormal : immobilité prolongée (hors saut GPS) ---
     if speed_kmh is not None and float(speed_kmh) <= STOP_SPEED_KMH:
@@ -430,6 +518,8 @@ def trip_tracking(user, trip_id) -> dict | None:
         "remaining_km": remaining,
         "progress": rt.get("progress", 0.0),
         "planned": rt.get("planned", []),
+        "rerouted": rt.get("rerouted", []),
+        "reroute_count": rt.get("reroute_count", 0),
         "actual": rt.get("actual", []),
         "destination_point": rt.get("destination_point"),
     }
@@ -472,11 +562,20 @@ def trip_route(user, trip_id) -> dict | None:
     loc = getattr(trip.vehicle, "last_location", None)
     speed = _fresh_speed(loc)
 
+    # #3C — itinéraire recalculé (détour) : tracé actif distinct du prévu d'origine.
+    rerouted = list(route.active_geometry) if (route and route.active_geometry) else []
+    reroute_count = route.reroute_count if route else 0
+
     return {
         "trip_id": str(trip.id),
         "destination": trip.destination,
         "destination_point": dest_point,
         "planned": planned,
+        "rerouted": rerouted,
+        "reroute_count": reroute_count,
+        "rerouted_distance_km": float(route.active_distance_km) if (route and route.active_distance_km) else None,
+        "rerouted_duration_min": route.active_duration_min if route else None,
+        "last_rerouted_at": route.last_rerouted_at.isoformat() if (route and route.last_rerouted_at) else None,
         "actual": actual,
         "distance_km": distance_km,
         "traveled_km": traveled_km,
