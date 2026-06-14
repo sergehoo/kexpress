@@ -147,9 +147,9 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
         return _fleet_costs(user, qs, period)
 
     if _has(q, "econome", "efficacite", "efficience") and _has(q, "chauffeur", "conducteur"):
-        return _fuel_drivers()
+        return _fuel_drivers(user)
     if _has(q, "remplac", "surconsomm", "consomme trop", "gourmand"):
-        return _fuel_replace()
+        return _fuel_replace(user)
 
     # Repli LLM ancré sur le contexte (reformulation), sinon aide.
     from apps.kbot.llm import ask_llm, llm_enabled
@@ -158,9 +158,11 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
     if llm_enabled():
         answer = ask_llm(neutralize_for_llm(question), _build_context(user, qs))
         if answer:
+            # data_source explicite : prose reformulée par le LLM (≠ chiffres ORM),
+            # pour une attribution correcte dans l'audit et l'UI.
             return B.respond(
                 "llm", answer=answer, blocks=[B.markdown(answer)],
-                confidence=0.6, suggestions=DEFAULT_SUGGESTIONS,
+                confidence=0.6, data_source="llm", suggestions=DEFAULT_SUGGESTIONS,
             )
 
     return B.respond(
@@ -468,9 +470,14 @@ def _fuel_consumption(user, qs, period) -> dict:
                      suggestions=["Quels sont les coûts du mois ?", "Quels véhicules consomment trop ?"])
 
 
-def _fuel_drivers() -> dict:
+def _fuel_drivers(user) -> dict:
+    from apps.fuelintel.access import can_see_costs
     from apps.fuelintel.models import FuelConsumptionProfile
 
+    if not can_see_costs(user):
+        return B.respond("fuel_drivers", answer="L'analyse de consommation est réservée aux gestionnaires.",
+                         blocks=[B.alert("info", "L'efficacité carburant est réservée aux gestionnaires de flotte.")],
+                         confidence=0.9, data_source="security_guard")
     rows = list(FuelConsumptionProfile.objects.filter(scope="driver", samples__gte=1).order_by("rate_l_per_100km")[:5])
     if not rows:
         return B.respond("fuel_drivers", answer="Pas encore assez de courses mesurées pour classer les chauffeurs.",
@@ -482,9 +489,14 @@ def _fuel_drivers() -> dict:
                      suggestions=["Quels véhicules consomment trop ?"])
 
 
-def _fuel_replace() -> dict:
+def _fuel_replace(user) -> dict:
+    from apps.fuelintel.access import can_see_costs
     from apps.fuelintel.models import FuelConsumptionProfile
 
+    if not can_see_costs(user):
+        return B.respond("fuel_replace", answer="L'analyse de consommation est réservée aux gestionnaires.",
+                         blocks=[B.alert("info", "L'efficacité carburant est réservée aux gestionnaires de flotte.")],
+                         confidence=0.9, data_source="security_guard")
     fleet = FuelConsumptionProfile.objects.filter(scope="fleet").first()
     rows = list(FuelConsumptionProfile.objects.filter(scope="vehicle", samples__gte=1).order_by("-rate_l_per_100km")[:5])
     if not rows:
@@ -750,7 +762,15 @@ def _build_context(user, qs) -> str:
     pending = qs["reservations"].filter(status__in=["submitted", "pending_manager", "pending_fleet"]).count()
     active = qs["trips"].filter(status="in_progress").count()
     lines.append(f"Réservations aujourd'hui : {qs['reservations'].filter(trip_date=today).count()}, en attente : {pending}, courses en cours : {active}.")
-    fuel = qs["fuel"].aggregate(s=Sum("amount"))["s"] or 0
-    maint = qs["maintenance"].aggregate(s=Sum("cost"))["s"] or 0
-    lines.append(f"Coût carburant cumulé : {fuel}. Coût maintenance cumulé : {maint}.")
+    # Coûts financiers : uniquement pour les rôles autorisés (jamais d'employé/chauffeur),
+    # cohérent avec le gating can_see_costs des intentions chiffrées.
+    from apps.fuelintel.access import can_see_costs
+
+    if can_see_costs(user):
+        fuel = qs["fuel"].aggregate(s=Sum("amount"))["s"] or 0
+        maint = qs["maintenance"].aggregate(s=Sum("cost"))["s"] or 0
+        lines.append(f"Coût carburant cumulé : {fuel}. Coût maintenance cumulé : {maint}.")
+    else:
+        liters = qs["fuel"].aggregate(s=Sum("liters"))["s"] or 0
+        lines.append(f"Carburant consommé (litres) : {liters}. (Montants financiers non autorisés pour ce rôle.)")
     return "\n".join(lines)

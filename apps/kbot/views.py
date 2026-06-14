@@ -12,6 +12,7 @@ import time
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.audit import services as audit
@@ -40,6 +41,9 @@ class ChatView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    # Anti-abus : plafonne le débit (coût LLM + appels sortants) — scope « kbot ».
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "kbot"
 
     def post(self, request):
         data = request.data or {}
@@ -74,12 +78,15 @@ class ChatView(APIView):
 
     def _log(self, request, question, payload, scan, started, *, refused):
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Si une injection / exfiltration de secret est détectée, on NE stocke PAS le
+        # texte brut (il peut contenir un secret collé) : on garde un marqueur.
+        stored_question = "[RÉDIGÉ — tentative d'injection détectée]" if scan.get("injection") else question[:2000]
         try:
             KBotInteraction.objects.create(
                 user=request.user,
                 role=getattr(request.user, "role", "") or "",
                 subsidiary_id=getattr(request.user, "subsidiary_id", None),
-                question=question[:2000],
+                question=stored_question,
                 intent=payload.get("intent", "")[:64],
                 data_source=payload.get("data_source", "internal_services")[:32],
                 confidence=float(payload.get("confidence", 0.0)),
@@ -91,7 +98,7 @@ class ChatView(APIView):
             pass
         audit.record(
             request.user, AuditAction.ACCESS, None,
-            changes={"kbot_question": question[:255], "intent": payload.get("intent"),
+            changes={"kbot_question": stored_question[:255], "intent": payload.get("intent"),
                      "refused": refused, "injection": bool(scan.get("injection"))},
             request=request,
         )

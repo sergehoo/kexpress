@@ -189,6 +189,11 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "apps.core.pagination.DefaultPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Limite de débit pour les vues qui le déclarent (scope « kbot » : protège contre
+    # l'amplification de coût LLM et la saturation des threads par appels sortants).
+    "DEFAULT_THROTTLE_RATES": {
+        "kbot": env("KBOT_THROTTLE_RATE", default="30/min"),
+    },
 }
 
 SIMPLE_JWT = {

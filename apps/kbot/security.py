@@ -10,29 +10,45 @@ fait que reformuler. L'isolation par filiale est garantie en amont par les manag
 from __future__ import annotations
 
 import re
+import unicodedata
 
-#: Motifs de tentative d'injection / d'exfiltration (insensibles à la casse/accents).
+
+def _fold(text: str) -> str:
+    """Replie le texte (minuscule + suppression des accents) pour une détection robuste.
+
+    Les claviers AZERTY/mobiles produisent souvent du français SANS accents ; on doit
+    donc comparer sur la même base normalisée que le moteur d'intentions (qui fait de
+    même), sinon « ignore les regles » échapperait au filtre tout en étant compris.
+    """
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+#: Motifs d'injection / d'exfiltration — écrits SANS accents (le texte est replié avant
+#: comparaison) et avec des inflexions (ignore/ignorez/ignorer, oublie/oublier…).
 _INJECTION_PATTERNS = [
-    r"ignore (?:les |toutes les |vos )?(?:instructions|règles|consignes)",
-    r"ignore (?:previous|prior|above|all) (?:instructions|rules)",
-    r"oublie (?:les |tes )?(?:instructions|règles|consignes)",
-    r"disregard (?:the )?(?:above|previous|prior|all)",
-    r"(?:révèle|montre|affiche|donne)(?:-moi| moi)?.*(?:clé|cle|token|secret|mot de passe|password|api[ _-]?key)",
-    r"(?:reveal|show|print|leak|dump).*(?:api[ _-]?key|secret|token|password|credential|env)",
-    r"system prompt|prompt système|prompt systeme|tes instructions système",
-    r"agis comme|tu n['e ]es plus|pretend to be|act as (?:a |an )?(?:admin|root|system)",
-    r"(?:exécute|execute|run|lance).*(?:sql|requête sql|requete sql|drop table|delete from|update .* set)",
-    r"\bunion\s+select\b|\bdrop\s+table\b|\bdelete\s+from\b|;--",
-    r"jailbreak|developer mode|mode développeur|DAN\b",
-    r"bypass (?:the )?(?:rules|permissions|security|rbac)",
-    r"contourne (?:les )?(?:règles|permissions|droits|la sécurité)",
+    r"ignor\w* (?:les |toutes les |tes |vos )?(?:instructions|regles|consignes|directives|guidelines)",
+    r"(?:ignore|disregard|forget) (?:the )?(?:previous|prior|above|all|earlier) (?:instructions|rules|prompts?)",
+    r"oubli\w* (?:les |tes |ce que )?(?:instructions|regles|consignes|dit|precede)",
+    r"(?:revele|montre|affiche|donne|envoie)(?:-?moi)?.{0,40}(?:cle|token|secret|mot de passe|password|api[ _-]?key|identifiant)",
+    r"(?:reveal|show|print|leak|dump|expose).{0,40}(?:api[ _-]?key|secret|token|password|credential|env var|prompt)",
+    r"system prompt|prompt systeme|tes instructions systeme|ton prompt",
+    r"agis comme|tu n['e ]?es plus|pretend to be|act as (?:a |an )?(?:admin|root|system|developer)",
+    r"(?:execute|exec|run|lance).{0,30}(?:sql|requete sql|drop table|delete from|update .* set|insert into)",
+    r"\bunion\s+select\b|\bdrop\s+table\b|\bdelete\s+from\b|;\s*--",
+    r"jailbreak|developer mode|mode developpeur|\bdan\b",
+    r"bypass (?:the )?(?:rules|permissions|security|rbac|filter)",
+    r"contourn\w* (?:les )?(?:regles|permissions|droits|la securite|le filtre)",
 ]
 _INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
 
-#: Tentatives d'accès trans-filiale explicite (l'isolation est déjà appliquée par les
-#: querysets ; on refuse en plus explicitement la formulation, pour la traçabilité).
+#: Tentatives d'accès trans-filiale explicite — DÉFENSE EN PROFONDEUR / télémétrie
+#: uniquement : l'isolation réelle est garantie par les querysets scopés (`for_user`),
+#: jamais par ce motif. Replié + élargi (filiale(s)/agence/entité/subsidiary/branch).
 _CROSS_TENANT_RE = re.compile(
-    r"(?:autre|toutes les|d['e ]une autre|d['e ]autres)\s+filiale", re.IGNORECASE
+    r"(?:autre|toutes? les|d['e ]?(?:une |')?autres?|differente)\s+(?:filiale|agence|entite)s?"
+    r"|(?:another|other|different|all)\s+(?:subsidiar|branch|agenc)",
+    re.IGNORECASE,
 )
 
 REFUSAL_MESSAGE = (
@@ -48,7 +64,7 @@ def scan_question(question: str) -> dict:
 
     Retourne {"injection": bool, "cross_tenant": bool, "reason": str}.
     """
-    q = question or ""
+    q = _fold(question)  # replié : « ignore les regles » détecté comme « règles »
     injection = bool(_INJECTION_RE.search(q))
     cross_tenant = bool(_CROSS_TENANT_RE.search(q))
     reason = ""

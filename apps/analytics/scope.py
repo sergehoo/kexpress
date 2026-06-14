@@ -26,4 +26,28 @@ def scoped(user, subsidiary_id=None):
         for key, qs in data.items():
             # maintenance.MaintenanceRecord, etc. ont tous le champ subsidiary.
             data[key] = qs.filter(subsidiary_id=subsidiary_id)
+
+    # RBAC intra-filiale : un employé/chauffeur ne voit que SES données, comme dans
+    # les ViewSets REST (ReservationViewSet restreint le REQUESTER à requester=user).
+    # Sans ce filtre, un canal de lecture transverse (dashboard, K-BOT) exposerait les
+    # réservations/courses des collègues de la même filiale.
+    from apps.core.enums import RoleChoices
+
+    role = getattr(user, "role", None)
+    privileged = (
+        user.is_superuser
+        or user.has_company_scope
+        or role in (
+            RoleChoices.COMPANY_ADMIN, RoleChoices.SUBSIDIARY_ADMIN,
+            RoleChoices.FLEET_MANAGER, RoleChoices.DEPARTMENT_MANAGER,
+            RoleChoices.FINANCE, RoleChoices.AUDITOR,
+        )
+    )
+    if not privileged:
+        if role == RoleChoices.DRIVER:
+            data["trips"] = data["trips"].filter(driver__user=user)
+            data["reservations"] = data["reservations"].filter(requester=user)
+        else:  # REQUESTER (et tout rôle non privilégié) : uniquement ses propres demandes
+            data["reservations"] = data["reservations"].filter(requester=user)
+            data["trips"] = data["trips"].filter(requester=user)
     return data
