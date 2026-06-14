@@ -18,9 +18,11 @@ daphne>=4.1
 celery>=5.4
 redis>=5.0
 
-# Optionnel — K-BOT sur LLM réel (activé si ANTHROPIC_API_KEY est défini) :
-#   pip install anthropic
-# (import paresseux : l'absence du paquet/clé fait basculer K-BOT sur le moteur heuristique)
+# K-BOT sur LLM réel (optionnel — sinon moteur heuristique ancré sur les données) :
+#   - DeepSeek (moteur par défaut) : API compatible OpenAI appelée en HTTP pur,
+#     AUCUNE dépendance pip requise. Activer avec DEEPSEEK_API_KEY.
+#   - Anthropic (Claude) : KBOT_PROVIDER=anthropic + `pip install anthropic`.
+# (import/clé manquants → bascule silencieuse sur le moteur heuristique)
 
 # PostGIS / GeoDjango : aucune dépendance pip — GeoDjango charge les libs natives
 # GDAL/GEOS/PROJ via ctypes. Elles sont fournies par le système :

@@ -227,11 +227,32 @@ FUEL_PRICE_SUPER = env("FUEL_PRICE_SUPER", default="875")
 FUEL_PRICE_GASOIL = env("FUEL_PRICE_GASOIL", default="655")
 
 # --- K-BOT (assistant IA) -------------------------------------------------
-# Si une clé API est fournie, K-BOT utilise un LLM (Claude) pour les questions
-# libres, avec un contexte RAG construit à partir des données AUTORISÉES de
-# l'utilisateur. Sinon, le moteur heuristique ancré sur les données prend le relais.
-KBOT_API_KEY = env("ANTHROPIC_API_KEY", default="")
-KBOT_MODEL = env("KBOT_MODEL", default="claude-3-5-sonnet-latest")
+# Si une clé API est fournie, K-BOT utilise un LLM pour les questions libres, avec
+# un contexte RAG construit à partir des données AUTORISÉES de l'utilisateur. Sinon,
+# le moteur heuristique ancré sur les données prend le relais.
+#
+# Fournisseur par défaut : DeepSeek (API compatible OpenAI, économique). Anthropic
+# (Claude) reste disponible via KBOT_PROVIDER=anthropic. Le fournisseur est déduit
+# automatiquement de la clé présente si KBOT_PROVIDER n'est pas fixé.
+DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY", default="")
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
+
+KBOT_PROVIDER = env("KBOT_PROVIDER", default="").lower()
+if not KBOT_PROVIDER:
+    # Auto : DeepSeek si sa clé est présente (ou si aucune clé Claude), sinon Anthropic.
+    KBOT_PROVIDER = "anthropic" if (ANTHROPIC_API_KEY and not DEEPSEEK_API_KEY) else "deepseek"
+
+# Clé active : KBOT_API_KEY générique sinon la clé spécifique au fournisseur retenu.
+KBOT_API_KEY = env("KBOT_API_KEY", default="") or (
+    DEEPSEEK_API_KEY if KBOT_PROVIDER == "deepseek" else ANTHROPIC_API_KEY
+)
+
+# Modèle par défaut selon le fournisseur (surchargeable via KBOT_MODEL).
+_KBOT_DEFAULT_MODEL = {"deepseek": "deepseek-chat", "anthropic": "claude-3-5-sonnet-latest"}
+KBOT_MODEL = env("KBOT_MODEL", default=_KBOT_DEFAULT_MODEL.get(KBOT_PROVIDER, "deepseek-chat"))
+# Endpoint compatible OpenAI (DeepSeek par défaut ; ignoré par le fournisseur Anthropic).
+KBOT_BASE_URL = env("KBOT_BASE_URL", default="https://api.deepseek.com")
+KBOT_MAX_TOKENS = env.int("KBOT_MAX_TOKENS", default=600)
 
 # --- Carte / réservation ---------------------------------------------------
 # Services de routage/géocodage : publics par défaut, auto-hébergeables en prod

@@ -196,8 +196,15 @@ services:
       EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
       EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
 
+      # K-BOT IA — moteur LLM par défaut : DeepSeek (compatible OpenAI). Définir
+      # DEEPSEEK_API_KEY pour activer. Anthropic (Claude) reste possible via
+      # KBOT_PROVIDER=anthropic + ANTHROPIC_API_KEY. Sinon : moteur heuristique.
+      KBOT_PROVIDER: ${KBOT_PROVIDER:-deepseek}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
+      KBOT_MODEL: ${KBOT_MODEL:-deepseek-chat}
+      KBOT_BASE_URL: ${KBOT_BASE_URL:-https://api.deepseek.com}
+      KBOT_MAX_TOKENS: ${KBOT_MAX_TOKENS:-600}
 
       OSRM_URL: ${OSRM_URL:-http://kexpress-osrm:5000}
       NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org}
