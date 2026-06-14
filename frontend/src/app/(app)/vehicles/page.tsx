@@ -10,6 +10,7 @@ import { Button, Card, CardBody, EmptyState, Input, Select, Spinner } from "@/co
 import { StatusBadge } from "@/components/StatusBadge";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { RowActions } from "@/components/RowActions";
+import { searchBrands, searchModels } from "@/lib/references";
 import { useSubsidiaries, useVehicles } from "@/lib/queries";
 import { useCrud } from "@/lib/crud";
 import { useAuth } from "@/lib/auth";
@@ -58,12 +59,25 @@ export default function VehiclesPage() {
   const fields: Field[] = [
     { name: "registration", label: "Immatriculation", required: true },
     { name: "vehicle_type", label: "Type", type: "select", options: TYPE_OPTS, required: true },
-    { name: "brand", label: "Marque", required: true },
-    { name: "model", label: "Modèle", required: true },
+    // #2 — marque/modèle depuis le référentiel (autocomplétion + saisie libre).
+    { name: "brand", label: "Marque", type: "autocomplete", required: true,
+      placeholder: "Toyota, Renault…", loadOptions: (q) => searchBrands(q) },
+    { name: "model", label: "Modèle", type: "autocomplete", required: true,
+      placeholder: "Hilux, Duster…", dependsOn: "brand",
+      loadOptions: (q, v) => searchModels(q, String(v.brand ?? "")) },
     { name: "capacity", label: "Capacité (places)", type: "number", min: 1 },
     { name: "mileage", label: "Kilométrage", type: "number", min: 0 },
     { name: "revision_interval_km", label: "Intervalle de révision (km)", type: "number", min: 1000 },
     { name: "fuel_type", label: "Carburant", type: "select", options: FUEL_OPTS },
+    // #5 — champs dynamiques selon la motorisation.
+    { name: "tank_capacity_liters", label: "Capacité réservoir (L)", type: "number", min: 0, step: "0.1",
+      hidden: (v) => v.fuel_type === "electric" },
+    { name: "fuel_consumption_l100km", label: "Consommation (L/100 km)", type: "number", min: 0, step: "0.1",
+      hidden: (v) => v.fuel_type === "electric" },
+    { name: "battery_capacity_kwh", label: "Capacité batterie (kWh)", type: "number", min: 0, step: "0.1",
+      hidden: (v) => v.fuel_type !== "electric" },
+    { name: "electric_range_km", label: "Autonomie (km)", type: "number", min: 0,
+      hidden: (v) => v.fuel_type !== "electric" },
     { name: "status", label: "État", type: "select", options: STATUS_OPTS },
     ...(me?.has_company_scope
       ? [{ name: "subsidiary", label: "Filiale", type: "select" as const, required: true,

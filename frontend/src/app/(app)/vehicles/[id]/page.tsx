@@ -19,6 +19,7 @@ import {
 import { Button, Card, CardBody, CardHeader, CardTitle, EmptyState, Spinner } from "@/components/ui";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EntityForm, type Field } from "@/components/EntityForm";
+import { searchInsuranceCompanies, searchInspectionCenters } from "@/lib/references";
 import {
   useMaintenance,
   useVehicle,
@@ -73,7 +74,8 @@ export default function VehicleDetailPage() {
       title: "Nouvelle assurance",
       crud: crudInsurance,
       fields: [
-        { name: "company", label: "Compagnie d'assurance", required: true },
+        { name: "company", label: "Compagnie d'assurance", type: "autocomplete", required: true,
+          placeholder: "NSIA, SUNU, Allianz…", loadOptions: (q) => searchInsuranceCompanies(q) },
         { name: "policy_number", label: "Numéro de police" },
         { name: "start_date", label: "Date de début", type: "date" },
         { name: "expiry_date", label: "Date d'expiration", type: "date", required: true },
@@ -86,7 +88,8 @@ export default function VehicleDetailPage() {
       fields: [
         { name: "last_date", label: "Date de la visite", type: "date" },
         { name: "next_date", label: "Prochaine échéance", type: "date", required: true },
-        { name: "center", label: "Centre de visite" },
+        { name: "center", label: "Centre de visite", type: "autocomplete",
+          placeholder: "SICTA, Quipux…", loadOptions: (q) => searchInspectionCenters(q) },
         { name: "result", label: "Résultat", type: "select",
           options: [{ value: "passed", label: "Favorable" }, { value: "failed", label: "Défavorable" }] },
         { name: "cost", label: "Coût", type: "number", min: 0, step: "0.01" },

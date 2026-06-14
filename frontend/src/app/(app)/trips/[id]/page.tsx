@@ -94,8 +94,11 @@ export default function TripDetailPage() {
       {/* Actions */}
       <Card>
         <CardBody className="flex flex-wrap items-center gap-2 py-3">
-          {t.status === "scheduled" && (
+          {t.status === "scheduled" && t.can_start && (
             <Button size="sm" onClick={() => setModal("start")}>Démarrer la course</Button>
+          )}
+          {t.status === "scheduled" && !t.can_start && (
+            <p className="text-xs text-muted">En attente du démarrage par le chauffeur affecté.</p>
           )}
           {t.status === "in_progress" && (
             <Button size="sm" variant="success" onClick={() => setModal("end")}>Terminer la course</Button>

@@ -403,6 +403,7 @@ export interface Trip {
   observations: string;
   estimated_fuel_l: number | null;
   fuel_intel: TripFuelIntel | null;
+  can_start?: boolean;
   incidents: TripIncidentItem[];
   created_at: string;
   updated_at: string;

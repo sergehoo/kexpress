@@ -124,7 +124,7 @@ export default function TripsPage() {
                 )}
 
                 <div className="flex flex-wrap gap-2 border-t border-line pt-3">
-                  {t.status === "scheduled" && (
+                  {t.status === "scheduled" && t.can_start && (
                     <Button size="sm" onClick={() => setModal({ type: "start", trip: t })}>
                       Démarrer
                     </Button>

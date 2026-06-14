@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.core.enums import TripStatus
 from apps.trips.models import Trip, TripIncident
 
 
@@ -22,10 +23,22 @@ class TripSerializer(serializers.ModelSerializer):
     # Fuel Intelligence : estimé pour tous ; coûts réservés aux gestionnaires.
     estimated_fuel_l = serializers.SerializerMethodField()
     fuel_intel = serializers.SerializerMethodField()
+    # #9 — l'utilisateur courant peut-il démarrer cette course ? (gate du bouton)
+    can_start = serializers.SerializerMethodField()
 
     def get_vehicle_label(self, obj):
         v = obj.vehicle
         return f"{v.brand} {v.model}".strip() if v else None
+
+    def get_can_start(self, obj):
+        if obj.status != TripStatus.SCHEDULED:
+            return False
+        user = getattr(self.context.get("request"), "user", None)
+        if not user:
+            return False
+        from apps.trips.services import can_start_trip
+
+        return can_start_trip(obj, user)
 
     class Meta:
         model = Trip
@@ -37,7 +50,7 @@ class TripSerializer(serializers.ModelSerializer):
             "status", "status_display",
             "actual_departure", "actual_return", "start_mileage", "end_mileage",
             "distance_km", "fuel_consumed", "observations",
-            "estimated_fuel_l", "fuel_intel", "incidents",
+            "estimated_fuel_l", "fuel_intel", "can_start", "incidents",
             "created_at", "updated_at",
         ]
         read_only_fields = fields  # courses gérées via réservations + actions
