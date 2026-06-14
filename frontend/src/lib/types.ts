@@ -176,6 +176,28 @@ export interface TripTracking {
   planned: [number, number][];
   actual: [number, number][];
   destination_point: [number, number] | null;
+  // Itinéraire recalculé en cas de détour (#3C)
+  rerouted?: [number, number][];
+  reroute_count?: number;
+}
+
+// Guidage virage par virage (#3D) — issu de /routes/calculate
+export interface RouteStep {
+  instruction: string;
+  distance_m: number;
+  duration_s: number;
+  name: string;
+  type: string | null;
+  modifier: string | null;
+  location: [number, number] | null;
+}
+
+export interface RouteCalculation {
+  geometry: [number, number][];
+  distance_km: number;
+  duration_min: number;
+  eta_min: number;
+  steps: RouteStep[];
 }
 
 export interface VehiclePosition {

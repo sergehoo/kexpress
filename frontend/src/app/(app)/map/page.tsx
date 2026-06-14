@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,8 +10,12 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock,
+  CornerUpLeft,
+  CornerUpRight,
   LocateFixed,
+  MapPin,
   Navigation,
+  RotateCw,
   Sparkles,
   Users,
   Wallet,
@@ -24,7 +28,7 @@ import { useFleetLive } from "@/lib/useFleetLive";
 import { useGpsTracker } from "@/lib/useGpsTracker";
 import { useTripTracking } from "@/lib/useTripTracking";
 import { useActiveTrip, useNearbyVehicles } from "@/lib/queries";
-import type { RouteEstimate, VehiclePosition } from "@/lib/types";
+import type { RouteCalculation, RouteStep, RouteEstimate, VehiclePosition } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -186,7 +190,7 @@ export default function MapPage() {
             ? track?.destination_point ?? null
             : destination ? [destination.lat, destination.lng] : null
         }
-        planned={trackingMode ? track?.planned : estimate?.geometry}
+        planned={trackingMode ? (track?.rerouted?.length ? track.rerouted : track?.planned) : estimate?.geometry}
         actual={trackingMode ? track?.actual : undefined}
         recenterTo={
           trackingMode && track?.vehicle.latitude
@@ -415,6 +419,18 @@ function TrackingPanel({
         </div>
       </div>
 
+      {/* Navigation virage par virage (#3D) — pour le chauffeur en course */}
+      {(track.status === "in_progress" || track.status === "departed") && track.destination_point && (
+        <NavigationSteps
+          tripId={track.trip_id}
+          current={track.vehicle.latitude && track.vehicle.longitude
+            ? [Number(track.vehicle.latitude), Number(track.vehicle.longitude)]
+            : null}
+          destination={track.destination_point}
+          rerouteCount={track.reroute_count ?? 0}
+        />
+      )}
+
       {/* Véhicule + chauffeur */}
       <div className="mt-3 flex items-center gap-3 rounded-xl border border-line p-3">
         <span className="flex h-11 w-11 items-center justify-center rounded-full bg-sky-500/10 text-sky-600"><Car className="h-5 w-5" /></span>
@@ -489,6 +505,143 @@ function TrackingPanel({
         )}
       </div>
       </div>
+    </div>
+  );
+}
+
+/** Icône de manœuvre selon le type/modificateur OSRM. */
+function stepIcon(step: RouteStep) {
+  const mod = step.modifier ?? "";
+  if (step.type === "arrive") return <MapPin className="h-4 w-4 text-emerald-600" />;
+  if (mod.includes("left")) return <CornerUpLeft className="h-4 w-4 text-brand-600" />;
+  if (mod.includes("right")) return <CornerUpRight className="h-4 w-4 text-brand-600" />;
+  return <Navigation className="h-4 w-4 text-brand-600" />;
+}
+
+function fmtDist(m: number): string {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+/**
+ * Guidage virage par virage (#3D). Calcule l'itinéraire routier depuis la position
+ * courante du véhicule jusqu'à la destination via /routes/calculate (OSRM) et affiche
+ * les instructions en français. Recalcule au changement de `rerouteCount` (détour détecté
+ * côté serveur, #3C) ou à la demande du chauffeur.
+ */
+function NavigationSteps({
+  tripId,
+  current,
+  destination,
+  rerouteCount,
+}: {
+  tripId: string;
+  current: [number, number] | null;
+  destination: [number, number];
+  rerouteCount: number;
+}) {
+  const [route, setRoute] = useState<RouteCalculation | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(true);
+  // Origine du dernier calcul + dernier compteur de recalcul traités (évite de spammer OSRM).
+  const lastKey = useRef<string>("");
+
+  const fetchRoute = useCallback(async () => {
+    if (!current) return;
+    setLoading(true);
+    setError("");
+    try {
+      const { data } = await api.post<RouteCalculation>("/routes/calculate/", {
+        origin: current,
+        destination,
+      });
+      setRoute(data);
+    } catch (e) {
+      setError(apiError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [current, destination]);
+
+  useEffect(() => {
+    if (!current) return;
+    // Recalcule uniquement au 1er rendu localisé puis à chaque recalcul serveur.
+    const key = `${rerouteCount}`;
+    if (lastKey.current === key && route) return;
+    lastKey.current = key;
+    void fetchRoute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rerouteCount, Boolean(current)]);
+
+  return (
+    <div className="mt-3 rounded-xl border border-line">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+        aria-expanded={open}
+      >
+        <Navigation className="h-4 w-4 shrink-0 text-brand-500" />
+        <span className="text-sm font-semibold text-ink">Navigation</span>
+        {route && (
+          <span className="text-[11px] text-muted">
+            {route.distance_km} km · ~{Math.round(route.eta_min)} min
+          </span>
+        )}
+        {rerouteCount > 0 && (
+          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+            recalculé ×{rerouteCount}
+          </span>
+        )}
+        <ChevronDown className={cn("ml-auto h-4 w-4 text-muted transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div className="border-t border-line px-3 py-2">
+          {loading && (
+            <div className="flex items-center gap-2 py-2 text-xs text-muted">
+              <Spinner className="h-4 w-4" /> Calcul de l&apos;itinéraire…
+            </div>
+          )}
+          {error && <p className="py-2 text-xs text-rose-600">{error}</p>}
+
+          {!loading && !error && route && route.steps.length > 0 && (
+            <>
+              {/* Prochaine manœuvre mise en avant */}
+              <div className="mb-2 flex items-start gap-2.5 rounded-lg bg-brand-500/10 p-2.5">
+                <span className="mt-0.5 shrink-0">{stepIcon(route.steps[0])}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-snug text-ink">{route.steps[0].instruction}</p>
+                  <p className="text-[11px] text-muted">{fmtDist(route.steps[0].distance_m)}</p>
+                </div>
+              </div>
+              {/* Suite de l'itinéraire */}
+              <ol className="max-h-44 space-y-1 overflow-y-auto">
+                {route.steps.slice(1).map((s, i) => (
+                  <li key={i} className="flex items-center gap-2.5 rounded-lg px-1.5 py-1 text-xs">
+                    <span className="shrink-0">{stepIcon(s)}</span>
+                    <span className="min-w-0 flex-1 truncate text-muted">{s.instruction}</span>
+                    <span className="shrink-0 text-faint">{fmtDist(s.distance_m)}</span>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+
+          {!loading && !error && route && route.steps.length === 0 && (
+            <p className="py-2 text-xs text-muted">Guidage détaillé indisponible pour ce trajet.</p>
+          )}
+
+          <button
+            type="button"
+            onClick={() => { void fetchRoute(); }}
+            disabled={loading || !current}
+            className="mt-2 flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:underline disabled:opacity-60"
+          >
+            <RotateCw className="h-3.5 w-3.5" /> Recalculer l&apos;itinéraire
+          </button>
+        </div>
+      )}
     </div>
   );
 }
