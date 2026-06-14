@@ -316,6 +316,7 @@ export interface Expense {
 
 export interface Driver {
   id: string;
+  matricule: string | null;
   first_name: string;
   last_name: string;
   full_name: string;
