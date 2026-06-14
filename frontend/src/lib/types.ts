@@ -94,11 +94,28 @@ export interface NotificationItem {
   created_at: string;
 }
 
-export interface KbotAnswer {
+// --- K-BOT Fleet AI Copilot : réponse structurée (blocks) ---
+export type KbotBlock =
+  | { type: "title" | "subtitle" | "paragraph" | "markdown" | "recommendation"; content: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "table"; columns: string[]; rows: string[][] }
+  | { type: "kpis"; items: { label: string; value: string; hint?: string; tone?: string }[] }
+  | { type: "alert"; level: "info" | "success" | "warning" | "danger"; content: string }
+  | { type: "divider" };
+
+export interface KbotResponse {
   intent: string;
   answer: string;
-  data: { label: string; value: string }[] | null;
+  answer_markdown: string;
+  blocks: KbotBlock[];
+  data: Record<string, unknown> | null;
+  suggestions: string[];
+  data_source: string;
+  confidence: number;
 }
+
+/** @deprecated — ancien contrat ; conservé pour compat d'import. */
+export type KbotAnswer = KbotResponse;
 
 export interface DashboardStats {
   fleet: Record<string, number>;

@@ -15,7 +15,7 @@ import type {
   Expense,
   FuelLog,
   Incident,
-  KbotAnswer,
+  KbotResponse,
   LiveAlertsResponse,
   MaintenanceRecord,
   NearbyVehicle,
@@ -139,10 +139,28 @@ export function useMarkAllRead() {
 
 export function useKbot() {
   return useMutation({
-    mutationFn: async (question: string) => {
-      const { data } = await api.post<KbotAnswer>("/kbot/ask/", { question });
+    mutationFn: async (vars: { message: string; page?: string; lat?: number; lng?: number }) => {
+      const { data } = await api.post<KbotResponse>("/kbot/chat/", {
+        message: vars.message,
+        context: { page: vars.page },
+        lat: vars.lat,
+        lng: vars.lng,
+      });
       return data;
     },
+  });
+}
+
+export function useKbotSuggestions(page?: string) {
+  return useQuery({
+    queryKey: ["kbot-suggestions", page ?? "default"],
+    queryFn: async () => {
+      const { data } = await api.get<{ suggestions: string[] }>("/kbot/suggestions/", {
+        params: page ? { page } : {},
+      });
+      return data.suggestions;
+    },
+    staleTime: 10 * 60_000,
   });
 }
 

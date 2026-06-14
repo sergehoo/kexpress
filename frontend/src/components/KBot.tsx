@@ -1,56 +1,106 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Bot, Send, Sparkles, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { Bot, Send, Sparkles, Trash2, X } from "lucide-react";
 
-import { useKbot } from "@/lib/queries";
+import { useKbot, useKbotSuggestions } from "@/lib/queries";
+import type { KbotResponse } from "@/lib/types";
+import { KBotBlocks } from "@/components/KBotBlocks";
 import { cn } from "@/lib/utils";
 
 interface Msg {
   role: "user" | "bot";
   text: string;
-  data?: { label: string; value: string }[] | null;
+  res?: KbotResponse;
 }
 
-const SUGGESTIONS = [
-  "Quels véhicules sont disponibles ?",
-  "Quel chauffeur est disponible aujourd'hui ?",
-  "Quels véhicules coûtent le plus ce mois ?",
-  "Donne-moi le résumé du jour",
-];
+/** Déduit la « page » courante pour les suggestions contextuelles. */
+function pageFromPath(path: string | null): string {
+  const p = path || "";
+  if (p.startsWith("/dashboard")) return "dashboard";
+  if (p.startsWith("/map")) return "map";
+  if (p.startsWith("/reservations")) return "reservations";
+  if (p.startsWith("/fleet-control")) return "fleet-control";
+  if (p.startsWith("/vehicles")) return "vehicles";
+  if (p.startsWith("/drivers")) return "drivers";
+  return "dashboard";
+}
+
+/** Suggestions de navigation → route directe (aucune action sensible auto-exécutée). */
+const NAV: Record<string, string> = {
+  "Voir sur la carte": "/map",
+  "Voir le centre de contrôle": "/fleet-control",
+  "Créer une réservation": "/reservations",
+  "Affecter à une course": "/fleet-control",
+};
+
+async function maybeGeolocate(question: string): Promise<{ lat: number; lng: number } | undefined> {
+  if (!/proche/i.test(question)) return undefined;
+  if (typeof navigator === "undefined" || !navigator.geolocation || !window.isSecureContext) return undefined;
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(undefined),
+      { timeout: 5000, maximumAge: 60_000 },
+    );
+  });
+}
 
 export function KBot() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: "bot",
-      text: "Bonjour, je suis K-BOT 🤖. Posez-moi une question sur votre flotte.",
-    },
+    { role: "bot", text: "Bonjour, je suis K-BOT 🤖, votre copilote flotte. Posez-moi une question sur vos données." },
   ]);
   const ask = useKbot();
+  const router = useRouter();
+  const page = pageFromPath(usePathname());
+  const initialSuggestions = useKbotSuggestions(page);
   const endRef = useRef<HTMLDivElement>(null);
 
-  function send(question: string) {
+  // Suggestions actives : celles de la dernière réponse bot, sinon celles de la page.
+  const activeSuggestions = useMemo(() => {
+    const lastBot = [...messages].reverse().find((m) => m.role === "bot" && m.res);
+    return lastBot?.res?.suggestions?.length ? lastBot.res.suggestions : (initialSuggestions.data ?? []);
+  }, [messages, initialSuggestions.data]);
+
+  function scrollDown() {
+    setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  }
+
+  async function send(question: string) {
     const q = question.trim();
     if (!q || ask.isPending) return;
     setMessages((m) => [...m, { role: "user", text: q }]);
     setInput("");
-    ask.mutate(q, {
-      onSuccess: (res) =>
-        setMessages((m) => [...m, { role: "bot", text: res.answer, data: res.data }]),
-      onError: () =>
-        setMessages((m) => [
-          ...m,
-          { role: "bot", text: "Je n'ai pas pu traiter votre demande." },
-        ]),
-      onSettled: () => setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50),
-    });
+    const coords = await maybeGeolocate(q);
+    ask.mutate(
+      { message: q, page, lat: coords?.lat, lng: coords?.lng },
+      {
+        onSuccess: (res) => setMessages((m) => [...m, { role: "bot", text: res.answer, res }]),
+        onError: () => setMessages((m) => [...m, { role: "bot", text: "Je n'ai pas pu traiter votre demande." }]),
+        onSettled: scrollDown,
+      },
+    );
+    scrollDown();
+  }
+
+  function onSuggestion(s: string) {
+    if (NAV[s]) {
+      router.push(NAV[s]);
+      setOpen(false);
+      return;
+    }
+    void send(s);
+  }
+
+  function reset() {
+    setMessages([{ role: "bot", text: "Conversation réinitialisée. Posez-moi une question sur votre flotte." }]);
   }
 
   return (
     <>
-      {/* Bouton flottant */}
       <button
         onClick={() => setOpen((v) => !v)}
         className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-xl shadow-brand-600/40 transition-transform hover:scale-105"
@@ -59,17 +109,23 @@ export function KBot() {
         {open ? <X className="h-6 w-6" /> : <Bot className="h-6 w-6" />}
       </button>
 
-      {/* Panel */}
       {open && (
-        <div className="animate-pop fixed bottom-24 right-5 z-50 flex h-[32rem] w-[calc(100vw-2.5rem)] max-w-sm flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+        <div className="animate-pop fixed bottom-24 right-5 z-50 flex h-[34rem] w-[calc(100vw-2.5rem)] max-w-md flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
           <div className="flex items-center gap-2.5 bg-gradient-to-r from-navy-800 to-navy-900 px-4 py-3 text-white">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-500/20">
               <Sparkles className="h-4 w-4 text-brand-400" />
             </span>
             <div className="leading-tight">
               <p className="text-sm font-semibold">K-BOT</p>
-              <p className="text-[11px] text-slate-300">Assistant flotte intelligent</p>
+              <p className="text-[11px] text-slate-300">Copilote flotte connecté à vos données</p>
             </div>
+            <button
+              onClick={reset}
+              title="Nouvelle conversation"
+              className="ml-auto rounded-md p-1.5 text-slate-300 hover:bg-white/10 hover:text-white"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto bg-canvas px-3 py-4">
@@ -77,22 +133,16 @@ export function KBot() {
               <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
-                    "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm",
+                    "max-w-[92%] rounded-2xl px-3.5 py-2 text-sm",
                     m.role === "user"
                       ? "rounded-br-sm bg-brand-600 text-white"
                       : "rounded-bl-sm border border-line bg-surface text-ink",
                   )}
                 >
-                  <p>{m.text}</p>
-                  {m.data && m.data.length > 0 && (
-                    <ul className="mt-2 space-y-1 border-t border-line/60 pt-2">
-                      {m.data.map((d, j) => (
-                        <li key={j} className="flex justify-between gap-3 text-xs">
-                          <span className="text-muted">{d.label}</span>
-                          <span className="font-medium text-ink">{d.value}</span>
-                        </li>
-                      ))}
-                    </ul>
+                  {m.role === "bot" && m.res?.blocks?.length ? (
+                    <KBotBlocks blocks={m.res.blocks} />
+                  ) : (
+                    <p>{m.text}</p>
                   )}
                 </div>
               </div>
@@ -100,19 +150,19 @@ export function KBot() {
             {ask.isPending && (
               <div className="flex justify-start">
                 <div className="rounded-2xl rounded-bl-sm border border-line bg-surface px-3.5 py-2 text-sm text-faint">
-                  K-BOT réfléchit…
+                  K-BOT analyse vos données…
                 </div>
               </div>
             )}
             <div ref={endRef} />
           </div>
 
-          {messages.length <= 1 && (
+          {activeSuggestions.length > 0 && (
             <div className="flex flex-wrap gap-1.5 border-t border-line px-3 py-2">
-              {SUGGESTIONS.map((s) => (
+              {activeSuggestions.slice(0, 4).map((s) => (
                 <button
                   key={s}
-                  onClick={() => send(s)}
+                  onClick={() => onSuggestion(s)}
                   className="rounded-full border border-line bg-surface2 px-2.5 py-1 text-[11px] text-muted hover:border-brand-400 hover:text-brand-600"
                 >
                   {s}
@@ -122,10 +172,7 @@ export function KBot() {
           )}
 
           <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              send(input);
-            }}
+            onSubmit={(e) => { e.preventDefault(); void send(input); }}
             className="flex items-center gap-2 border-t border-line bg-surface p-2"
           >
             <input
