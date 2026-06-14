@@ -30,7 +30,7 @@ export default function AuthCallbackPage() {
         const dest = returnTo && returnTo !== "/" ? returnTo : homeFor(me?.role ?? "");
         router.replace(dest);
       } catch {
-        setError("Échec de la connexion SSO. Redirection…");
+        setError("Échec de la connexion K-access. Redirection…");
         setTimeout(() => router.replace("/login"), 1800);
       }
     })();

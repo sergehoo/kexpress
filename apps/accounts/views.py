@@ -19,7 +19,7 @@ class LocalTokenSerializer(TokenObtainPairSerializer):
         data = super().validate(attrs)  # vérifie identifiants + compte actif
         if not getattr(settings, "LOCAL_LOGIN_ENABLED", True):
             raise serializers.ValidationError(
-                "Connexion par mot de passe désactivée. Utilisez le SSO."
+                "Connexion par mot de passe désactivée. Utilisez K-access."
             )
         return data
 

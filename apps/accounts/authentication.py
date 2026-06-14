@@ -121,7 +121,7 @@ def get_or_provision_user(claims: dict):
         candidate = User.objects.filter(email__iexact=email).first()
         if candidate is not None:
             if candidate.keycloak_sub and candidate.keycloak_sub != sub:
-                raise exceptions.AuthenticationFailed("Email déjà lié à un autre compte SSO.")
+                raise exceptions.AuthenticationFailed("Email déjà lié à un autre compte K-access.")
             user = candidate
 
     if user is None:

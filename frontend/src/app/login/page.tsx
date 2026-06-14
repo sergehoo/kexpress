@@ -41,7 +41,7 @@ export default function LoginPage() {
     try {
       await loginSso("/"); // redirige vers Keycloak (la suite se fait dans /auth/callback)
     } catch {
-      setError("Impossible de démarrer la connexion SSO.");
+      setError("Impossible de démarrer la connexion K-access.");
       setRedirecting(false);
     }
   }
@@ -123,7 +123,7 @@ export default function LoginPage() {
                 ) : (
                   <>
                     <LogIn className="h-4 w-4" aria-hidden="true" />
-                    <span>Se connecter avec le SSO</span>
+                    <span>Se connecter avec K-access</span>
                   </>
                 )}
               </Button>
