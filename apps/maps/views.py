@@ -19,6 +19,9 @@ AVG_SPEED_KMH = 28.0
 #: Pays prioritaire pour les suggestions d'adresses (codes ISO, séparés par des virgules).
 PLACES_PRIORITY_COUNTRIES = getattr(settings, "PLACES_PRIORITY_COUNTRIES", "ci")
 
+#: Base Nominatim (publique par défaut, auto-hébergeable via NOMINATIM_URL).
+NOMINATIM_URL = getattr(settings, "NOMINATIM_URL", "https://nominatim.openstreetmap.org").rstrip("/")
+
 
 class PlacesSearchView(APIView):
     """Autocomplétion de lieux via OpenStreetMap Nominatim (+ filiales internes).
@@ -36,7 +39,7 @@ class PlacesSearchView(APIView):
         }
         if countrycodes:
             params["countrycodes"] = countrycodes
-        url = f"https://nominatim.openstreetmap.org/search?{urllib.parse.urlencode(params)}"
+        url = f"{NOMINATIM_URL}/search?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url, headers={"User-Agent": "KaydanExpress/1.0 (fleet)"})
         try:
             with urllib.request.urlopen(req, timeout=8, context=_ctx()) as resp:
@@ -92,7 +95,7 @@ class PlacesReverseView(APIView):
             "lat": lat, "lon": lng, "format": "json",
             "accept-language": "fr", "zoom": 17,
         })
-        url = f"https://nominatim.openstreetmap.org/reverse?{params}"
+        url = f"{NOMINATIM_URL}/reverse?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "KaydanExpress/1.0 (fleet)"})
         label = None
         try:
@@ -150,6 +153,42 @@ class RouteEstimateView(APIView):
                 payload["fuel_price"] = float(cost["price"])
                 payload["fuel_price_date"] = cost["price_date"].isoformat() if cost["price_date"] else None
         return Response(payload)
+
+
+class RouteCalculateView(APIView):
+    """Itinéraire détaillé via OSRM : géométrie + distance + durée + guidage turn-by-turn.
+
+    Corps : {origin:[lat,lng], destination:[lat,lng], waypoints?:[[lat,lng],...]}.
+    Sert la navigation chauffeur (#4) et le recalcul d'itinéraire.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        origin = request.data.get("origin")
+        destination = request.data.get("destination")
+        waypoints = request.data.get("waypoints") or []
+        if not (origin and destination and len(origin) == 2 and len(destination) == 2):
+            return Response({"detail": "Origine et destination (lat,lng) requises."}, status=400)
+        try:
+            pts = (
+                [(float(origin[0]), float(origin[1]))]
+                + [(float(w[0]), float(w[1])) for w in waypoints]
+                + [(float(destination[0]), float(destination[1]))]
+            )
+        except (TypeError, ValueError):
+            return Response({"detail": "Coordonnées invalides."}, status=400)
+
+        route = road_route(pts, steps=True)
+        distance = route["distance_km"] or round(_haversine(pts[0], pts[-1]), 2)
+        duration = route["duration_min"] or round(distance / AVG_SPEED_KMH * 60, 1)
+        return Response({
+            "geometry": route["geometry"],
+            "distance_km": distance,
+            "duration_min": duration,
+            "eta_min": duration,
+            "steps": route.get("steps", []),
+        })
 
 
 class NearbyVehiclesView(APIView):

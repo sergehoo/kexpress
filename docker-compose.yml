@@ -40,6 +40,25 @@ services:
           - kexpress-redis
           - redis
 
+  # Serveur de routage OSRM (auto-hébergé, open source).
+  # Prépare les données AVANT le 1er démarrage : `bash docker/osrm-setup.sh`
+  # (télécharge l'extrait Côte d'Ivoire + osrm-extract/partition/customize).
+  # Le backend l'atteint via OSRM_URL=http://kexpress-osrm:5000 (réseau interne).
+  kexpress-osrm:
+    image: osrm/osrm-backend:latest
+    container_name: kexpress-osrm
+    restart: unless-stopped
+    command: ["osrm-routed", "--algorithm", "mld", "/data/cote-divoire-latest.osrm"]
+    volumes:
+      - ./osrm-data:/data
+    expose:
+      - "5000"
+    networks:
+      kexpress-internal:
+        aliases:
+          - kexpress-osrm
+          - osrm
+
   kexpress-backend:
     build:
       context: .
@@ -80,6 +99,7 @@ services:
       KBOT_MODEL: ${KBOT_MODEL:-claude-3-5-sonnet-latest}
 
       OSRM_URL: ${OSRM_URL:-https://router.project-osrm.org}
+      NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org}
       MAP_COST_PER_KM: ${MAP_COST_PER_KM:-350.0}
       FUEL_PRICE_SOURCE_URL: ${FUEL_PRICE_SOURCE_URL:-}
       FUEL_PRICE_SUPER: ${FUEL_PRICE_SUPER:-875}

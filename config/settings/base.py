@@ -234,7 +234,10 @@ KBOT_API_KEY = env("ANTHROPIC_API_KEY", default="")
 KBOT_MODEL = env("KBOT_MODEL", default="claude-3-5-sonnet-latest")
 
 # --- Carte / réservation ---------------------------------------------------
+# Services de routage/géocodage : publics par défaut, auto-hébergeables en prod
+# (conteneurs dédiés) via OSRM_URL / NOMINATIM_URL.
 OSRM_URL = env("OSRM_URL", default="https://router.project-osrm.org")
+NOMINATIM_URL = env("NOMINATIM_URL", default="https://nominatim.openstreetmap.org")
 MAP_COST_PER_KM = env.float("MAP_COST_PER_KM", default=350.0)
 
 # Notifications email (canal optionnel ; backend console en local, SMTP via EMAIL_* env)
