@@ -330,6 +330,21 @@ export interface Employee {
   subsidiary_name: string | null;
   is_active: boolean;
   date_joined: string;
+  // Synchronisation Keycloak (lecture seule)
+  keycloak_id?: string;
+  keycloak_username?: string;
+  keycloak_synced_at?: string | null;
+  keycloak_sync_status?: "pending" | "synced" | "error" | "disabled";
+  keycloak_sync_status_display?: string;
+  keycloak_sync_error?: string;
+}
+
+export interface KeycloakSyncLogItem {
+  id: string;
+  action: string;
+  status: string;
+  detail: string;
+  created_at: string;
 }
 
 export interface AuditEntry {

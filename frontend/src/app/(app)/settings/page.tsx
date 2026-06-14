@@ -1,14 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   CheckCircle2,
+  History,
   KeyRound,
   Lock,
+  MailCheck,
   Moon,
   Plus,
+  RefreshCw,
+  RotateCcw,
   Search,
   Shield,
   ShieldBan,
@@ -232,7 +236,27 @@ type UserModal =
   | { type: "set-password"; row: Employee }
   | { type: "confirm-block"; row: Employee }
   | { type: "confirm-delete"; row: Employee }
+  | { type: "kc-history"; row: Employee }
   | null;
+
+const KC_BADGE: Record<string, { label: string; cls: string }> = {
+  synced: { label: "Synchronisé", cls: "bg-emerald-500/10 text-emerald-600 ring-emerald-500/20" },
+  error: { label: "Erreur", cls: "bg-rose-500/10 text-rose-600 ring-rose-500/20" },
+  pending: { label: "À synchroniser", cls: "bg-amber-500/10 text-amber-600 ring-amber-500/20" },
+  disabled: { label: "Hors Keycloak", cls: "bg-surface2 text-muted ring-line" },
+};
+
+function KcBadge({ status, error }: { status?: string; error?: string }) {
+  const b = KC_BADGE[status ?? "pending"] ?? KC_BADGE.pending;
+  return (
+    <span
+      title={status === "error" && error ? error : undefined}
+      className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset", b.cls)}
+    >
+      {b.label}
+    </span>
+  );
+}
 
 function UsersPanel() {
   const { me } = useAuth();
@@ -359,6 +383,7 @@ function UsersPanel() {
                     <th className="px-5 py-3 font-medium">Filiale</th>
                     <th className="px-5 py-3 font-medium">Créé le</th>
                     <th className="px-5 py-3 font-medium">Statut</th>
+                    <th className="px-5 py-3 font-medium">Keycloak</th>
                     <th className="px-5 py-3 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
@@ -392,12 +417,32 @@ function UsersPanel() {
                           </span>
                         </td>
                         <td className="px-5 py-3">
+                          <KcBadge status={u.keycloak_sync_status} error={u.keycloak_sync_error} />
+                        </td>
+                        <td className="px-5 py-3">
                           <div className="flex justify-end gap-1">
                             <IconBtn title="Modifier (rôle, filiale, infos)" onClick={() => { setError(""); setModal({ type: "edit", row: u }); }}>
                               <UserCog className="h-4 w-4" />
                             </IconBtn>
-                            <IconBtn title="Définir / réinitialiser le mot de passe" onClick={() => { setError(""); setModal({ type: "set-password", row: u }); }}>
+                            <IconBtn title="Définir / réinitialiser le mot de passe (local)" onClick={() => { setError(""); setModal({ type: "set-password", row: u }); }}>
                               <KeyRound className="h-4 w-4" />
+                            </IconBtn>
+                            {/* --- Actions Keycloak --- */}
+                            <IconBtn title="Synchroniser avec Keycloak" disabled={busyId === u.id}
+                              onClick={() => run("Synchronisé avec Keycloak.", u.id, () => api.post(`/employees/${u.id}/keycloak-sync/`, {}))}>
+                              <RefreshCw className="h-4 w-4" />
+                            </IconBtn>
+                            <IconBtn title="Envoyer l'email d'activation (Keycloak)" disabled={busyId === u.id}
+                              onClick={() => run("Email d'activation envoyé.", u.id, () => api.post(`/employees/${u.id}/keycloak-activation-email/`, {}))}>
+                              <MailCheck className="h-4 w-4" />
+                            </IconBtn>
+                            <IconBtn title="Réinitialiser le mot de passe (email Keycloak)" disabled={busyId === u.id}
+                              onClick={() => run("Email de réinitialisation envoyé.", u.id, () => api.post(`/employees/${u.id}/keycloak-reset-password/`, {}))}>
+                              <RotateCcw className="h-4 w-4" />
+                            </IconBtn>
+                            <IconBtn title="Historique des synchronisations Keycloak"
+                              onClick={() => setModal({ type: "kc-history", row: u })}>
+                              <History className="h-4 w-4" />
                             </IconBtn>
                             {!self && (
                               u.is_active ? (
@@ -493,7 +538,52 @@ function UsersPanel() {
           </div>
         </Modal>
       )}
+
+      {/* Historique des synchronisations Keycloak */}
+      {modal?.type === "kc-history" && (
+        <KcHistoryModal user={modal.row} onClose={() => setModal(null)} />
+      )}
     </div>
+  );
+}
+
+function KcHistoryModal({ user, onClose }: { user: Employee; onClose: () => void }) {
+  const [rows, setRows] = useState<import("@/lib/types").KeycloakSyncLogItem[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api.get<{ results: import("@/lib/types").KeycloakSyncLogItem[] }>(`/employees/${user.id}/keycloak-history/`)
+      .then(({ data }) => setRows(data.results))
+      .catch((e) => setError(apiError(e)));
+  }, [user.id]);
+
+  return (
+    <Modal open title={`Synchronisations Keycloak — ${user.full_name || user.email}`} onClose={onClose}>
+      <div className="mb-3 flex items-center gap-2 text-xs text-muted">
+        <KcBadge status={user.keycloak_sync_status} error={user.keycloak_sync_error} />
+        {user.keycloak_synced_at && <span>· dernière synchro {formatDate(user.keycloak_synced_at, true)}</span>}
+        {user.keycloak_id && <span className="truncate">· ID {user.keycloak_id.slice(0, 8)}…</span>}
+      </div>
+      {error && <p className="rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-600">{error}</p>}
+      {rows === null ? (
+        <div className="flex justify-center py-6"><Spinner className="h-5 w-5" /></div>
+      ) : rows.length === 0 ? (
+        <p className="py-4 text-center text-sm text-faint">Aucune synchronisation enregistrée.</p>
+      ) : (
+        <ul className="max-h-72 space-y-1.5 overflow-y-auto">
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-start gap-2 rounded-lg border border-line px-3 py-2 text-xs">
+              <span className={cn("mt-0.5 h-2 w-2 shrink-0 rounded-full", r.status === "ok" ? "bg-emerald-500" : "bg-rose-500")} />
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-ink">{r.action} · {r.status}</p>
+                {r.detail && <p className="truncate text-muted">{r.detail}</p>}
+              </div>
+              <span className="shrink-0 text-faint">{formatDate(r.created_at, true)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
   );
 }
 
