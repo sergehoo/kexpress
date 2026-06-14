@@ -34,7 +34,7 @@ def test_nearest_vehicle_with_origin(ctx, monkeypatch):
     monkeypatch.setattr(proximity, "route_matrix", lambda s, d: {"durations_min": [[6.0]], "distances_km": [[2.5]]})
     res = answer_question(ctx["mgr"], "Quel est le véhicule le plus proche de moi ?", origin=(5.40, -4.05))
     assert res["intent"] == "nearest_vehicle"
-    assert res["data"] and "min" in res["data"][0]["value"]
+    assert res["data"]["items"] and res["data"]["items"][0]["eta_min"] >= 1
     assert "AA-1-BC" in res["answer"]
 
 
@@ -42,7 +42,7 @@ def test_nearest_vehicle_with_origin(ctx, monkeypatch):
 def test_nearest_vehicle_without_origin_guides_to_map(ctx):
     res = answer_question(ctx["mgr"], "Quel véhicule est le plus proche ?")
     assert res["intent"] == "nearest_vehicle"
-    assert "/map" in res["answer"]  # invite à partager la position
+    assert "/map" in res["answer_markdown"]  # invite à partager la position
 
 
 @pytest.mark.django_db
@@ -59,7 +59,7 @@ def test_km_by_subsidiary(ctx):
     )
     res = answer_question(ctx["mgr"], "Quelle filiale parcourt le plus de kilomètres ?")
     assert res["intent"] == "km_by_subsidiary"
-    assert res["data"] and "Abidjan" in res["data"][0]["label"]
+    assert res["data"]["items"] and "Abidjan" in res["data"]["items"][0]["label"]
 
 
 @pytest.mark.django_db
@@ -76,7 +76,7 @@ def test_trip_diagnosis_late(ctx):
     )
     res = answer_question(ctx["mgr"], "Pourquoi mes courses sont en retard ?")
     assert res["intent"] == "trip_diagnosis"
-    assert any("retard" in d["value"] for d in res["data"])
+    assert res["data"]["late"] >= 1 and "retard" in res["answer_markdown"]
 
 
 @pytest.mark.django_db

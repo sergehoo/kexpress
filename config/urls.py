@@ -35,6 +35,7 @@ urlpatterns = [
     path("api/", include("apps.fuelintel.urls")),
     path("api/", include("apps.reports.urls")),
     path("api/", include("apps.maps.urls")),
+    path("api/", include("apps.kbot.urls")),
     # OpenAPI / Swagger
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(

@@ -9,9 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.analytics.scope import scoped
-from apps.audit import services as audit
-from apps.core.enums import AuditAction, ReservationStatus, VehicleStatus
-from apps.kbot.engine import answer_question
+from apps.core.enums import ReservationStatus, VehicleStatus
 
 
 def _f(value):
@@ -313,27 +311,4 @@ class AlertsView(APIView):
         return Response({"counts": counts, "results": alerts})
 
 
-class KBotView(APIView):
-    """Assistant K-BOT : réponses ancrées sur les données autorisées de l'utilisateur."""
-
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        question = (request.data.get("question") or "").strip()
-        if not question:
-            return Response({"answer": "Posez-moi une question sur votre flotte.", "data": None})
-        # Position éventuelle du demandeur, pour les intentions « au plus proche » (#3E).
-        origin = None
-        try:
-            lat, lng = request.data.get("lat"), request.data.get("lng")
-            if lat is not None and lng is not None:
-                origin = (float(lat), float(lng))
-        except (TypeError, ValueError):
-            origin = None
-        result = answer_question(request.user, question, origin=origin)
-        audit.record(
-            request.user, AuditAction.ACCESS, None,
-            changes={"kbot_question": question[:255], "intent": result.get("intent")},
-            request=request,
-        )
-        return Response(result)
+# K-BOT déplacé dans apps.kbot (chat structuré + sécurité + journalisation KBotInteraction).
