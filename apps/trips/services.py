@@ -11,6 +11,7 @@ from apps.core.enums import (
     AuditAction,
     NotificationType,
     ReservationStatus,
+    RoleChoices,
     TripStatus,
     VehicleStatus,
 )
@@ -18,6 +19,31 @@ from apps.notifications.events import managers_of, reservation_event
 from apps.notifications.services import notify, notify_many
 from apps.reservations.workflow import WorkflowError
 from apps.trips.models import Trip
+
+# Rôles gestionnaires autorisés à démarrer une course (supervision / dépannage),
+# en plus du chauffeur affecté lui-même.
+TRIP_START_MANAGER_ROLES = {
+    RoleChoices.FLEET_MANAGER, RoleChoices.SUBSIDIARY_ADMIN,
+    RoleChoices.COMPANY_ADMIN, RoleChoices.SUPER_ADMIN,
+}
+
+
+def can_start_trip(trip: Trip, user) -> bool:
+    """#9 — Qui peut démarrer la course :
+
+    * le chauffeur affecté (acteur principal de la mission) ;
+    * en conduite personnelle (sans chauffeur), le demandeur qui conduit ;
+    * un gestionnaire/admin (supervision, dépannage).
+    """
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser or user.role in TRIP_START_MANAGER_ROLES:
+        return True
+    if trip.driver_id and trip.driver.user_id == user.pk:
+        return True
+    if not trip.driver_id and trip.requester_id == user.pk:
+        return True
+    return False
 
 
 @transaction.atomic

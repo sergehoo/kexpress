@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from django.db.models import Q
 
-from apps.core.enums import AlertSeverity, RoleChoices
-from apps.notifications.services import notify_many
+from apps.core.enums import AlertSeverity, NotificationType, RoleChoices
+from apps.notifications.services import notify, notify_many
 
 
 # --- Destinataires ---------------------------------------------------------
@@ -87,4 +87,40 @@ def reservation_event(
         message=reservation_body(reservation, next_action=next_action),
         link=f"/reservations/{reservation.id}",
         severity=severity,
+    )
+
+
+# --- Notification dédiée au chauffeur (#8) ---------------------------------
+
+
+def driver_assignment_body(reservation) -> str:
+    """Corps du message reçu par le chauffeur affecté (détails de la course)."""
+    dep = reservation.departure_time
+    date = dep.strftime("%d/%m/%Y") if dep else "—"
+    heure = dep.strftime("%H:%M") if dep else "—"
+    lines = [
+        f"Course n° {str(reservation.id)[:8].upper()}",
+        f"Date : {date} à {heure}",
+        f"Demandeur : {reservation.requester.get_full_name() or reservation.requester.email}",
+        f"Filiale : {reservation.subsidiary.name}",
+        f"Point de départ : {reservation.origin or '—'}",
+        f"Destination : {reservation.destination}",
+        f"Passagers : {reservation.passengers}",
+    ]
+    if reservation.vehicle_id:
+        lines.append(f"Véhicule affecté : {reservation.vehicle.registration}")
+    return "\n".join(lines)
+
+
+def notify_driver_assigned(reservation):
+    """#8 — Notification dédiée au chauffeur (interne + email + push) à l'affectation."""
+    driver = getattr(reservation, "driver", None)
+    if not (driver and driver.user_id):
+        return None
+    return notify(
+        driver.user,
+        NotificationType.DRIVER_ASSIGNED,
+        title=f"Vous êtes affecté à une course — {reservation.destination}",
+        message=driver_assignment_body(reservation),
+        link=f"/reservations/{reservation.id}",
     )

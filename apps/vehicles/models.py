@@ -27,6 +27,20 @@ class Vehicle(TenantScopedModel):
     fuel_type = models.CharField(
         "carburant", max_length=20, choices=FuelType.choices, default=FuelType.DIESEL
     )
+    # Caractéristiques selon la motorisation (formulaire dynamique #5).
+    # Thermique/hybride : réservoir + consommation. Électrique : batterie + autonomie.
+    tank_capacity_liters = models.DecimalField(
+        "capacité réservoir (L)", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    fuel_consumption_l100km = models.DecimalField(
+        "consommation (L/100 km)", max_digits=5, decimal_places=1, null=True, blank=True
+    )
+    battery_capacity_kwh = models.DecimalField(
+        "capacité batterie (kWh)", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    electric_range_km = models.PositiveIntegerField(
+        "autonomie électrique (km)", null=True, blank=True
+    )
     status = models.CharField(
         "état", max_length=20, choices=VehicleStatus.choices,
         default=VehicleStatus.AVAILABLE, db_index=True,

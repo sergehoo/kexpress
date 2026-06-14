@@ -2,7 +2,7 @@ from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -51,7 +51,14 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     def start(self, request, pk=None):
         s = StartTripInputSerializer(data=request.data)
         s.is_valid(raise_exception=True)
-        return self._ok(_run(services.start_trip, self.get_object(), request.user,
+        trip = self.get_object()
+        # #9 — Seul le chauffeur affecté (ou le demandeur en conduite personnelle,
+        # ou un gestionnaire) peut démarrer la mission.
+        if not services.can_start_trip(trip, request.user):
+            raise PermissionDenied(
+                "Seul le chauffeur affecté peut démarrer cette course."
+            )
+        return self._ok(_run(services.start_trip, trip, request.user,
                              s.validated_data.get("start_mileage")))
 
     @extend_schema(request=EndTripInputSerializer, responses=TripSerializer)

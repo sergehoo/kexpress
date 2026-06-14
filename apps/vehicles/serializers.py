@@ -47,6 +47,8 @@ class VehicleSerializer(serializers.ModelSerializer):
         fields = [
             "id", "registration", "brand", "model", "vehicle_type", "vehicle_type_display",
             "capacity", "mileage", "revision_interval_km", "fuel_type", "fuel_type_display",
+            "tank_capacity_liters", "fuel_consumption_l100km",
+            "battery_capacity_kwh", "electric_range_km",
             "status", "status_display", "purchase_date", "purchase_value",
             "photo", "notes", "subsidiary", "subsidiary_name", "documents",
             "compliance", "created_at", "updated_at",
