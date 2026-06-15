@@ -211,8 +211,15 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         try:
             result = apply_sync(str(user.pk), action="sync")  # inline : retour immédiat à l'admin
         except kc.KeycloakAdminError:
-            # Détail déjà journalisé côté backend (keycloak_admin) ; message client générique.
-            return Response({"detail": "Échec de la synchronisation Keycloak.", "status": "error"}, status=502)
+            # Le corps Keycloak reste journalisé côté backend (keycloak_admin) ; on
+            # remonte la cause SANITISÉE (méthode/chemin/code, déjà exposée par le
+            # serializer) pour aider l'admin à diagnostiquer.
+            user.refresh_from_db()
+            return Response({
+                "detail": "Échec de la synchronisation Keycloak.",
+                "reason": user.keycloak_sync_error or "",
+                "status": "error",
+            }, status=502)
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "keycloak_sync"})
         user.refresh_from_db()
         return Response({"detail": "Synchronisé avec Keycloak.", "result": result,
