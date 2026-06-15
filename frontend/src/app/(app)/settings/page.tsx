@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   Bell,
   CheckCircle2,
+  Eye,
+  EyeOff,
   History,
   KeyRound,
   Lock,
@@ -16,6 +19,7 @@ import {
   Search,
   Shield,
   ShieldBan,
+  ShieldCheck,
   Sun,
   Trash2,
   User,
@@ -89,6 +93,63 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/** Champ mot de passe stylé (icône cadenas + état révélé + détection Verr. Maj). */
+function PasswordField({
+  label, value, onChange, reveal, autoComplete, onCaps, minLength, error,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  reveal: boolean;
+  autoComplete?: string;
+  onCaps?: (on: boolean) => void;
+  minLength?: number;
+  error?: string;
+}) {
+  const caps = (e: React.KeyboardEvent<HTMLInputElement>) =>
+    onCaps?.(typeof e.getModifierState === "function" && e.getModifierState("CapsLock"));
+  return (
+    <div>
+      <Label className="text-muted">{label}</Label>
+      <div className="relative">
+        <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" aria-hidden />
+        <Input
+          type={reveal ? "text" : "password"}
+          required
+          minLength={minLength}
+          autoComplete={autoComplete}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyUp={caps}
+          onKeyDown={caps}
+          aria-invalid={error ? true : undefined}
+          className={cn("pl-10", error && "border-rose-400 focus:border-rose-400 focus:ring-rose-400/40")}
+        />
+      </div>
+      {error && <p className="mt-1 text-[11px] text-rose-600">{error}</p>}
+    </div>
+  );
+}
+
+/** Robustesse indicative du nouveau mot de passe (longueur + variété de caractères). */
+function passwordStrength(pw: string): { score: number; label: string; bar: string; tone: string } {
+  if (!pw) return { score: 0, label: "", bar: "bg-line", tone: "text-faint" };
+  let s = 0;
+  if (pw.length >= 8) s += 1;
+  if (pw.length >= 12) s += 1;
+  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) s += 1;
+  if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) s += 1;
+  s = Math.max(1, Math.min(4, s));
+  const map = [
+    { label: "Très faible", bar: "bg-rose-500", tone: "text-rose-600" },
+    { label: "Faible", bar: "bg-rose-500", tone: "text-rose-600" },
+    { label: "Moyen", bar: "bg-amber-500", tone: "text-amber-600" },
+    { label: "Bon", bar: "bg-emerald-500", tone: "text-emerald-600" },
+    { label: "Excellent", bar: "bg-emerald-500", tone: "text-emerald-600" },
+  ];
+  return { score: s, ...map[s] };
+}
+
 const PUSH_LABEL: Record<string, string> = {
   subscribed: "✅ Notifications push activées sur ce navigateur.",
   denied: "Permission refusée — autorisez les notifications dans votre navigateur.",
@@ -108,6 +169,9 @@ function AccountPanel() {
   const [confirm, setConfirm] = useState("");
   const [pwdMsg, setPwdMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [pwdBusy, setPwdBusy] = useState(false);
+  const [reveal, setReveal] = useState(false);
+  const [caps, setCaps] = useState(false);
+  const strength = passwordStrength(next);
 
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
@@ -154,27 +218,66 @@ function AccountPanel() {
           <CardTitle><span className="inline-flex items-center gap-2"><Lock className="h-4 w-4 text-brand-500" /> Changer mon mot de passe</span></CardTitle>
         </CardHeader>
         <CardBody>
-          <form onSubmit={changePassword} className="space-y-3">
-            <div>
-              <Label>Mot de passe actuel</Label>
-              <Input type="password" required value={current} onChange={(e) => setCurrent(e.target.value)} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Nouveau mot de passe</Label>
-                <Input type="password" required minLength={6} value={next} onChange={(e) => setNext(e.target.value)} />
+          <form onSubmit={changePassword} className="space-y-4" noValidate>
+            <PasswordField
+              label="Mot de passe actuel" value={current} onChange={setCurrent}
+              reveal={reveal} autoComplete="current-password" onCaps={setCaps}
+            />
+            <PasswordField
+              label="Nouveau mot de passe" value={next} onChange={setNext}
+              reveal={reveal} autoComplete="new-password" onCaps={setCaps} minLength={8}
+            />
+            {/* Jauge de robustesse */}
+            {next && (
+              <div className="space-y-1">
+                <div className="flex h-1.5 gap-1">
+                  {[0, 1, 2, 3].map((i) => (
+                    <span key={i} className={cn("h-full flex-1 rounded-full transition-colors",
+                      i < strength.score ? strength.bar : "bg-line")} />
+                  ))}
+                </div>
+                <p className={cn("text-[11px] font-medium", strength.tone)}>{strength.label}</p>
               </div>
-              <div>
-                <Label>Confirmation</Label>
-                <Input type="password" required minLength={6} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-              </div>
-            </div>
-            {pwdMsg && (
-              <p className={cn("text-xs", pwdMsg.ok ? "text-emerald-600" : "text-rose-600")}>{pwdMsg.text}</p>
             )}
-            <div className="flex justify-end">
-              <Button type="submit" size="sm" disabled={pwdBusy}>{pwdBusy ? "…" : "Mettre à jour"}</Button>
+            <PasswordField
+              label="Confirmer le nouveau mot de passe" value={confirm} onChange={setConfirm}
+              reveal={reveal} autoComplete="new-password" onCaps={setCaps} minLength={8}
+              error={confirm.length > 0 && confirm !== next ? "La confirmation ne correspond pas." : ""}
+            />
+
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setReveal((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-ink"
+              >
+                {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {reveal ? "Masquer" : "Afficher"} les mots de passe
+              </button>
+              {caps && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                  <AlertCircle className="h-3.5 w-3.5" /> Verr. Maj activé
+                </span>
+              )}
             </div>
+
+            {pwdMsg && (
+              <p className={cn(
+                "flex items-start gap-2 rounded-lg px-3 py-2 text-xs",
+                pwdMsg.ok ? "bg-emerald-500/10 text-emerald-600" : "bg-rose-500/10 text-rose-600",
+              )}>
+                {pwdMsg.ok ? <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />}
+                <span>{pwdMsg.text}</span>
+              </p>
+            )}
+
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={pwdBusy || !current || next.length < 8 || next !== confirm}
+            >
+              {pwdBusy ? <Spinner className="h-4 w-4 border-white/40 border-t-white" /> : "Mettre à jour le mot de passe"}
+            </Button>
           </form>
         </CardBody>
       </Card>
