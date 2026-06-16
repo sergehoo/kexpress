@@ -9,10 +9,11 @@ from rest_framework.response import Response
 from apps.core.mixins import TenantScopedViewSetMixin
 from apps.reservations.workflow import WorkflowError
 from apps.trips import services
-from apps.trips.models import Trip
+from apps.trips.models import Trip, TripIncident
 from apps.trips.serializers import (
     EndTripInputSerializer,
     StartTripInputSerializer,
+    TripIncidentSerializer,
     TripSerializer,
 )
 
@@ -123,3 +124,45 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
         return self._ok(_run(services.close_trip, self.get_object(), request.user))
+
+    @action(detail=True, methods=["post"], url_path="report-incident")
+    def report_incident(self, request, pk=None):
+        """Déclaration d'incident par le chauffeur (ou le demandeur / un gestionnaire)
+        pendant ou après la course. Notifie les gestionnaires de la filiale."""
+        from django.utils import timezone
+
+        from apps.core.enums import IncidentSeverity
+
+        trip = self.get_object()
+        user = request.user
+        allowed = (
+            user.is_superuser
+            or user.role in services.TRIP_START_MANAGER_ROLES
+            or (trip.driver_id and trip.driver.user_id == user.pk)
+            or trip.requester_id == user.pk
+        )
+        if not allowed:
+            raise PermissionDenied("Vous ne pouvez pas déclarer d'incident sur cette course.")
+        description = (request.data.get("description") or "").strip()
+        if not description:
+            raise ValidationError({"description": "Une description est requise."})
+        severity = request.data.get("severity") or IncidentSeverity.MINOR
+        if severity not in {c for c, _ in IncidentSeverity.choices}:
+            severity = IncidentSeverity.MINOR
+        incident = TripIncident.objects.create(
+            trip=trip, occurred_at=timezone.now(), severity=severity, description=description[:2000],
+        )
+        try:
+            from apps.core.enums import NotificationType
+            from apps.notifications.events import managers_of
+            from apps.notifications.services import notify_many
+
+            label = trip.vehicle.registration if trip.vehicle_id else trip.destination
+            notify_many(
+                managers_of(trip.subsidiary_id), NotificationType.INCIDENT_REPORTED,
+                title=f"Incident déclaré — {label}", message=description[:255],
+                link=f"/trips/{trip.id}", severity="warning",
+            )
+        except Exception:
+            pass
+        return Response(TripIncidentSerializer(incident).data, status=status.HTTP_201_CREATED)

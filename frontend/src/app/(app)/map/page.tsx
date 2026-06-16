@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Calendar,
   Car,
   CheckCircle2,
@@ -12,6 +14,7 @@ import {
   Clock,
   CornerUpLeft,
   CornerUpRight,
+  ExternalLink,
   LocateFixed,
   MapPin,
   Navigation,
@@ -29,7 +32,7 @@ import { useGpsTracker } from "@/lib/useGpsTracker";
 import { useTripTracking } from "@/lib/useTripTracking";
 import { useActiveTrip, useDriverMissions, useNearbyVehicles, useTripRoute } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
-import { currentMission } from "@/lib/driver";
+import { currentMission, googleMapsUrl, wazeUrl } from "@/lib/driver";
 import { DriverMissionPanel, DriverNoMissionPanel } from "@/components/DriverMissionPanel";
 import type { RouteCalculation, RouteStep, RouteEstimate, VehiclePosition } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -65,6 +68,14 @@ export default function MapPage() {
     qc.invalidateQueries({ queryKey: ["active-trip"] });
     qc.invalidateQueries({ queryKey: ["driver-missions"] });
   };
+
+  // #12 — Chauffeur SANS mission : rediriger vers son espace dédié (pas la carte de réservation).
+  const router = useRouter();
+  useEffect(() => {
+    if (isDriver && !trackingMode && !missionsLoading && !dvMission) {
+      router.replace("/driver");
+    }
+  }, [isDriver, trackingMode, missionsLoading, dvMission, router]);
 
   // Véhicule suivi représenté comme une position de flotte (pour MapView).
   const trackedPositions: VehiclePosition[] = track && track.vehicle.latitude
@@ -384,6 +395,31 @@ function TrackingPanel({
   const [endKm, setEndKm] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  // Déclaration d'incident en course
+  const [incidentOpen, setIncidentOpen] = useState(false);
+  const [incidentText, setIncidentText] = useState("");
+  const [incidentSeverity, setIncidentSeverity] = useState("minor");
+  const [incidentBusy, setIncidentBusy] = useState(false);
+  const [incidentMsg, setIncidentMsg] = useState("");
+  const dest = track.destination_point;
+  const inRoute = track.status === "in_progress" || track.status === "departed";
+
+  async function sendIncident() {
+    if (!incidentText.trim() || incidentBusy) return;
+    setIncidentBusy(true);
+    setIncidentMsg("");
+    try {
+      await api.post(`/trips/${track.trip_id}/report-incident/`, {
+        description: incidentText.trim(), severity: incidentSeverity,
+      });
+      setIncidentText(""); setIncidentOpen(false); setIncidentMsg("Incident signalé au gestionnaire.");
+      qc.invalidateQueries({ queryKey: ["incidents"] });
+    } catch (e) {
+      setIncidentMsg(apiError(e));
+    } finally {
+      setIncidentBusy(false);
+    }
+  }
 
   async function runAction(action: "end" | "close") {
     setActionBusy(true);
@@ -490,6 +526,52 @@ function TrackingPanel({
           );
         })}
       </div>
+
+      {/* Navigation externe + déclaration d'incident (pendant la course) */}
+      {inRoute && (
+        <div className="mt-3 space-y-2">
+          {dest && (
+            <div className="grid grid-cols-2 gap-2">
+              <a href={wazeUrl(dest[0], dest[1])} target="_blank" rel="noopener noreferrer"
+                 className="flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface2 px-3 py-2 text-xs font-medium text-ink hover:bg-line">
+                <ExternalLink className="h-3.5 w-3.5" /> Waze
+              </a>
+              <a href={googleMapsUrl(dest[0], dest[1])} target="_blank" rel="noopener noreferrer"
+                 className="flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface2 px-3 py-2 text-xs font-medium text-ink hover:bg-line">
+                <ExternalLink className="h-3.5 w-3.5" /> Google Maps
+              </a>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => { setIncidentOpen((o) => !o); setIncidentMsg(""); }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs font-medium text-amber-700 hover:bg-amber-500/10"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" /> Signaler un incident
+          </button>
+          {incidentOpen && (
+            <div className="space-y-2 rounded-lg border border-line p-2.5">
+              <Select value={incidentSeverity} onChange={(e) => setIncidentSeverity(e.target.value)} className="h-9 text-xs">
+                <option value="minor">Mineur</option>
+                <option value="moderate">Modéré</option>
+                <option value="major">Majeur</option>
+                <option value="critical">Critique</option>
+              </Select>
+              <textarea
+                value={incidentText}
+                onChange={(e) => setIncidentText(e.target.value)}
+                placeholder="Décrivez l'incident (panne, accident, blocage…)"
+                rows={2}
+                className="w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-xs text-ink outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20"
+              />
+              <Button size="sm" variant="danger" className="w-full" disabled={incidentBusy || !incidentText.trim()} onClick={sendIncident}>
+                {incidentBusy ? "…" : "Envoyer le signalement"}
+              </Button>
+            </div>
+          )}
+          {incidentMsg && <p className="text-[11px] text-muted">{incidentMsg}</p>}
+        </div>
+      )}
 
       {/* Actions de fin de course */}
       {track.status === "in_progress" && (

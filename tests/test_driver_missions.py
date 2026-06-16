@@ -64,6 +64,35 @@ def test_other_driver_has_no_mission(ctx):
 
 
 @pytest.mark.django_db
+def test_driver_reports_incident(ctx):
+    from apps.trips.models import TripIncident
+
+    c = APIClient()
+    c.force_authenticate(ctx["duser"])
+    r = c.post(f"/api/trips/{ctx['trip'].id}/report-incident/",
+               {"description": "Crevaison sur la voie express", "severity": "minor"}, format="json")
+    assert r.status_code == 201, r.content
+    assert TripIncident.objects.filter(trip=ctx["trip"], description__icontains="Crevaison").exists()
+
+
+@pytest.mark.django_db
+def test_non_participant_cannot_report_incident(ctx):
+    other = User.objects.create_user(email="x@k.ci", password="x", role=RoleChoices.DRIVER, subsidiary=ctx["sub"])
+    c = APIClient()
+    c.force_authenticate(other)
+    r = c.post(f"/api/trips/{ctx['trip'].id}/report-incident/", {"description": "test"}, format="json")
+    assert r.status_code in (403, 404)
+
+
+@pytest.mark.django_db
+def test_incident_requires_description(ctx):
+    c = APIClient()
+    c.force_authenticate(ctx["duser"])
+    r = c.post(f"/api/trips/{ctx['trip'].id}/report-incident/", {"description": ""}, format="json")
+    assert r.status_code == 400
+
+
+@pytest.mark.django_db
 def test_requester_cannot_start_others_mission(ctx):
     """Le demandeur n'est pas le chauffeur → ne peut pas démarrer (can_start False)."""
     c = APIClient()
