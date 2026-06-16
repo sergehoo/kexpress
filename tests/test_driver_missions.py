@@ -64,6 +64,59 @@ def test_other_driver_has_no_mission(ctx):
 
 
 @pytest.mark.django_db
+def test_driver_sees_mission_in_other_subsidiary(ctx):
+    """Flotte mutualisée : le chauffeur voit sa mission même quand la course est
+    rattachée à une AUTRE filiale que la sienne (régression : le scope filiale
+    masquait à tort les missions affectées hors filiale)."""
+    other_sub = Subsidiary.objects.create(company=ctx["sub"].company, name="Cocody", code="COC")
+    duser = ctx["duser"]
+    duser.subsidiary = other_sub
+    duser.save(update_fields=["subsidiary"])
+    c = APIClient()
+    c.force_authenticate(duser)
+    r = c.get("/api/trips/my-missions/")
+    assert r.status_code == 200, r.content
+    rows = r.json()["results"]
+    assert len(rows) == 1
+    assert rows[0]["trip_id"] == str(ctx["trip"].id)
+
+
+@pytest.mark.django_db
+def test_driver_without_subsidiary_sees_mission(ctx):
+    """Un chauffeur sans filiale rattachée voit quand même ses missions assignées
+    (régression : `TenantManager.for_user` renvoyait `none()` → aucune mission)."""
+    duser = ctx["duser"]
+    duser.subsidiary = None
+    duser.save(update_fields=["subsidiary"])
+    c = APIClient()
+    c.force_authenticate(duser)
+    r = c.get("/api/trips/my-missions/")
+    assert r.status_code == 200, r.content
+    assert len(r.json()["results"]) == 1
+
+
+@pytest.mark.django_db
+def test_driver_active_trip_cross_subsidiary(ctx):
+    """La course active du chauffeur remonte via /trips/active/ même hors de sa
+    filiale (sinon le mode suivi de /map ne s'active jamais)."""
+    from apps.core.enums import TripStatus
+
+    trip = ctx["trip"]
+    trip.status = TripStatus.IN_PROGRESS
+    trip.save(update_fields=["status"])
+    duser = ctx["duser"]
+    duser.subsidiary = None
+    duser.save(update_fields=["subsidiary"])
+    c = APIClient()
+    c.force_authenticate(duser)
+    r = c.get("/api/trips/active/")
+    assert r.status_code == 200, r.content
+    body = r.json()["trip"]
+    assert body is not None
+    assert body["id"] == str(trip.id)
+
+
+@pytest.mark.django_db
 def test_driver_reports_incident(ctx):
     from apps.trips.models import TripIncident
 
