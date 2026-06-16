@@ -16,6 +16,7 @@ import {
   Fuel,
   LayoutDashboard,
   Map,
+  Navigation,
   Radar,
   Route,
   ScrollText,
@@ -46,6 +47,7 @@ const GROUPS: Group[] = [
   {
     title: "Exploitation",
     items: [
+      { href: "/driver", label: "Mes missions", icon: Navigation },
       { href: "/reservations", label: "Réservations", icon: CalendarCheck },
       { href: "/planning-vehicles", label: "Planning véhicules", icon: CalendarRange },
       { href: "/planning-drivers", label: "Planning chauffeurs", icon: CalendarClock },

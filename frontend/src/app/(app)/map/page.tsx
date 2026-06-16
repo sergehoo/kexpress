@@ -27,7 +27,10 @@ import { api, apiError } from "@/lib/api";
 import { useFleetLive } from "@/lib/useFleetLive";
 import { useGpsTracker } from "@/lib/useGpsTracker";
 import { useTripTracking } from "@/lib/useTripTracking";
-import { useActiveTrip, useNearbyVehicles } from "@/lib/queries";
+import { useActiveTrip, useDriverMissions, useNearbyVehicles, useTripRoute } from "@/lib/queries";
+import { useAuth } from "@/lib/auth";
+import { currentMission } from "@/lib/driver";
+import { DriverMissionPanel, DriverNoMissionPanel } from "@/components/DriverMissionPanel";
 import type { RouteCalculation, RouteStep, RouteEstimate, VehiclePosition } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +51,20 @@ export default function MapPage() {
   const { positions: fleetPositions } = useFleetLive(undefined, !trackingMode);
   // GPS réel : l'appareil du demandeur alimente le tracking pendant la course.
   const gps = useGpsTracker(activeTrip?.id, activeTrip?.status === "in_progress");
+
+  // --- Espace chauffeur (mission-first) ---
+  const qc = useQueryClient();
+  const { me } = useAuth();
+  const isDriver = me?.role === "driver";
+  const { data: driverMissions, isLoading: missionsLoading } = useDriverMissions(isDriver);
+  const dvMission = isDriver ? currentMission(driverMissions) : null;
+  const dvScheduled = dvMission && dvMission.status === "scheduled" ? dvMission : null;
+  // Itinéraire prévu de la mission planifiée (pour tracé carte + estimations).
+  const { data: dvRoute } = useTripRoute(!trackingMode && dvScheduled ? dvScheduled.trip_id : undefined);
+  const onMissionStarted = () => {
+    qc.invalidateQueries({ queryKey: ["active-trip"] });
+    qc.invalidateQueries({ queryKey: ["driver-missions"] });
+  };
 
   // Véhicule suivi représenté comme une position de flotte (pour MapView).
   const trackedPositions: VehiclePosition[] = track && track.vehicle.latitude
@@ -184,24 +201,34 @@ export default function MapPage() {
     <div className="relative h-[calc(100vh-8rem)] min-h-[28rem] overflow-hidden rounded-[var(--radius-card)] border border-line">
       <MapView
         positions={positions}
-        origin={trackingMode ? null : origin ? [origin.lat, origin.lng] : null}
+        origin={trackingMode ? null : isDriver ? (dvRoute?.planned?.[0] ?? null) : origin ? [origin.lat, origin.lng] : null}
         destination={
           trackingMode
             ? track?.destination_point ?? null
-            : destination ? [destination.lat, destination.lng] : null
+            : isDriver
+              ? (dvRoute?.destination_point ?? dvScheduled?.route?.destination_point ?? null)
+              : destination ? [destination.lat, destination.lng] : null
         }
-        planned={trackingMode ? (track?.rerouted?.length ? track.rerouted : track?.planned) : estimate?.geometry}
-        actual={trackingMode ? track?.actual : undefined}
+        planned={trackingMode ? (track?.rerouted?.length ? track.rerouted : track?.planned) : isDriver ? dvRoute?.planned : estimate?.geometry}
+        actual={trackingMode ? track?.actual : isDriver ? dvRoute?.actual : undefined}
         recenterTo={
           trackingMode && track?.vehicle.latitude
             ? [Number(track.vehicle.latitude), Number(track.vehicle.longitude)]
-            : recenter
+            : isDriver
+              ? (dvRoute?.destination_point ?? null)
+              : recenter
         }
-        onMapClick={trackingMode || reserved ? undefined : onMapClick}
+        onMapClick={trackingMode || reserved || isDriver ? undefined : onMapClick}
       />
 
       {trackingMode && track ? (
         <TrackingPanel track={track} connected={trackConnected} gpsActive={gps.active} gpsError={gps.error} />
+      ) : isDriver ? (
+        dvScheduled ? (
+          <DriverMissionPanel mission={dvScheduled} route={dvRoute} onStarted={onMissionStarted} />
+        ) : missionsLoading ? null : (
+          <DriverNoMissionPanel />
+        )
       ) : (
         <div className="absolute inset-x-2 bottom-2 z-[500] rounded-2xl border border-line bg-surface/95 shadow-2xl backdrop-blur lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-4 lg:w-[24rem]">
           {/* En-tête : réductible en mobile pour libérer la carte ; toujours ouvert en desktop. */}

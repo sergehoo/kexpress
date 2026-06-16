@@ -46,6 +46,55 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
         trip = own.first() or (qs.first() if user.has_company_scope else None)
         return Response({"trip": self.get_serializer(trip).data if trip else None})
 
+    @action(detail=False, methods=["get"], url_path="my-missions")
+    def my_missions(self, request):
+        """Missions du chauffeur (ou du demandeur en conduite personnelle) : courses
+        planifiées / en cours / revenues — pour l'espace chauffeur (mission-first)."""
+        from apps.core.enums import TripStatus
+
+        user = request.user
+        active_statuses = [TripStatus.SCHEDULED, TripStatus.DEPARTED, TripStatus.IN_PROGRESS, TripStatus.RETURNED]
+        qs = (
+            self.get_queryset()
+            .filter(Q(driver__user=user) | Q(requester=user), status__in=active_statuses)
+            .select_related("route", "reservation__requester")
+            .order_by("status", "actual_departure", "created_at")
+        )
+        return Response({"results": [self._mission(t, user) for t in qs]})
+
+    def _mission(self, trip, user) -> dict:
+        """Représentation « mission » : course + infos réservation utiles au chauffeur."""
+        res = getattr(trip, "reservation", None)
+        route = getattr(trip, "route", None)
+        return {
+            "trip_id": str(trip.id),
+            "status": trip.status,
+            "status_display": trip.get_status_display(),
+            "can_start": services.can_start_trip(trip, user),
+            "destination": trip.destination,
+            "subsidiary_name": trip.subsidiary.name if trip.subsidiary_id else None,
+            "vehicle": {
+                "registration": trip.vehicle.registration if trip.vehicle_id else None,
+                "label": f"{trip.vehicle.brand} {trip.vehicle.model}".strip() if trip.vehicle_id else None,
+            } if trip.vehicle_id else None,
+            "reservation": {
+                "id": str(res.id),
+                "origin": res.origin or "",
+                "destination": res.destination,
+                "departure_time": res.departure_time.isoformat() if res.departure_time else None,
+                "estimated_return": res.estimated_return.isoformat() if res.estimated_return else None,
+                "passengers": res.passengers,
+                "purpose": res.purpose,
+                "requester_name": (res.requester.get_full_name() or res.requester.email) if res.requester_id else None,
+            } if res else None,
+            "route": {
+                "distance_km": float(route.planned_distance_km) if (route and route.planned_distance_km) else None,
+                "duration_min": route.planned_duration_min if route else None,
+                "origin_point": [float(route.origin_lat), float(route.origin_lng)] if (route and route.origin_lat is not None) else None,
+                "destination_point": [float(route.destination_lat), float(route.destination_lng)] if (route and route.destination_lat is not None) else None,
+            } if route else None,
+        }
+
     @extend_schema(request=StartTripInputSerializer, responses=TripSerializer)
     @action(detail=True, methods=["post"])
     def start(self, request, pk=None):

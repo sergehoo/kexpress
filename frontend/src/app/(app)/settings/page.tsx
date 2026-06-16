@@ -346,7 +346,7 @@ const KC_BADGE: Record<string, { label: string; cls: string }> = {
   synced: { label: "Synchronisé", cls: "bg-emerald-500/10 text-emerald-600 ring-emerald-500/20" },
   error: { label: "Erreur", cls: "bg-rose-500/10 text-rose-600 ring-rose-500/20" },
   pending: { label: "À synchroniser", cls: "bg-amber-500/10 text-amber-600 ring-amber-500/20" },
-  disabled: { label: "Hors Keycloak", cls: "bg-surface2 text-muted ring-line" },
+  disabled: { label: "Hors K-access", cls: "bg-surface2 text-muted ring-line" },
 };
 
 function KcBadge({ status, error }: { status?: string; error?: string }) {
@@ -486,7 +486,7 @@ function UsersPanel() {
                     <th className="px-5 py-3 font-medium">Filiale</th>
                     <th className="px-5 py-3 font-medium">Créé le</th>
                     <th className="px-5 py-3 font-medium">Statut</th>
-                    <th className="px-5 py-3 font-medium">Keycloak</th>
+                    <th className="px-5 py-3 font-medium">K-access</th>
                     <th className="px-5 py-3 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
@@ -530,20 +530,20 @@ function UsersPanel() {
                             <IconBtn title="Définir / réinitialiser le mot de passe (local)" onClick={() => { setError(""); setModal({ type: "set-password", row: u }); }}>
                               <KeyRound className="h-4 w-4" />
                             </IconBtn>
-                            {/* --- Actions Keycloak --- */}
-                            <IconBtn title="Synchroniser avec Keycloak" disabled={busyId === u.id}
-                              onClick={() => run("Synchronisé avec Keycloak.", u.id, () => api.post(`/employees/${u.id}/keycloak-sync/`, {}))}>
+                            {/* --- Actions K-access --- */}
+                            <IconBtn title="Synchroniser avec K-access" disabled={busyId === u.id}
+                              onClick={() => run("Synchronisé avec K-access.", u.id, () => api.post(`/employees/${u.id}/keycloak-sync/`, {}))}>
                               <RefreshCw className="h-4 w-4" />
                             </IconBtn>
-                            <IconBtn title="Envoyer l'email d'activation (Keycloak)" disabled={busyId === u.id}
+                            <IconBtn title="Envoyer l'email d'activation (K-access)" disabled={busyId === u.id}
                               onClick={() => run("Email d'activation envoyé.", u.id, () => api.post(`/employees/${u.id}/keycloak-activation-email/`, {}))}>
                               <MailCheck className="h-4 w-4" />
                             </IconBtn>
-                            <IconBtn title="Réinitialiser le mot de passe (email Keycloak)" disabled={busyId === u.id}
+                            <IconBtn title="Réinitialiser le mot de passe (email K-access)" disabled={busyId === u.id}
                               onClick={() => run("Email de réinitialisation envoyé.", u.id, () => api.post(`/employees/${u.id}/keycloak-reset-password/`, {}))}>
                               <RotateCcw className="h-4 w-4" />
                             </IconBtn>
-                            <IconBtn title="Historique des synchronisations Keycloak"
+                            <IconBtn title="Historique des synchronisations K-access"
                               onClick={() => setModal({ type: "kc-history", row: u })}>
                               <History className="h-4 w-4" />
                             </IconBtn>
@@ -661,7 +661,7 @@ function KcHistoryModal({ user, onClose }: { user: Employee; onClose: () => void
   }, [user.id]);
 
   return (
-    <Modal open title={`Synchronisations Keycloak — ${user.full_name || user.email}`} onClose={onClose}>
+    <Modal open title={`Synchronisations K-access — ${user.full_name || user.email}`} onClose={onClose}>
       <div className="mb-3 flex items-center gap-2 text-xs text-muted">
         <KcBadge status={user.keycloak_sync_status} error={user.keycloak_sync_error} />
         {user.keycloak_synced_at && <span>· dernière synchro {formatDate(user.keycloak_synced_at, true)}</span>}

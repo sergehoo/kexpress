@@ -11,6 +11,7 @@ import type {
   AlertsResponse,
   AuditEntry,
   Driver,
+  DriverMission,
   Employee,
   Expense,
   FuelLog,
@@ -23,6 +24,7 @@ import type {
   Paginated,
   Reservation,
   Subsidiary,
+  SubsidiaryStats,
   Trip,
   TripRouteData,
   Vehicle,
@@ -100,6 +102,29 @@ export function useSubsidiaries() {
       return data.results;
     },
     staleTime: 5 * 60_000,
+  });
+}
+
+export function useSubsidiary(id?: string | null) {
+  return useQuery({
+    queryKey: ["subsidiary", id],
+    enabled: !!id,
+    queryFn: async () => {
+      const { data } = await api.get<Subsidiary>(`/subsidiaries/${id}/`);
+      return data;
+    },
+  });
+}
+
+export function useSubsidiaryStats(id?: string | null) {
+  return useQuery({
+    queryKey: ["subsidiary-stats", id],
+    enabled: !!id,
+    queryFn: async () => {
+      const { data } = await api.get<SubsidiaryStats>(`/subsidiaries/${id}/stats/`);
+      return data;
+    },
+    staleTime: 60_000,
   });
 }
 
@@ -408,6 +433,19 @@ export function useActiveTrip() {
     queryFn: async () => {
       const { data } = await api.get<{ trip: Trip | null }>("/trips/active/");
       return data.trip;
+    },
+    refetchInterval: 20_000,
+  });
+}
+
+/** Missions du chauffeur connecté (planifiées / en cours / revenues) — espace chauffeur. */
+export function useDriverMissions(enabled = true) {
+  return useQuery({
+    queryKey: ["driver-missions"],
+    enabled,
+    queryFn: async () => {
+      const { data } = await api.get<{ results: DriverMission[] }>("/trips/my-missions/");
+      return data.results;
     },
     refetchInterval: 20_000,
   });

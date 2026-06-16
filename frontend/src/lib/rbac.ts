@@ -22,6 +22,7 @@ export const PAGE_ROLES: Record<string, Role[]> = {
   "/fleet-control": MANAGERS,
   "/map": [...MANAGERS, "department_manager", "requester", "driver"],
   // Exploitation
+  "/driver": ["driver", ...ADMINS],
   "/reservations": [...MANAGERS, "department_manager", "requester", "auditor"],
   "/planning-vehicles": [...MANAGERS, "department_manager"],
   "/planning-drivers": MANAGERS,

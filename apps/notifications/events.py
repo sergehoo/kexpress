@@ -122,5 +122,6 @@ def notify_driver_assigned(reservation):
         NotificationType.DRIVER_ASSIGNED,
         title=f"Vous êtes affecté à une course — {reservation.destination}",
         message=driver_assignment_body(reservation),
-        link=f"/reservations/{reservation.id}",
+        # Deep-link vers l'espace chauffeur (mission-first), pas le détail réservation.
+        link="/map",
     )

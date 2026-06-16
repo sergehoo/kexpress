@@ -75,9 +75,38 @@ export interface Subsidiary {
   name: string;
   code: string;
   city: string;
+  address?: string;
+  email?: string;
+  phone?: string;
   company: string;
   company_name: string;
   is_active: boolean;
+  // Compteurs compacts ajoutés par l'API liste (pour les cartes)
+  stats?: {
+    vehicles: number;
+    vehicles_available: number;
+    drivers: number;
+    trips_in_progress: number;
+    reservations_pending: number;
+  };
+}
+
+export interface SubsidiaryStats {
+  subsidiary: Subsidiary;
+  period: string;
+  vehicles: { total: number; available: number; on_trip: number; maintenance: number; out_of_service: number };
+  drivers: { total: number; available: number };
+  reservations: { today: number; month: number; validated: number; pending: number; rejected: number };
+  trips: { in_progress: number; completed: number; total: number; distance_km: number };
+  costs: {
+    fuel_liters: number;
+    can_see_costs: boolean;
+    fuel?: number;
+    maintenance?: number;
+    expenses?: number;
+    total?: number;
+  };
+  alerts: { immobilized: number; insurance_expiring: number; inspection_expiring: number };
 }
 
 export interface NotificationItem {
@@ -236,6 +265,33 @@ export interface LiveAlertsResponse {
   count: number;
   counts: Record<LiveAlertKind, number>;
   results: LiveAlert[];
+}
+
+// Mission chauffeur (espace dédié, mission-first) — /trips/my-missions/
+export interface DriverMission {
+  trip_id: string;
+  status: string;
+  status_display: string;
+  can_start: boolean;
+  destination: string;
+  subsidiary_name: string | null;
+  vehicle: { registration: string | null; label: string | null } | null;
+  reservation: {
+    id: string;
+    origin: string;
+    destination: string;
+    departure_time: string | null;
+    estimated_return: string | null;
+    passengers: number | null;
+    purpose: string;
+    requester_name: string | null;
+  } | null;
+  route: {
+    distance_km: number | null;
+    duration_min: number | null;
+    origin_point: [number, number] | null;
+    destination_point: [number, number] | null;
+  } | null;
 }
 
 export interface VehiclePosition {
