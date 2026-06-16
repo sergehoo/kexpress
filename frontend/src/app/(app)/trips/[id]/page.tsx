@@ -127,7 +127,7 @@ export default function TripDetailPage() {
       <div className="grid gap-4 lg:grid-cols-5">
         {/* Carte de l'itinéraire */}
         <Card className="lg:col-span-3">
-          <div className="relative h-[22rem] overflow-hidden rounded-xl">
+          <div className="relative isolate h-[22rem] overflow-hidden rounded-xl">
             <MapView
               positions={[]}
               planned={r?.planned}

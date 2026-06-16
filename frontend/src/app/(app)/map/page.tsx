@@ -207,7 +207,7 @@ export default function MapPage() {
   }
 
   return (
-    <div className="relative h-[calc(100vh-8rem)] min-h-[28rem] overflow-hidden rounded-[var(--radius-card)] border border-line">
+    <div className="relative isolate h-[calc(100vh-8rem)] min-h-[28rem] overflow-hidden rounded-[var(--radius-card)] border border-line">
       <MapView
         positions={positions}
         origin={trackingMode ? null : isDriver ? (dvRoute?.planned?.[0] ?? null) : origin ? [origin.lat, origin.lng] : null}

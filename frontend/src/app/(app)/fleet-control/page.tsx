@@ -336,7 +336,7 @@ export default function FleetControlPage() {
           <div
             ref={mapWrapRef}
             className={cn(
-              "kx-mapfs relative overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface shadow-sm",
+              "kx-mapfs relative isolate overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface shadow-sm",
               isFullscreen ? "h-screen" : expanded ? "h-[86vh]" : "h-[70vh]",
             )}
           >
