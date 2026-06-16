@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -71,13 +70,10 @@ export default function MapPage() {
     qc.invalidateQueries({ queryKey: ["driver-missions"] });
   };
 
-  // #12 — Chauffeur SANS mission : rediriger vers son espace dédié (pas la carte de réservation).
-  const router = useRouter();
-  useEffect(() => {
-    if (isDriver && !trackingMode && !missionsLoading && !dvMission) {
-      router.replace("/driver");
-    }
-  }, [isDriver, trackingMode, missionsLoading, dvMission, router]);
+  // La carte temps réel reste TOUJOURS accessible au chauffeur. Selon son état, le panneau
+  // adapté s'affiche en surimpression (mission planifiée / course en cours / aucune mission) —
+  // le chauffeur ne voit jamais le formulaire de réservation (réservé aux demandeurs).
+  // L'espace dédié reste accessible via la barre latérale (« Mes missions ») et les liens des panneaux.
 
   // Véhicule suivi représenté comme une position de flotte (pour MapView).
   const trackedPositions: VehiclePosition[] = track && track.vehicle.latitude
