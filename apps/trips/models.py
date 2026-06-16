@@ -2,11 +2,34 @@
 from django.db import models
 
 from apps.core.enums import IncidentSeverity, TripStatus
-from apps.core.models import TenantScopedModel, TimeStampedModel
+from apps.core.models import TenantManager, TenantScopedModel, TimeStampedModel
+
+
+class TripManager(TenantManager):
+    """Périmètre des courses : filiale + courses « miennes ».
+
+    En plus du périmètre filiale standard (`for_user`), un utilisateur accède
+    TOUJOURS aux courses dont il est le **chauffeur affecté** ou le **demandeur**,
+    quelle que soit la filiale. Indispensable avec la flotte mutualisée (un chauffeur
+    peut être affecté hors de sa filiale) et pour les chauffeurs sans filiale, que
+    `for_user` filtrerait à tort (jusqu'à `none()`). Le filtre de propriété
+    (`driver__user` / `requester`) constitue lui-même la sécurité.
+    """
+
+    def accessible_to(self, user):
+        scoped = self.for_user(user)
+        if not user or not user.is_authenticated:
+            return scoped
+        owned = self.get_queryset().filter(
+            models.Q(driver__user=user) | models.Q(requester=user)
+        )
+        return (scoped | owned).distinct()
 
 
 class Trip(TenantScopedModel):
     """Course générée à partir d'une réservation validée."""
+
+    objects = TripManager()
 
     reservation = models.OneToOneField(
         "reservations.Reservation", on_delete=models.CASCADE,

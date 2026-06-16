@@ -37,17 +37,16 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     def _ok(self, trip):
         return Response(self.get_serializer(trip).data, status=status.HTTP_200_OK)
 
-    def _owned_qs(self):
-        """Courses SANS restriction de filiale, avec relations préchargées.
+    def get_queryset(self):
+        """Courses accessibles : périmètre filiale ÉLARGI aux courses dont l'utilisateur
+        est le chauffeur affecté ou le demandeur (cf. `TripManager.accessible_to`).
 
-        Pour les vues « mes courses » (chauffeur / demandeur), le filtre de propriété
-        (`driver__user=user` ou `requester=user`) constitue lui-même la sécurité. Le
-        périmètre filiale ne doit PAS s'appliquer ici : avec la flotte mutualisée, un
-        chauffeur peut être affecté à une mission hors de sa filiale, et certains
-        chauffeurs n'ont pas de filiale rattachée — `TenantManager.for_user` les
-        filtrerait à tort (jusqu'à `none()`), masquant leurs missions assignées.
+        Cela vaut aussi pour `get_object` — donc un chauffeur peut démarrer / terminer /
+        clôturer / déclarer un incident sur SA course (et en voir le détail) même si elle
+        est rattachée à une autre filiale (flotte mutualisée) ou s'il n'a pas de filiale,
+        au lieu de recevoir un 404 « Course introuvable ».
         """
-        return Trip.objects.select_related(
+        return Trip.objects.accessible_to(self.request.user).select_related(
             "subsidiary", "vehicle", "driver", "requester", "reservation",
         )
 
@@ -57,18 +56,16 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
         user = request.user
         # `returned` reste actif pour permettre la clôture depuis la carte.
         statuses = ["in_progress", "returned"]
-        # Sa propre course : visible quelle que soit la filiale (flotte mutualisée).
-        trip = (
-            self._owned_qs()
+        own = (
+            self.get_queryset()
             .filter(Q(requester=user) | Q(driver__user=user), status__in=statuses)
             .order_by("-actual_departure")
             .first()
         )
-        if not trip and user.has_company_scope:
-            # Gestionnaire : à défaut, 1ère course active de son périmètre.
-            trip = (
-                self.get_queryset().filter(status__in=statuses).order_by("-actual_departure").first()
-            )
+        trip = own or (
+            self.get_queryset().filter(status__in=statuses).order_by("-actual_departure").first()
+            if user.has_company_scope else None
+        )
         return Response({"trip": self.get_serializer(trip).data if trip else None})
 
     @action(detail=False, methods=["get"], url_path="my-missions")
@@ -80,7 +77,7 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
         user = request.user
         active_statuses = [TripStatus.SCHEDULED, TripStatus.DEPARTED, TripStatus.IN_PROGRESS, TripStatus.RETURNED]
         qs = (
-            self._owned_qs()
+            self.get_queryset()
             .filter(Q(driver__user=user) | Q(requester=user), status__in=active_statuses)
             .select_related("route", "reservation__requester")
             .order_by("status", "actual_departure", "created_at")

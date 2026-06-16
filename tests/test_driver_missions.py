@@ -117,6 +117,47 @@ def test_driver_active_trip_cross_subsidiary(ctx):
 
 
 @pytest.mark.django_db
+def test_driver_can_start_mission_cross_subsidiary(ctx):
+    """Régression directe du bug remonté : « Démarrer la course » renvoyait 404
+    (« Course introuvable ») car `get_object` restait scopé à la filiale du chauffeur.
+    Le chauffeur affecté doit pouvoir démarrer SA course hors de sa filiale."""
+    duser = ctx["duser"]
+    duser.subsidiary = None
+    duser.save(update_fields=["subsidiary"])
+    c = APIClient()
+    c.force_authenticate(duser)
+    r = c.post(f"/api/trips/{ctx['trip'].id}/start/", {}, format="json")
+    assert r.status_code == 200, r.content
+    assert r.json()["status"] == "in_progress"
+
+
+@pytest.mark.django_db
+def test_driver_can_retrieve_own_trip_cross_subsidiary(ctx):
+    """Le détail d'une course assignée reste accessible au chauffeur hors filiale."""
+    duser = ctx["duser"]
+    duser.subsidiary = None
+    duser.save(update_fields=["subsidiary"])
+    c = APIClient()
+    c.force_authenticate(duser)
+    r = c.get(f"/api/trips/{ctx['trip'].id}/")
+    assert r.status_code == 200, r.content
+    assert r.json()["id"] == str(ctx["trip"].id)
+
+
+@pytest.mark.django_db
+def test_other_driver_cannot_start_mission(ctx):
+    """Isolation : un chauffeur non affecté ne peut pas démarrer la course d'un autre
+    (la course n'est pas dans son périmètre → 404, jamais 200)."""
+    other = User.objects.create_user(email="ch3@k.ci", password="x", role=RoleChoices.DRIVER, subsidiary=ctx["sub"])
+    c = APIClient()
+    c.force_authenticate(other)
+    r = c.post(f"/api/trips/{ctx['trip'].id}/start/", {}, format="json")
+    assert r.status_code in (403, 404)
+    ctx["trip"].refresh_from_db()
+    assert ctx["trip"].status == "scheduled"  # inchangée
+
+
+@pytest.mark.django_db
 def test_driver_reports_incident(ctx):
     from apps.trips.models import TripIncident
 

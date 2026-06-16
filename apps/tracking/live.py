@@ -327,7 +327,7 @@ def record_position(
     Retourne {"ok": bool, "detail": str}.
     """
     trip = (
-        Trip.objects.for_user(user).filter(pk=trip_id)
+        Trip.objects.accessible_to(user).filter(pk=trip_id)
         .select_related("vehicle", "subsidiary", "driver").first()
     )
     if trip is None:
@@ -483,7 +483,7 @@ def trip_tracking(user, trip_id) -> dict | None:
     `user=None` : pas de scoping (réservé au diffuseur ; l'accès est déjà contrôlé à la
     connexion WebSocket avant de rejoindre le groupe).
     """
-    base = Trip.objects.all() if user is None else Trip.objects.for_user(user)
+    base = Trip.objects.all() if user is None else Trip.objects.accessible_to(user)
     trip = (
         base.filter(pk=trip_id)
         .select_related("vehicle", "driver", "reservation", "route").first()
@@ -529,7 +529,7 @@ def trip_route(user, trip_id) -> dict | None:
     """Itinéraire prévu (tracé routier) + trace GPS réelle + distance/progression/vitesse.
 
     `user=None` : pas de scoping (utilisé par le diffuseur temps réel)."""
-    base = Trip.objects.all() if user is None else Trip.objects.for_user(user)
+    base = Trip.objects.all() if user is None else Trip.objects.accessible_to(user)
     trip = (
         base.filter(pk=trip_id)
         .select_related("route", "vehicle", "driver").first()
@@ -597,7 +597,7 @@ def trip_replay(user, trip_id) -> dict | None:
     Renvoie les points ordonnés dans le temps : [lat, lng, t (ISO), speed|None].
     Sous-échantillonné à REPLAY_MAX_POINTS pour les très longs trajets.
     """
-    base = Trip.objects.all() if user is None else Trip.objects.for_user(user)
+    base = Trip.objects.all() if user is None else Trip.objects.accessible_to(user)
     trip = base.filter(pk=trip_id).select_related("route", "vehicle").first()
     if trip is None:
         return None
