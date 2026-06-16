@@ -214,10 +214,10 @@ export interface TripTracking {
   destination: string;
   driver_name: string | null;
   vehicle: { registration: string; latitude: string | null; longitude: string | null; speed_kmh: string | null };
-  eta_min: number;
+  eta_min: number | null;
   distance_km: number;
   traveled_km: number;
-  remaining_km: number;
+  remaining_km: number | null;
   progress: number;
   planned: [number, number][];
   actual: [number, number][];

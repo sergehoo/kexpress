@@ -7,11 +7,24 @@ Sortie déjà sérialisable JSON. Partagé entre le consumer WebSocket et l'API 
 """
 from __future__ import annotations
 
+import logging
 import math
 from datetime import timedelta
 from decimal import Decimal
 
 from django.utils import timezone
+
+logger = logging.getLogger("apps.tracking.live")
+
+# Rapport distance routière / distance à vol d'oiseau (approx. urbain/interurbain CI).
+# Sert d'estimation de la distance restante quand l'itinéraire routier n'est pas calculable.
+ROAD_WINDING_FACTOR = 1.3
+# En deçà de ce rayon (à vol d'oiseau, km), la course est considérée arrivée → ETA 0.
+ARRIVAL_RADIUS_KM = 0.08
+# Vitesse instantanée minimale jugée fiable pour l'ETA. En deçà (arrêt, ralenti transitoire,
+# bruit GPS), on retombe sur la vitesse de référence pour éviter une ETA aberrante
+# (un feu rouge ne doit pas faire exploser le temps restant).
+ETA_REF_MIN_SPEED_KMH = 5.0
 
 from apps.tracking.models import TripLocationPoint, TripTrackingSession, VehicleLocation
 from apps.tracking.osrm import road_route
@@ -48,7 +61,8 @@ def _haversine(a, b):
         math.sin(dlat / 2) ** 2
         + math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlng / 2) ** 2
     )
-    return 2 * r * math.asin(math.sqrt(h))
+    # min(1.0, …) : garde-fou numérique (arrondi flottant pour points quasi-antipodaux).
+    return 2 * r * math.asin(min(1.0, math.sqrt(h)))
 
 
 def _point_to_polyline_m(lat, lng, polyline) -> float | None:
@@ -261,6 +275,131 @@ def ensure_geometry(route):
         "estimated_fuel_l", "updated_at",
     ])
     return route.geometry
+
+
+def ensure_trip_route(trip, allow_provision=True):
+    """Provisionne un `TripRoute` exploitable (coordonnées + distance/durée/tracé) pour la
+    course. Le flux de réservation ne crée pas d'itinéraire ; on le fabrique ici à la volée
+    en géocodant l'origine/destination de la réservation, puis en calculant l'itinéraire
+    (OSRM, avec repli à vol d'oiseau si OSRM est indisponible).
+
+    Idempotent (ne refait rien si l'itinéraire est déjà complet) et tolérant aux pannes
+    (géocodage / OSRM) : ne lève jamais. Renvoie le `TripRoute` ou None (destination
+    non géocodable). Indispensable pour l'ETA / distance restante / progression du suivi.
+
+    `allow_provision=False` : aucun appel réseau (géocodage/OSRM). Utilisé par le diffuseur
+    temps réel (boucle sur toute la flotte) pour ne jamais bloquer le fan-out sur une requête
+    Nominatim lente — le provisionnement se fait via les vues par course (WS/REST).
+    """
+    from django.conf import settings
+
+    from apps.tracking.models import TripRoute
+
+    route = getattr(trip, "route", None)
+    if route is not None and route.planned_distance_km and route.destination_lat is not None:
+        return route  # déjà complet : aucun appel réseau
+    # Provisionnement réseau non sollicité (diffuseur flotte) ou désactivé (tests / dégradé).
+    if not allow_provision or not getattr(settings, "TRACKING_GEOCODE_ROUTES", True):
+        return route
+    try:
+        if route is None:
+            from apps.maps.geocoding import geocode_one
+
+            res = getattr(trip, "reservation", None)
+            dest_label = ((res.destination if res else None) or trip.destination or "").strip()
+            dest = geocode_one(dest_label)
+            if not dest:
+                return None  # destination introuvable : pas d'itinéraire possible
+            origin_label = ((res.origin if res else "") or "").strip()
+            origin = geocode_one(origin_label) if origin_label else None
+            # get_or_create : tolère une création concurrente (TripRoute.trip est OneToOne)
+            # — savepoint interne + renvoi de l'itinéraire « gagnant » au lieu de planter.
+            route, _ = TripRoute.objects.get_or_create(
+                trip=trip,
+                defaults=dict(
+                    origin_label=origin_label[:255],
+                    origin_lat=origin[0] if origin else None,
+                    origin_lng=origin[1] if origin else None,
+                    destination_label=dest_label[:255],
+                    destination_lat=dest[0],
+                    destination_lng=dest[1],
+                ),
+            )
+        if not route.geometry:
+            ensure_geometry(route)  # une seule fois : évite de rappeler OSRM à chaque poll
+        # Repli à vol d'oiseau si OSRM n'a pas fourni de distance (évite de recalculer
+        # à chaque rafraîchissement et garantit une ETA exploitable hors ligne).
+        if not route.planned_distance_km and route.origin_lat is not None and route.destination_lat is not None:
+            km = round(_haversine(
+                [float(route.origin_lat), float(route.origin_lng)],
+                [float(route.destination_lat), float(route.destination_lng)],
+            ) * ROAD_WINDING_FACTOR, 1)
+            if km > 0:
+                route.planned_distance_km = Decimal(str(km))
+                route.planned_duration_min = max(1, round(km / AVG_SPEED_KMH * 60))
+                route.save(update_fields=["planned_distance_km", "planned_duration_min", "updated_at"])
+        return route
+    except Exception:
+        logger.warning("ensure_trip_route: échec pour trip=%s", getattr(trip, "pk", None), exc_info=True)
+        return TripRoute.objects.filter(trip=trip).first()  # refetch DB (pas le cache périmé)
+
+
+def _live_metrics(rt: dict, loc, speed) -> dict:
+    """ETA / distance restante / parcourue / progression du suivi temps réel.
+
+    La distance restante privilégie la mesure « live » (position GPS courante → destination),
+    qui reflète la réalité et gère proprement l'arrivée — y compris quand la distance parcourue
+    cumulée sous-estime le trajet (segments GPS aberrants exclus). Repli sur (prévu − parcouru)
+    si la position courante est inconnue. `remaining_km` et `eta_min` valent None (et non 0)
+    quand aucune référence n'est disponible, pour ne pas faire croire à une arrivée.
+    """
+    planned = float(rt.get("distance_km") or 0.0)
+    traveled = float(rt.get("traveled_km") or 0.0)
+    dest = rt.get("destination_point")
+    cur = None
+    if loc is not None and getattr(loc, "latitude", None) is not None and loc.longitude is not None:
+        cur = [float(loc.latitude), float(loc.longitude)]
+
+    remaining = None
+    arrived = False
+    if cur and dest:
+        crow = _haversine(cur, dest)  # distance à vol d'oiseau (km)
+        if crow <= ARRIVAL_RADIUS_KM:
+            remaining, arrived = 0.0, True
+        else:
+            # Facteur de sinuosité au-delà du dernier km ; en approche la ligne droite suffit.
+            remaining = round(crow * (ROAD_WINDING_FACTOR if crow > 1.0 else 1.0), 2)
+    elif planned > 0:
+        remaining = round(max(0.0, planned - traveled), 2)
+        arrived = remaining <= ARRIVAL_RADIUS_KM
+
+    # Progression : fraction accomplie sur une base de distance cohérente.
+    total = planned if planned > 0 else ((traveled + remaining) if remaining is not None else 0.0)
+    if arrived:
+        progress = 1.0
+    elif total > 0 and remaining is not None:
+        progress = min(1.0, max(0.0, (total - remaining) / total))
+    elif total > 0:
+        progress = min(1.0, traveled / total)
+    else:
+        progress = 0.0
+
+    # ETA = distance restante / vitesse effective (réelle si en mouvement franc, sinon réf.).
+    ref_speed = float(speed) if (speed is not None and float(speed) >= ETA_REF_MIN_SPEED_KMH) else AVG_SPEED_KMH
+    if arrived:
+        eta = 0
+    elif remaining is not None and remaining > 0:
+        eta = max(1, math.ceil(remaining / ref_speed * 60))  # ceil : ne jamais sous-estimer
+    else:
+        dur = rt.get("duration_min")
+        eta = max(1, math.ceil(dur * (1 - progress))) if dur else None
+
+    return {
+        "eta_min": eta,
+        "remaining_km": remaining,  # None si inconnu (cohérent avec eta_min)
+        "traveled_km": round(traveled, 2),
+        "progress": round(progress, 3),
+    }
 
 
 # --- Ingestion des positions réelles -------------------------------------
@@ -477,7 +616,7 @@ def compute_all_positions() -> list[dict]:
 AVG_SPEED_KMH = 28.0
 
 
-def trip_tracking(user, trip_id) -> dict | None:
+def trip_tracking(user, trip_id, allow_provision=True) -> dict | None:
     """Instantané de suivi d'une course : position véhicule réelle, état, ETA, itinéraire.
 
     `user=None` : pas de scoping (réservé au diffuseur ; l'accès est déjà contrôlé à la
@@ -494,11 +633,10 @@ def trip_tracking(user, trip_id) -> dict | None:
     loc = VehicleLocation.objects.filter(vehicle=trip.vehicle).first()
     speed = _fresh_speed(loc)
 
-    rt = trip_route(user, trip_id) or {}
-    remaining = rt.get("remaining_km", 0.0)
-    # ETA depuis la vitesse réelle courante, sinon vitesse urbaine de référence.
-    ref_speed = float(speed) if (speed is not None and float(speed) > 5) else AVG_SPEED_KMH
-    eta = max(1, round(remaining / ref_speed * 60)) if remaining else 0
+    rt = trip_route(user, trip_id, allow_provision=allow_provision) or {}
+    # ETA / distances / progression robustes (cf. _live_metrics) : tiennent même sans
+    # itinéraire prévu, en s'appuyant sur la position GPS courante et la destination.
+    m = _live_metrics(rt, loc, speed)
 
     return {
         "trip_id": str(trip.id),
@@ -512,11 +650,11 @@ def trip_tracking(user, trip_id) -> dict | None:
             "longitude": str(loc.longitude) if loc else None,
             "speed_kmh": str(speed) if speed is not None else None,
         },
-        "eta_min": eta,
+        "eta_min": m["eta_min"],
         "distance_km": rt.get("distance_km", 0.0),
-        "traveled_km": rt.get("traveled_km", 0.0),
-        "remaining_km": remaining,
-        "progress": rt.get("progress", 0.0),
+        "traveled_km": m["traveled_km"],
+        "remaining_km": m["remaining_km"],
+        "progress": m["progress"],
         "planned": rt.get("planned", []),
         "rerouted": rt.get("rerouted", []),
         "reroute_count": rt.get("reroute_count", 0),
@@ -525,19 +663,20 @@ def trip_tracking(user, trip_id) -> dict | None:
     }
 
 
-def trip_route(user, trip_id) -> dict | None:
+def trip_route(user, trip_id, allow_provision=True) -> dict | None:
     """Itinéraire prévu (tracé routier) + trace GPS réelle + distance/progression/vitesse.
 
     `user=None` : pas de scoping (utilisé par le diffuseur temps réel)."""
     base = Trip.objects.all() if user is None else Trip.objects.accessible_to(user)
     trip = (
         base.filter(pk=trip_id)
-        .select_related("route", "vehicle", "driver").first()
+        .select_related("route", "vehicle", "driver", "reservation").first()
     )
     if trip is None:
         return None
 
-    route = getattr(trip, "route", None)
+    # Provisionne l'itinéraire (géocodage origine/destination + OSRM) s'il manque — idempotent.
+    route = ensure_trip_route(trip, allow_provision=allow_provision)
     planned = ensure_geometry(route) if route else []
     distance_km = float(route.planned_distance_km) if (route and route.planned_distance_km) else 0.0
     duration_min = route.planned_duration_min if route else None

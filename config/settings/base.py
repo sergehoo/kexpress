@@ -283,6 +283,10 @@ KBOT_MAX_TOKENS = env.int("KBOT_MAX_TOKENS", default=600)
 OSRM_URL = env("OSRM_URL", default="https://router.project-osrm.org")
 NOMINATIM_URL = env("NOMINATIM_URL", default="https://nominatim.openstreetmap.org")
 MAP_COST_PER_KM = env.float("MAP_COST_PER_KM", default=350.0)
+# Provisionnement automatique de l'itinéraire d'une course (géocodage Nominatim + OSRM)
+# à la volée pour l'ETA / distance restante du suivi. Désactivable (réseau indisponible) ;
+# les tests le forcent à False (cf. tests/conftest.py).
+TRACKING_GEOCODE_ROUTES = env.bool("TRACKING_GEOCODE_ROUTES", default=True)
 
 # Notifications email (canal optionnel ; backend console en local, SMTP via EMAIL_* env)
 NOTIFY_EMAIL_ENABLED = env.bool("NOTIFY_EMAIL_ENABLED", default=False)

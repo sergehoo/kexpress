@@ -14,9 +14,12 @@ import {
   CornerUpLeft,
   CornerUpRight,
   ExternalLink,
+  Flag,
+  Gauge,
   LocateFixed,
   MapPin,
   Navigation,
+  Route,
   RotateCw,
   Sparkles,
   Users,
@@ -468,16 +471,33 @@ function TrackingPanel({
       </p>
 
       {/* ETA + progression */}
-      <div className="rounded-xl bg-gradient-to-br from-brand-500/10 to-transparent p-4 text-center">
-        <p className="text-3xl font-bold text-ink">{track.eta_min} min</p>
-        <p className="text-xs text-muted">arrivée estimée à {track.destination}</p>
-        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-surface2">
-          <div className="h-full rounded-full bg-brand-500 transition-all duration-700" style={{ width: `${Math.round(track.progress * 100)}%` }} />
+      <div className="rounded-xl bg-gradient-to-br from-brand-500/10 to-transparent p-4">
+        <div className="text-center">
+          <p className="text-4xl font-bold leading-none text-ink">
+            {track.eta_min != null ? track.eta_min : "—"}
+            <span className="ml-1 text-base font-medium text-muted">min</span>
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {track.eta_min != null ? (
+              <>arrivée estimée à <span className="font-medium text-ink">{track.destination}</span></>
+            ) : (
+              "estimation de l'arrivée en cours…"
+            )}
+          </p>
         </div>
-        <div className="mt-1 flex justify-between text-[11px] text-muted">
-          <span>{track.traveled_km} km parcourus</span>
-          <span>{track.remaining_km} km restants</span>
+        <div className="mt-3">
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface2">
+            <div className="h-full rounded-full bg-brand-500 transition-all duration-700" style={{ width: `${Math.round(track.progress * 100)}%` }} />
+          </div>
+          <p className="mt-1 text-right text-[11px] font-semibold text-brand-600">{Math.round(track.progress * 100)} % du trajet</p>
         </div>
+      </div>
+
+      {/* Mesures clés : distance parcourue / restante / vitesse du conducteur */}
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <Metric icon={Route} tone="text-emerald-600" value={fmtKm(track.traveled_km)} unit="km" label="Parcouru" />
+        <Metric icon={Flag} tone="text-brand-600" value={fmtKm(track.remaining_km)} unit="km" label="Restant" />
+        <Metric icon={Gauge} tone="text-sky-600" value={fmtSpeed(track.vehicle.speed_kmh)} unit="km/h" label="Vitesse" />
       </div>
 
       {/* Navigation virage par virage (#3D) — pour le chauffeur en course */}
@@ -502,7 +522,7 @@ function TrackingPanel({
         <span className="ml-auto text-right text-xs text-muted">
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            {track.vehicle.speed_kmh != null ? `${track.vehicle.speed_kmh} km/h` : "vitesse —"}
+            {fmtSpeed(track.vehicle.speed_kmh) === "—" ? "vitesse —" : `${fmtSpeed(track.vehicle.speed_kmh)} km/h`}
           </span>
         </span>
       </div>
@@ -627,6 +647,45 @@ function stepIcon(step: RouteStep) {
 
 function fmtDist(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+/** Distance en km, 1 décimale, format FR ; « — » si indisponible. */
+function fmtKm(km: number | null | undefined): string {
+  if (km == null) return "—";
+  return (Math.round(km * 10) / 10).toLocaleString("fr-FR");
+}
+
+/** Vitesse instantanée arrondie ; « — » si position GPS non récente. */
+function fmtSpeed(speed: string | null | undefined): string {
+  if (speed == null || speed === "") return "—";
+  const n = Number(speed);
+  return Number.isFinite(n) ? String(Math.round(n)) : "—";
+}
+
+/** Tuile de mesure clé du suivi (parcouru / restant / vitesse). */
+function Metric({
+  icon: Icon,
+  value,
+  unit,
+  label,
+  tone,
+}: {
+  icon: React.ElementType;
+  value: string;
+  unit: string;
+  label: string;
+  tone: string;
+}) {
+  return (
+    <div className="rounded-xl border border-line bg-surface2/60 p-2.5 text-center">
+      <Icon className={cn("mx-auto h-4 w-4", tone)} />
+      <p className="mt-1 text-lg font-bold leading-none text-ink">
+        {value}
+        <span className="text-[11px] font-medium text-muted"> {unit}</span>
+      </p>
+      <p className="mt-0.5 text-[10px] uppercase tracking-wide text-faint">{label}</p>
+    </div>
+  );
 }
 
 /**

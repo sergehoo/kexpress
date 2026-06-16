@@ -39,8 +39,10 @@ class Command(BaseCommand):
                 group_send(FLEET_GROUP, {"type": "fleet.positions", "results": rows})
 
                 # Suivi de chaque course en cours → groupe dédié.
+                # allow_provision=False : la boucle de diffusion ne doit jamais bloquer sur
+                # un géocodage/OSRM ; le provisionnement se fait via les vues par course.
                 for trip_id in Trip.objects.filter(status="in_progress").values_list("id", flat=True):
-                    payload = trip_tracking(None, trip_id)
+                    payload = trip_tracking(None, trip_id, allow_provision=False)
                     if payload:
                         group_send(trip_group(str(trip_id)), {"type": "trip.update", "payload": payload})
             except Exception as exc:  # noqa: BLE001 — la boucle ne doit jamais mourir

@@ -6,6 +6,17 @@ from apps.organizations.models import Company, Subsidiary
 from apps.vehicles.models import Vehicle
 
 
+@pytest.fixture(autouse=True)
+def _no_route_geocoding(settings):
+    """Désactive le provisionnement réseau d'itinéraire (Nominatim/OSRM) pendant les tests.
+
+    Le suivi appelle `ensure_trip_route` qui géocode l'origine/destination ; sans cette
+    bascule, chaque test de suivi déclencherait des appels réseau (lents, flaky, soumis à
+    quota). Les tests qui valident le provisionnement le réactivent et mockent le réseau.
+    """
+    settings.TRACKING_GEOCODE_ROUTES = False
+
+
 @pytest.fixture
 def company(db):
     return Company.objects.create(name="Kaydan Groupe")
