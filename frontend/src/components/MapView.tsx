@@ -67,12 +67,16 @@ function FitBounds({ positions, fallback }: { positions: VehiclePosition[]; fall
       .filter((p) => p.latitude && p.longitude)
       .map((p) => [Number(p.latitude), Number(p.longitude)] as [number, number]);
     if (pts.length === 0 && fallback?.length) pts = fallback;
-    if (pts.length === 1) {
-      map.setView(pts[0], 14);
-      done.current = true;
-    } else if (pts.length > 1) {
-      map.fitBounds(pts, { padding: [50, 50] });
-      done.current = true;
+    try {
+      if (pts.length === 1) {
+        map.setView(pts[0], 14);
+        done.current = true;
+      } else if (pts.length > 1) {
+        map.fitBounds(pts, { padding: [50, 50] });
+        done.current = true;
+      }
+    } catch {
+      /* carte non prête / démontée — ignoré */
     }
   }, [positions, map]);
   return null;
@@ -90,7 +94,12 @@ function FocusOnSelect({
     if (!selectedId) return;
     const p = positions.find((x) => x.id === selectedId);
     if (p?.latitude && p?.longitude) {
-      map.flyTo([Number(p.latitude), Number(p.longitude)], 15, { duration: 0.8 });
+      try {
+        map.stop();
+        map.flyTo([Number(p.latitude), Number(p.longitude)], 15, { duration: 0.8 });
+      } catch {
+        /* carte non prête / démontée — ignoré */
+      }
     }
   }, [selectedId, positions, map]);
   return null;
@@ -123,8 +132,22 @@ function ClickHandler({ onMapClick }: { onMapClick: (lat: number, lng: number) =
 
 function Recenter({ to }: { to?: [number, number] | null }) {
   const map = useMap();
+  // `to` est souvent un nouveau tableau à chaque rendu (positions de suivi temps réel).
+  // On ne recentre que lorsque les coordonnées changent réellement, et sans transition de
+  // zoom : un `flyTo` interrompu (animation qui se chevauche ou carte démontée) provoque le
+  // crash Leaflet « Cannot read properties of undefined (reading '_leaflet_pos') ».
+  const lastKey = useRef<string>("");
   useEffect(() => {
-    if (to) map.flyTo(to, 14, { duration: 0.8 });
+    if (!to || to[0] == null || to[1] == null) return;
+    const key = `${to[0].toFixed(5)},${to[1].toFixed(5)}`;
+    if (key === lastKey.current) return;
+    lastKey.current = key;
+    try {
+      map.stop(); // annule toute animation en cours avant de bouger
+      map.setView(to, map.getZoom() || 14, { animate: true, duration: 0.6 });
+    } catch {
+      /* carte non prête / démontée — ignoré */
+    }
   }, [to, map]);
   return null;
 }

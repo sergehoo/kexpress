@@ -47,18 +47,20 @@ const MapView = dynamic(() => import("@/components/MapView"), {
 
 export default function MapPage() {
 
+  const { me } = useAuth();
+  const isDriver = me?.role === "driver";
+
   // Suivi temps réel : si l'utilisateur a une course en cours, on bascule en mode suivi.
   const { data: activeTrip } = useActiveTrip();
   const { data: track, connected: trackConnected } = useTripTracking(activeTrip?.id);
   const trackingMode = Boolean(activeTrip && track);
-  const { positions: fleetPositions } = useFleetLive(undefined, !trackingMode);
+  // Le chauffeur ne consomme pas les positions de flotte : on n'ouvre pas le WS flotte pour lui.
+  const { positions: fleetPositions } = useFleetLive(undefined, !trackingMode && !isDriver);
   // GPS réel : l'appareil du demandeur alimente le tracking pendant la course.
   const gps = useGpsTracker(activeTrip?.id, activeTrip?.status === "in_progress");
 
   // --- Espace chauffeur (mission-first) ---
   const qc = useQueryClient();
-  const { me } = useAuth();
-  const isDriver = me?.role === "driver";
   const { data: driverMissions, isLoading: missionsLoading } = useDriverMissions(isDriver);
   const dvMission = isDriver ? currentMission(driverMissions) : null;
   const dvScheduled = dvMission && dvMission.status === "scheduled" ? dvMission : null;

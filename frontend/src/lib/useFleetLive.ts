@@ -31,6 +31,7 @@ export function useFleetLive(subsidiaryId?: string, enabled = true) {
   useEffect(() => {
     if (!enabled) { setConnected(false); return; }
     let closedByEffect = false;
+    let attempt = 0;
 
     function connect() {
       if (typeof window === "undefined" || !tokens.access) return;
@@ -42,7 +43,10 @@ export function useFleetLive(subsidiaryId?: string, enabled = true) {
       }
       wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        attempt = 0; // connexion établie : on réarme le backoff
+        setConnected(true);
+      };
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
@@ -54,7 +58,11 @@ export function useFleetLive(subsidiaryId?: string, enabled = true) {
       ws.onclose = () => {
         setConnected(false);
         if (!closedByEffect) {
-          retryRef.current = setTimeout(connect, 4000); // reconnexion auto
+          // Backoff exponentiel plafonné : évite de marteler un proxy qui refuse
+          // l'upgrade WebSocket. Le repli REST prend le relais pendant ce temps.
+          attempt += 1;
+          const delay = Math.min(4000 * 2 ** (attempt - 1), 60000);
+          retryRef.current = setTimeout(connect, delay);
         }
       };
       ws.onerror = () => ws.close();
