@@ -256,6 +256,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    labels:
+      # Multi-réseaux : Traefik doit router via dokploy-network (sinon 502, cf. frontend).
+      - "traefik.docker.network=dokploy-network"
     networks:
       - kexpress-internal
       - dokploy-network
@@ -353,6 +356,11 @@ services:
     # Pas de dépendance au backend : le frontend sert des pages statiques et appelle l'API
     # depuis le NAVIGATEUR. Le coupler à la santé du backend ferait tomber toute l'UI (502)
     # au moindre incident backend ou pendant ses migrations/redéploiement.
+    labels:
+      # Conteneur multi-réseaux : impose à Traefik (Dokploy) d'utiliser l'IP du réseau
+      # dokploy-network. Sans cela, Traefik peut cibler l'IP du réseau interne (auquel il
+      # n'est pas rattaché) et renvoyer « 502 Bad Gateway » alors que le conteneur est sain.
+      - "traefik.docker.network=dokploy-network"
     expose:
       - "3000"
     healthcheck:
