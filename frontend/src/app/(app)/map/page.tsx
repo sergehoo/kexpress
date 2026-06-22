@@ -219,7 +219,7 @@ export default function MapPage() {
 
   function reset() {
     setReserved(null); setOrigin(null); setDestination(null); setEstimate(null);
-    setForm((f) => ({ ...f, purpose: "" }));
+    setForm((f) => ({ ...f, purpose: "", trip_type: "one_way" }));
   }
 
   return (

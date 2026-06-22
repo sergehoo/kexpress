@@ -108,6 +108,56 @@ def test_reservation_completes_only_when_both_legs_returned(ctx):
 
 
 @pytest.mark.django_db
+def test_return_leg_cannot_start_before_outbound_finished(ctx):
+    """Le retour ne peut pas démarrer tant que l'aller n'est pas revenu/clôturé."""
+    from apps.reservations.workflow import WorkflowError
+
+    r = _make_round_trip(ctx, needs_driver=False)
+    services.assign_vehicle(r, ctx["veh"], ctx["fleet"])
+    ret = r.trips.get(leg=TripLeg.RETURN)
+    with pytest.raises(WorkflowError):
+        trip_services.start_trip(ret, ctx["requester"], start_mileage=100)
+
+
+@pytest.mark.django_db
+def test_vehicle_not_freed_between_legs(ctx):
+    """Le véhicule reste engagé entre l'arrivée de l'aller et le retour (pas libéré)."""
+    from apps.core.enums import VehicleStatus
+
+    r = _make_round_trip(ctx, needs_driver=False)
+    services.assign_vehicle(r, ctx["veh"], ctx["fleet"])
+    out = r.trips.get(leg=TripLeg.OUTBOUND)
+    ret = r.trips.get(leg=TripLeg.RETURN)
+    trip_services.start_trip(out, ctx["requester"], start_mileage=100)
+    trip_services.end_trip(out, ctx["requester"], end_mileage=150)
+    ctx["veh"].refresh_from_db()
+    assert ctx["veh"].status != VehicleStatus.AVAILABLE  # toujours engagé pour le retour
+    trip_services.start_trip(ret, ctx["requester"], start_mileage=150)
+    trip_services.end_trip(ret, ctx["requester"], end_mileage=205)
+    ctx["veh"].refresh_from_db()
+    assert ctx["veh"].status == VehicleStatus.AVAILABLE  # libéré une fois le retour revenu
+
+
+@pytest.mark.django_db
+def test_serializer_rejects_window_not_covering_return(ctx):
+    """La fenêtre [départ, retour estimé] doit englober le départ du retour (anti
+    double-réservation pendant le trajet retour)."""
+    from apps.reservations.serializers import ReservationSerializer
+
+    now = timezone.now() + timedelta(days=1)
+    s = ReservationSerializer(data={
+        "trip_date": now.date().isoformat(),
+        "departure_time": now.isoformat(),
+        "return_time": (now + timedelta(hours=3)).isoformat(),
+        "estimated_return": (now + timedelta(hours=3)).isoformat(),  # == return_time → fenêtre nulle
+        "origin": "Siège Plateau", "destination": "Yamoussoukro", "purpose": "Mission",
+        "trip_type": "round_trip",
+    })
+    assert not s.is_valid()
+    assert "estimated_return" in s.errors
+
+
+@pytest.mark.django_db
 def test_serializer_rejects_round_trip_without_return_time(ctx):
     from apps.reservations.serializers import ReservationSerializer
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  CalendarRange,
   Car,
   ChevronRight,
   Clock,
@@ -14,6 +15,8 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
+
+import { VehicleTimeline } from "@/components/VehicleTimeline";
 
 import { Button, Card, CardBody, EmptyState, Input, Label, Select, Spinner } from "@/components/ui";
 import { Modal } from "@/components/Modal";
@@ -68,7 +71,7 @@ function groupOf(status: string): string {
 export default function ReservationsPage() {
   const [group, setGroup] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<"list" | "kanban">("list");
+  const [view, setView] = useState<"list" | "kanban" | "timeline">("list");
   const [modal, setModal] = useState<ModalState>(null);
   const [toast, setToast] = useState<string>("");
 
@@ -148,7 +151,7 @@ export default function ReservationsPage() {
           />
         </div>
         <div className="flex rounded-lg border border-line bg-surface p-0.5">
-          {([["list", Rows3, "Liste"], ["kanban", LayoutGrid, "Kanban"]] as const).map(([v, Icon, label]) => (
+          {([["list", Rows3, "Liste"], ["kanban", LayoutGrid, "Kanban"], ["timeline", CalendarRange, "Planning"]] as const).map(([v, Icon, label]) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -175,6 +178,8 @@ export default function ReservationsPage() {
 
       {isLoading ? (
         <div className="flex justify-center py-16"><Spinner className="h-7 w-7" /></div>
+      ) : view === "timeline" ? (
+        <VehicleTimeline reservations={search.trim() ? list : all} onError={setToast} />
       ) : list.length === 0 ? (
         <Card>
           <CardBody>
@@ -443,6 +448,10 @@ function CreateModal({ onClose, onError }: { onClose: () => void; onError: (s: s
       const rt = new Date(form.return_time || "");
       if (Number.isNaN(rt.getTime()) || rt <= dep) {
         onError("Indiquez une date/heure de retour postérieure au départ.");
+        return;
+      }
+      if (ret <= rt) {
+        onError("Le retour estimé (fin de mission) doit être postérieur au départ du retour.");
         return;
       }
       returnIso = rt.toISOString();

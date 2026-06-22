@@ -179,6 +179,7 @@ class Command(BaseCommand):
             )
             trip, _ = Trip.objects.get_or_create(
                 reservation=res,
+                leg="outbound",
                 defaults={
                     "subsidiary": sub_a, "requester": emp, "vehicle": veh, "driver": drv,
                     "destination": "Cocody, Abidjan", "status": "in_progress",

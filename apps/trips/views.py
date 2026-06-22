@@ -89,13 +89,19 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
 
         Sur le segment RETOUR d'un aller-retour, l'origine affichée est la destination
         de l'aller et l'heure de départ est l'heure de retour de la réservation."""
-        from apps.core.enums import TripLeg
+        from apps.core.enums import TripLeg, TripType
 
         res = getattr(trip, "reservation", None)
         route = getattr(trip, "route", None)
         is_return = trip.leg == TripLeg.RETURN
+        is_round = bool(res and res.trip_type == TripType.ROUND_TRIP)
         leg_origin = (res.destination if is_return else (res.origin or "")) if res else ""
         leg_departure = (res.return_time if is_return else res.departure_time) if res else None
+        # Échéance du segment : pour l'aller d'un A/R, c'est le départ du retour ; sinon la
+        # fin de mission (retour estimé).
+        leg_estimated_return = res.estimated_return if res else None
+        if res and is_round and not is_return and res.return_time:
+            leg_estimated_return = res.return_time
         return {
             "trip_id": str(trip.id),
             "leg": trip.leg,
@@ -115,7 +121,7 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
                 "origin": leg_origin,
                 "destination": trip.destination,
                 "departure_time": leg_departure.isoformat() if leg_departure else None,
-                "estimated_return": res.estimated_return.isoformat() if res.estimated_return else None,
+                "estimated_return": leg_estimated_return.isoformat() if leg_estimated_return else None,
                 "passengers": res.passengers,
                 "purpose": res.purpose,
                 "requester_name": (res.requester.get_full_name() or res.requester.email) if res.requester_id else None,

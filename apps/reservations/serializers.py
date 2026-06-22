@@ -86,6 +86,11 @@ class ReservationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"return_time": "Le retour doit être postérieur au départ."}
                 )
+            est = val("estimated_return")
+            if est and return_time and est <= return_time:
+                raise serializers.ValidationError(
+                    {"estimated_return": "Le retour estimé (fin de mission) doit être postérieur au départ du retour."}
+                )
         return attrs
 
     class Meta:
@@ -116,3 +121,11 @@ class AssignVehicleInputSerializer(serializers.Serializer):
 
 class AssignDriverInputSerializer(serializers.Serializer):
     driver = serializers.PrimaryKeyRelatedField(queryset=Driver.objects.all())
+
+
+class RescheduleInputSerializer(serializers.Serializer):
+    """Replanification des horaires (glisser / redimensionner une barre du planning)."""
+    departure_time = serializers.DateTimeField()
+    estimated_return = serializers.DateTimeField()
+    # Optionnel : départ du retour (aller-retour). Absent → inchangé.
+    return_time = serializers.DateTimeField(required=False, allow_null=True)

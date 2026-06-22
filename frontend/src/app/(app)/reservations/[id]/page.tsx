@@ -134,19 +134,42 @@ export default function ReservationDetailPage() {
         {/* Trajet */}
         <Card>
           <CardBody className="space-y-3">
-            <SectionTitle>Trajet demandé</SectionTitle>
+            <div className="flex items-center justify-between">
+              <SectionTitle>Trajet demandé</SectionTitle>
+              <span className="rounded-full bg-brand-500/10 px-2.5 py-0.5 text-[11px] font-medium text-brand-600">
+                {r.trip_type_display}{r.trip_type === "round_trip" ? ` · ${r.voyages} voyages` : ""}
+              </span>
+            </div>
             <InfoRow icon={MapPin} label="Point de départ" value={r.origin || "—"} />
             <InfoRow icon={MapPin} label="Destination" value={r.destination} />
             <InfoRow icon={Clock} label="Date de la course" value={formatDate(r.trip_date)} />
             <div className="grid grid-cols-2 gap-3">
-              <InfoRow icon={Clock} label="Départ" value={formatDate(r.departure_time, true)} />
-              <InfoRow icon={Clock} label="Retour estimé" value={formatDate(r.estimated_return, true)} />
+              <InfoRow icon={Clock} label="Départ (aller)" value={formatDate(r.departure_time, true)} />
+              {r.trip_type === "round_trip" && r.return_time ? (
+                <InfoRow icon={Clock} label="Départ (retour)" value={formatDate(r.return_time, true)} />
+              ) : (
+                <InfoRow icon={Clock} label="Retour estimé" value={formatDate(r.estimated_return, true)} />
+              )}
             </div>
+            {r.trip_type === "round_trip" && (
+              <InfoRow icon={Clock} label="Fin de mission (estimée)" value={formatDate(r.estimated_return, true)} />
+            )}
             <div className="grid grid-cols-2 gap-3">
               <InfoRow icon={Users} label="Passagers" value={String(r.passengers)} />
               <InfoRow icon={UserRound} label="Conduite" value={r.needs_driver ? "Avec chauffeur" : "Conduite personnelle"} />
             </div>
             <InfoRow label="Motif" value={r.purpose} />
+            {r.trips.length > 1 && (
+              <div className="space-y-1.5 border-t border-line pt-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-faint">Courses ({r.trips.length})</p>
+                {r.trips.map((t) => (
+                  <div key={t.id} className="flex items-center justify-between text-xs">
+                    <span className="text-muted">{t.leg_display} → <span className="text-ink">{t.destination}</span></span>
+                    <span className="rounded-full bg-surface2 px-2 py-0.5 text-[10px] font-medium text-muted">{t.status_display}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardBody>
         </Card>
 

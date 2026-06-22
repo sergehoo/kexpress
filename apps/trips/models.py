@@ -76,6 +76,10 @@ class Trip(TenantScopedModel):
         verbose_name_plural = "courses"
         ordering = ["-actual_departure", "-created_at"]
         indexes = [models.Index(fields=["subsidiary", "status"])]
+        constraints = [
+            # Au plus une course par segment et par réservation (aller / retour).
+            models.UniqueConstraint(fields=["reservation", "leg"], name="uniq_trip_reservation_leg"),
+        ]
 
     def __str__(self):
         return f"Course {self.id} — {self.destination}"

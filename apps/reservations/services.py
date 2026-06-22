@@ -244,6 +244,72 @@ def assign_driver(reservation: Reservation, driver, actor) -> Reservation:
     return reservation
 
 
+# Statuts pour lesquels les horaires peuvent encore être replanifiés (course non démarrée).
+RESCHEDULABLE_STATUSES = {
+    ReservationStatus.DRAFT, ReservationStatus.SUBMITTED,
+    ReservationStatus.PENDING_MANAGER, ReservationStatus.PENDING_FLEET,
+    ReservationStatus.APPROVED, ReservationStatus.VEHICLE_ASSIGNED,
+    ReservationStatus.DRIVER_ASSIGNED,
+}
+
+
+def can_reschedule(reservation, user) -> bool:
+    """Qui peut replanifier les horaires : gestionnaires (dans leur périmètre), ou le
+    demandeur pour sa propre demande."""
+    if not user or not user.is_authenticated:
+        return False
+    # Gestionnaires (flotte, responsables, admins) ou le demandeur de la réservation.
+    if user.is_superuser or user.role in (MANAGER_ROLES | FLEET_ROLES):
+        return True
+    return reservation.requester_id == user.pk
+
+
+@transaction.atomic
+def reschedule(reservation, departure_time, estimated_return, actor, return_time=None):
+    """Replanifie les horaires d'une réservation (glisser / redimensionner dans le planning).
+
+    Revalide la cohérence de la fenêtre (et de l'aller-retour) puis les conflits horaires
+    véhicule/chauffeur. Refuse si la course a déjà démarré / est clôturée.
+    """
+    if reservation.status not in RESCHEDULABLE_STATUSES:
+        raise WorkflowError(
+            "Cette réservation ne peut plus être replanifiée (course démarrée ou clôturée)."
+        )
+
+    reservation.departure_time = departure_time
+    reservation.estimated_return = estimated_return
+    reservation.trip_date = departure_time.date()
+    if return_time is not None:
+        reservation.return_time = return_time
+
+    # Cohérence des horaires (inclut les règles aller-retour) + conflits véhicule/chauffeur
+    # sur la NOUVELLE fenêtre (les helpers excluent la réservation elle-même).
+    workflow.check_duration_coherence(reservation)
+    if reservation.vehicle_id:
+        conflict = workflow.vehicle_conflicts(reservation.vehicle, reservation).first()
+        if conflict:
+            raise WorkflowError(
+                f"Conflit horaire : ce véhicule est déjà réservé sur ce créneau (réservation {conflict.id})."
+            )
+    if reservation.driver_id and workflow.driver_conflicts(reservation.driver, reservation).exists():
+        raise WorkflowError("Conflit horaire : le chauffeur est déjà engagé sur ce créneau.")
+
+    reservation.save(update_fields=[
+        "departure_time", "estimated_return", "trip_date", "return_time", "updated_at",
+    ])
+    audit.record(actor, AuditAction.UPDATE, reservation, changes={
+        "action": "reschedule",
+        "departure_time": departure_time.isoformat(),
+        "estimated_return": estimated_return.isoformat(),
+    })
+    reservation_event(
+        reservation, NotificationType.RESERVATION_UPDATED,
+        title=f"Horaire modifié — {reservation.destination}",
+        next_action="Vérifier les nouveaux horaires de la course.",
+    )
+    return reservation
+
+
 # --- Internes ------------------------------------------------------------
 
 
@@ -280,25 +346,29 @@ def _ensure_trips(reservation):
     from apps.trips.models import Trip
 
     specs = [(TripLeg.OUTBOUND, reservation.destination)]
-    if reservation.trip_type == TripType.ROUND_TRIP:
-        # Retour : on revient au point de départ (origine de la réservation).
-        specs.append((TripLeg.RETURN, reservation.origin or reservation.destination))
+    # Retour seulement si l'origine est connue (sinon il bouclerait sur sa propre
+    # destination) — l'invariant « aller-retour ⇒ origine renseignée » est garanti à la
+    # création (serializer / endpoint carte / workflow), on s'en protège aussi ici.
+    if reservation.trip_type == TripType.ROUND_TRIP and (reservation.origin or "").strip():
+        specs.append((TripLeg.RETURN, reservation.origin))
 
     trips = []
     for leg, destination in specs:
-        trip = Trip.objects.filter(reservation=reservation, leg=leg).first()
-        if trip is None:
-            trip = Trip.objects.create(
+        # get_or_create sur (réservation, segment) : idempotent et tolérant aux courses
+        # concurrentes (cf. contrainte d'unicité Trip.uniq_trip_reservation_leg).
+        trip, _ = Trip.objects.get_or_create(
+            reservation=reservation,
+            leg=leg,
+            defaults=dict(
                 subsidiary=reservation.subsidiary,
-                reservation=reservation,
-                leg=leg,
                 requester=reservation.requester,
                 vehicle=reservation.vehicle,
                 driver=reservation.driver,
                 destination=destination,
                 status=TripStatus.SCHEDULED,
                 created_by=reservation.created_by,
-            )
+            ),
+        )
         trips.append(trip)
     return trips
 

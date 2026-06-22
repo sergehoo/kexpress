@@ -12,6 +12,7 @@ from apps.core.enums import (
     NotificationType,
     ReservationStatus,
     RoleChoices,
+    TripLeg,
     TripStatus,
     VehicleStatus,
 )
@@ -53,6 +54,12 @@ def start_trip(trip: Trip, actor, start_mileage: int | None = None) -> Trip:
         raise WorkflowError("Seule une course planifiée peut démarrer.")
     if trip.reservation.needs_driver and trip.driver_id is None:
         raise WorkflowError("Un chauffeur doit être affecté avant le départ.")
+    # Aller-retour : le retour ne peut partir qu'une fois l'aller terminé (le véhicule
+    # ne peut pas être sur le trajet retour avant d'avoir effectué l'aller).
+    if trip.leg == TripLeg.RETURN and Trip.objects.filter(
+        reservation_id=trip.reservation_id, leg=TripLeg.OUTBOUND,
+    ).exclude(status__in=[TripStatus.RETURNED, TripStatus.CLOSED]).exists():
+        raise WorkflowError("Terminez d'abord le trajet aller avant de démarrer le retour.")
 
     trip.actual_departure = timezone.now()
     trip.start_mileage = start_mileage if start_mileage is not None else trip.vehicle.mileage
@@ -113,14 +120,15 @@ def end_trip(trip: Trip, actor, end_mileage: int | None = None, fuel_consumed=No
 
     close_tracking_sessions(trip)
 
-    # Met à jour le kilométrage du véhicule et le libère.
+    # Met à jour le kilométrage du véhicule.
     if end_mileage > trip.vehicle.mileage:
         trip.vehicle.mileage = end_mileage
         trip.vehicle.save(update_fields=["mileage", "updated_at"])
-    _set_vehicle_status(trip.vehicle, VehicleStatus.AVAILABLE, "Retour de course", actor)
-    # Réservation « terminée » seulement quand TOUS les segments (aller + retour) sont
-    # revenus/clôturés — un aller-retour ne se clôt pas au retour de l'aller.
+    # On ne LIBÈRE le véhicule (et on ne termine la réservation) que lorsque TOUS les
+    # segments sont revenus/clôturés : sur un aller-retour, le véhicule reste engagé entre
+    # l'arrivée de l'aller et le départ du retour (sinon il serait réaffectable à tort).
     if _all_legs_in(trip.reservation, {TripStatus.RETURNED, TripStatus.CLOSED}):
+        _set_vehicle_status(trip.vehicle, VehicleStatus.AVAILABLE, "Retour de course", actor)
         _set_reservation_status(trip.reservation, ReservationStatus.COMPLETED)
 
     reservation_event(

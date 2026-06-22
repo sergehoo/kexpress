@@ -108,8 +108,11 @@ def check_duration_coherence(reservation) -> None:
             raise WorkflowError("Précisez la date et l'heure de retour pour un aller-retour.")
         if reservation.return_time <= reservation.departure_time:
             raise WorkflowError("L'heure de retour doit être postérieure à l'heure de départ.")
-        if reservation.estimated_return < reservation.return_time:
-            raise WorkflowError("Le retour estimé doit être au moins à l'heure du départ retour.")
+        # STRICT : la fenêtre [départ, retour estimé] sert à la détection de conflits et doit
+        # englober le TRAJET retour. Une égalité laisserait le retour hors fenêtre (double
+        # réservation possible du véhicule/chauffeur pendant le retour).
+        if reservation.estimated_return <= reservation.return_time:
+            raise WorkflowError("Le retour estimé (fin de mission) doit être postérieur au départ du retour.")
 
 
 def check_capacity(vehicle, passengers: int) -> None:

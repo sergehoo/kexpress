@@ -1,7 +1,7 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,6 +14,7 @@ from apps.reservations.serializers import (
     AssignDriverInputSerializer,
     AssignVehicleInputSerializer,
     DecisionInputSerializer,
+    RescheduleInputSerializer,
     ReservationSerializer,
 )
 from apps.reservations.workflow import WorkflowError
@@ -123,6 +124,21 @@ class ReservationViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
         return self._ok(_run(services.assign_vehicle, self.get_object(),
                              s.validated_data["vehicle"], request.user))
 
+    @extend_schema(request=RescheduleInputSerializer, responses=ReservationSerializer)
+    @action(detail=True, methods=["post"])
+    def reschedule(self, request, pk=None):
+        """Replanifie les horaires (glisser / redimensionner une barre du planning)."""
+        res = self.get_object()
+        if not services.can_reschedule(res, request.user):
+            raise PermissionDenied("Vous n'êtes pas autorisé à replanifier cette réservation.")
+        s = RescheduleInputSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        return self._ok(_run(
+            services.reschedule, res,
+            s.validated_data["departure_time"], s.validated_data["estimated_return"],
+            request.user, s.validated_data.get("return_time"),
+        ))
+
     @extend_schema(request=AssignDriverInputSerializer, responses=ReservationSerializer)
     @action(detail=True, methods=["post"], url_path="assign-driver")
     def assign_driver(self, request, pk=None):
@@ -164,8 +180,10 @@ class ReservationFromMapView(APIView):
         try:
             dep = datetime.fromisoformat(str(d["departure_time"]).replace("Z", "+00:00"))
             ret = datetime.fromisoformat(str(d["estimated_return"]).replace("Z", "+00:00"))
-        except ValueError:
+        except (ValueError, TypeError):
             raise ValidationError({"departure_time": "Date/heure invalide."})
+        if ret <= dep:
+            raise ValidationError({"estimated_return": "Le retour estimé doit être postérieur au départ."})
 
         # Type de trajet : aller simple par défaut, ou aller-retour (2 voyages).
         trip_type = d.get("trip_type") or "one_way"
@@ -177,13 +195,14 @@ class ReservationFromMapView(APIView):
                 raise ValidationError({"return_time": "Date et heure de retour requises pour un aller-retour."})
             try:
                 return_time = datetime.fromisoformat(str(d["return_time"]).replace("Z", "+00:00"))
-            except ValueError:
+            except (ValueError, TypeError):
                 raise ValidationError({"return_time": "Date/heure de retour invalide."})
             if return_time <= dep:
                 raise ValidationError({"return_time": "Le retour doit être postérieur au départ."})
-            # La fin de fenêtre (retour estimé) doit couvrir le départ retour.
-            if ret < return_time:
-                ret = return_time
+            # La fenêtre [départ, retour estimé] doit COUVRIR le trajet retour (détection de
+            # conflits) : si elle est trop courte, on l'étend d'une durée ≈ celle de l'aller.
+            if ret <= return_time:
+                ret = return_time + (return_time - dep)
 
         reservation = Reservation.objects.create(
             subsidiary_id=subsidiary_id,
