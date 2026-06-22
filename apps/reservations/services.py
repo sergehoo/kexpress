@@ -258,10 +258,18 @@ def can_reschedule(reservation, user) -> bool:
     demandeur pour sa propre demande."""
     if not user or not user.is_authenticated:
         return False
-    # Gestionnaires (flotte, responsables, admins) ou le demandeur de la réservation.
-    if user.is_superuser or user.role in (MANAGER_ROLES | FLEET_ROLES):
+    if user.is_superuser:
         return True
-    return reservation.requester_id == user.pk
+    # Gestionnaires (flotte, responsables, admins) : dans leur périmètre uniquement.
+    if user.role in (MANAGER_ROLES | FLEET_ROLES):
+        return user.has_company_scope or user.subsidiary_id == reservation.subsidiary_id
+    # Le demandeur ne peut replanifier sa demande que tant qu'elle n'est pas validée/affectée
+    # (après affectation, seul un gestionnaire ajuste les horaires — planning flotte).
+    pre_assignment = {
+        ReservationStatus.DRAFT, ReservationStatus.SUBMITTED,
+        ReservationStatus.PENDING_MANAGER, ReservationStatus.PENDING_FLEET,
+    }
+    return reservation.requester_id == user.pk and reservation.status in pre_assignment
 
 
 @transaction.atomic
@@ -271,6 +279,10 @@ def reschedule(reservation, departure_time, estimated_return, actor, return_time
     Revalide la cohérence de la fenêtre (et de l'aller-retour) puis les conflits horaires
     véhicule/chauffeur. Refuse si la course a déjà démarré / est clôturée.
     """
+    from datetime import timedelta
+
+    from apps.core.enums import TripType
+
     if reservation.status not in RESCHEDULABLE_STATUSES:
         raise WorkflowError(
             "Cette réservation ne peut plus être replanifiée (course démarrée ou clôturée)."
@@ -281,6 +293,14 @@ def reschedule(reservation, departure_time, estimated_return, actor, return_time
     reservation.trip_date = departure_time.date()
     if return_time is not None:
         reservation.return_time = return_time
+    elif reservation.trip_type == TripType.ROUND_TRIP and reservation.return_time:
+        # Aller-retour : le planning n'envoie que départ + fin. On conserve le départ retour
+        # et on le borne STRICTEMENT dans la nouvelle fenêtre s'il en sort (sinon la cohérence
+        # aller-retour rejetterait un mouvement que l'utilisateur n'a pas explicitement demandé).
+        lo = departure_time + timedelta(minutes=1)
+        hi = estimated_return - timedelta(minutes=1)
+        if hi > lo:
+            reservation.return_time = min(max(reservation.return_time, lo), hi)
 
     # Cohérence des horaires (inclut les règles aller-retour) + conflits véhicule/chauffeur
     # sur la NOUVELLE fenêtre (les helpers excluent la réservation elle-même).

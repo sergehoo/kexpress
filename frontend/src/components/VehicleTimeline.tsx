@@ -181,15 +181,14 @@ export function VehicleTimeline({
     function onMove(ev: MouseEvent) {
       const d = resizeRef.current;
       if (!d) return;
-      const deltaMs = ((ev.clientX - d.startX) / gridW) * winMs;
+      // Décalage relatif à l'origine, arrondi au pas de 15 min (zéro déplacement → no-op exact).
+      const delta = Math.round((((ev.clientX - d.startX) / gridW) * winMs) / SNAP_MS) * SNAP_MS;
       let dep = d.origDep;
       let ret = d.origRet;
       if (d.side === "start") {
-        dep = Math.round((d.origDep + deltaMs) / SNAP_MS) * SNAP_MS;
-        dep = Math.min(dep, ret - MIN_DUR_MS);
+        dep = Math.min(d.origDep + delta, d.origRet - MIN_DUR_MS);
       } else {
-        ret = Math.round((d.origRet + deltaMs) / SNAP_MS) * SNAP_MS;
-        ret = Math.max(ret, dep + MIN_DUR_MS);
+        ret = Math.max(d.origRet + delta, d.origDep + MIN_DUR_MS);
       }
       pendingRef.current = { dep, ret };
       setPreview({ id: d.id, dep, ret });
@@ -202,13 +201,13 @@ export function VehicleTimeline({
       setResize(null);
       setPreview(null);
       if (!d || !p) return;
-      const r = dayRes.find((x) => x.id === d.id);
-      if (!r) return;
-      const depIso = new Date(p.dep).toISOString();
-      const retIso = new Date(p.ret).toISOString();
-      if (depIso === new Date(r.departure_time).toISOString() && retIso === new Date(r.estimated_return).toISOString()) return;
+      if (p.dep === d.origDep && p.ret === d.origRet) return; // aucun changement réel
       justResized.current = true; // évite la navigation au clic juste après un redimensionnement
-      reschedule.mutate({ id: d.id, body: { departure_time: depIso, estimated_return: retIso } }, { onError: (e) => onError?.(apiError(e)) });
+      setTimeout(() => { justResized.current = false; }, 0); // libère le drapeau si aucun clic ne suit
+      reschedule.mutate(
+        { id: d.id, body: { departure_time: new Date(p.dep).toISOString(), estimated_return: new Date(p.ret).toISOString() } },
+        { onError: (e) => onError?.(apiError(e)) },
+      );
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -273,19 +272,21 @@ export function VehicleTimeline({
           {r.destination}
         </p>
         <p className="truncate text-[10px] leading-tight opacity-80">{fmtTime(dep)}–{fmtTime(ret)}</p>
-        {resizable && (
-          <>
-            <span
-              onMouseDown={(e) => startResize(e, r, "start")}
-              className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize rounded-l-md bg-black/10 hover:bg-black/30"
-              title="Étirer pour ajuster le départ"
-            />
-            <span
-              onMouseDown={(e) => startResize(e, r, "end")}
-              className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize rounded-r-md bg-black/10 hover:bg-black/30"
-              title="Étirer pour ajuster le retour"
-            />
-          </>
+        {/* Poignées d'étirement — seulement quand le bord est réellement dans la fenêtre
+            visible (sinon la poignée serait collée au bord et ne suivrait pas le curseur). */}
+        {resizable && depMs >= winStart.getTime() && (
+          <span
+            onMouseDown={(e) => startResize(e, r, "start")}
+            className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize rounded-l-md bg-black/10 hover:bg-black/30"
+            title="Étirer pour ajuster le départ"
+          />
+        )}
+        {resizable && retMs <= winEnd.getTime() && (
+          <span
+            onMouseDown={(e) => startResize(e, r, "end")}
+            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize rounded-r-md bg-black/10 hover:bg-black/30"
+            title="Étirer pour ajuster le retour"
+          />
         )}
       </div>
     );

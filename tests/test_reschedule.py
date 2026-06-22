@@ -86,9 +86,26 @@ def test_reschedule_round_trip_keeps_return_time(ctx):
 
 
 @pytest.mark.django_db
+def test_reschedule_round_trip_window_only_does_not_reject(ctx):
+    """Régression (HIGH) : replanifier un aller-retour en n'envoyant que départ + fin
+    (cas du planning) ne doit PAS être rejeté ; le départ retour est borné dans la fenêtre."""
+    now = timezone.now() + timedelta(days=2)
+    r = _res(ctx, trip_type=TripType.ROUND_TRIP, return_time=now + timedelta(hours=3),
+             estimated_return=now + timedelta(hours=5))
+    new_dep = now + timedelta(hours=4)   # décale toute la fenêtre, sans fournir return_time
+    new_ret = now + timedelta(hours=9)
+    services.reschedule(r, new_dep, new_ret, ctx["fleet"])  # ne lève pas
+    r.refresh_from_db()
+    assert r.departure_time == new_dep
+    assert new_dep < r.return_time < new_ret  # départ retour replacé dans la nouvelle fenêtre
+
+
+@pytest.mark.django_db
 def test_can_reschedule_permission(ctx):
     other = User.objects.create_user(email="other@k.ci", password="x", role=RoleChoices.REQUESTER, subsidiary=ctx["sub"])
-    r = _res(ctx)
-    assert services.can_reschedule(r, ctx["fleet"]) is True   # gestionnaire
-    assert services.can_reschedule(r, ctx["req"]) is True      # demandeur propriétaire
-    assert services.can_reschedule(r, other) is False          # autre demandeur
+    assigned = _res(ctx)  # VEHICLE_ASSIGNED
+    pending = _res(ctx, status=ReservationStatus.SUBMITTED)
+    assert services.can_reschedule(assigned, ctx["fleet"]) is True    # gestionnaire (sa filiale)
+    assert services.can_reschedule(assigned, ctx["req"]) is False     # demandeur, déjà affecté → non
+    assert services.can_reschedule(pending, ctx["req"]) is True       # demandeur, avant affectation → oui
+    assert services.can_reschedule(assigned, other) is False          # autre demandeur
