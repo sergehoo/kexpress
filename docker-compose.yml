@@ -357,9 +357,6 @@ services:
     # depuis le NAVIGATEUR. Le coupler à la santé du backend ferait tomber toute l'UI (502)
     # au moindre incident backend ou pendant ses migrations/redéploiement.
     labels:
-      # Conteneur multi-réseaux : impose à Traefik (Dokploy) d'utiliser l'IP du réseau
-      # dokploy-network. Sans cela, Traefik peut cibler l'IP du réseau interne (auquel il
-      # n'est pas rattaché) et renvoyer « 502 Bad Gateway » alors que le conteneur est sain.
       - "traefik.docker.network=dokploy-network"
     expose:
       - "3000"
@@ -369,8 +366,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
+    # UNIQUEMENT dokploy-network : le frontend n'a aucune dépendance interne (il appelle
+    # l'API depuis le navigateur). Mono-réseau ⇒ Traefik n'a qu'une seule IP possible et ne
+    # peut plus router vers l'IP du réseau interne → élimine définitivement le 502.
     networks:
-      - kexpress-internal
       - dokploy-network
 
 volumes:

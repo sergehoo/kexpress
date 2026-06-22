@@ -1,6 +1,6 @@
 /* Service worker Kaydan Express — cache app shell + données API (offline partiel)
    + Background Sync (vidange des files réservations/GPS, même onglet fermé). */
-const VERSION = "kx-v4";
+const VERSION = "kx-v5";
 const SHELL_CACHE = `${VERSION}-shell`;
 const API_CACHE = `${VERSION}-api`;
 const OFFLINE_URL = "/offline";
@@ -36,22 +36,33 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   // Navigations : réseau d'abord, repli sur la page hors-ligne.
+  // Une erreur serveur/proxy (5xx, ex. 502 Bad Gateway) est traitée comme une panne
+  // réseau → on n'affiche PAS la page d'erreur brute, on bascule sur le cache / l'offline.
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() =>
-        caches.match(request).then((r) => r || caches.match(OFFLINE_URL)),
-      ),
+      fetch(request)
+        .then((response) => {
+          if (response.status >= 500) throw new Error("server " + response.status);
+          return response;
+        })
+        .catch(() =>
+          caches.match(request).then((r) => r || caches.match(OFFLINE_URL)),
+        ),
     );
     return;
   }
 
-  // API GET : réseau d'abord, mise en cache, repli sur le cache (mode offline).
+  // API GET : réseau d'abord, repli sur le cache (mode offline).
+  // On ne met en cache QUE les réponses OK (2xx) : sinon une erreur (4xx/5xx) survenue
+  // pendant un incident empoisonnerait le cache et serait resservie hors-ligne.
   if (isApiGet(request)) {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(API_CACHE).then((cache) => cache.put(request, copy));
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(API_CACHE).then((cache) => cache.put(request, copy));
+          }
           return response;
         })
         .catch(() => caches.match(request)),
