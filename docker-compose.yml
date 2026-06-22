@@ -350,9 +350,9 @@ services:
         NEXT_PUBLIC_LOCAL_LOGIN: ${NEXT_PUBLIC_LOCAL_LOGIN:-true}
     container_name: kexpress-frontend
     restart: unless-stopped
-    depends_on:
-      kexpress-backend:
-        condition: service_healthy
+    # Pas de dépendance au backend : le frontend sert des pages statiques et appelle l'API
+    # depuis le NAVIGATEUR. Le coupler à la santé du backend ferait tomber toute l'UI (502)
+    # au moindre incident backend ou pendant ses migrations/redéploiement.
     expose:
       - "3000"
     healthcheck:
