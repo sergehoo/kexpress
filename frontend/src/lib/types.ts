@@ -270,6 +270,9 @@ export interface LiveAlertsResponse {
 // Mission chauffeur (espace dédié, mission-first) — /trips/my-missions/
 export interface DriverMission {
   trip_id: string;
+  leg: "outbound" | "return";
+  leg_display: string;
+  trip_type: "one_way" | "round_trip" | null;
   status: string;
   status_display: string;
   can_start: boolean;
@@ -493,6 +496,10 @@ export interface Reservation {
   estimated_return: string;
   origin: string;
   destination: string;
+  trip_type: "one_way" | "round_trip";
+  trip_type_display: string;
+  return_time: string | null;
+  voyages: number;
   purpose: string;
   passengers: number;
   needs_driver: boolean;
@@ -506,9 +513,19 @@ export interface Reservation {
   driver_name: string | null;
   requester_email: string | null;
   trip_id: string | null;
+  trips: ReservationTripLeg[];
   validations: ReservationValidation[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ReservationTripLeg {
+  id: string;
+  leg: "outbound" | "return";
+  leg_display: string;
+  status: string;
+  status_display: string;
+  destination: string;
 }
 
 export interface TripIncidentItem {

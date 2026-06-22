@@ -31,17 +31,62 @@ class ReservationSerializer(serializers.ModelSerializer):
     )
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     priority_display = serializers.CharField(source="get_priority_display", read_only=True)
+    trip_type_display = serializers.CharField(source="get_trip_type_display", read_only=True)
+    voyages = serializers.IntegerField(read_only=True)
     requester_name = serializers.CharField(source="requester.get_full_name", read_only=True)
     subsidiary_name = serializers.CharField(source="subsidiary.name", read_only=True)
     vehicle_registration = serializers.CharField(source="vehicle.registration", read_only=True, default=None)
     driver_name = serializers.CharField(source="driver.full_name", read_only=True, default=None)
     requester_email = serializers.CharField(source="requester.email", read_only=True, default=None)
     trip_id = serializers.SerializerMethodField()
+    trips = serializers.SerializerMethodField()
     validations = ReservationValidationSerializer(many=True, read_only=True)
 
+    @staticmethod
+    def _ordered_trips(obj):
+        # Aller d'abord, retour ensuite.
+        return sorted(obj.trips.all(), key=lambda t: 0 if t.leg == "outbound" else 1)
+
     def get_trip_id(self, obj):
-        trip = getattr(obj, "trip", None)
-        return str(trip.id) if trip else None
+        """Identifiant de la course « aller » (rétro-compatibilité)."""
+        trips = self._ordered_trips(obj)
+        return str(trips[0].id) if trips else None
+
+    def get_trips(self, obj):
+        """Tous les segments : l'aller, et le retour pour un aller-retour."""
+        return [
+            {
+                "id": str(t.id), "leg": t.leg, "leg_display": t.get_leg_display(),
+                "status": t.status, "status_display": t.get_status_display(),
+                "destination": t.destination,
+            }
+            for t in self._ordered_trips(obj)
+        ]
+
+    def validate(self, attrs):
+        """Aller-retour : point de départ + heure de retour cohérents (le retour ramène
+        au point de départ)."""
+        inst = self.instance
+
+        def val(field):
+            return attrs.get(field, getattr(inst, field, None))
+
+        if val("trip_type") == "round_trip":
+            if not (val("origin") or "").strip():
+                raise serializers.ValidationError(
+                    {"origin": "Point de départ requis pour un aller-retour (destination du retour)."}
+                )
+            return_time = val("return_time")
+            if not return_time:
+                raise serializers.ValidationError(
+                    {"return_time": "Date et heure de retour requises pour un aller-retour."}
+                )
+            departure = val("departure_time")
+            if departure and return_time <= departure:
+                raise serializers.ValidationError(
+                    {"return_time": "Le retour doit être postérieur au départ."}
+                )
+        return attrs
 
     class Meta:
         model = Reservation
@@ -49,9 +94,10 @@ class ReservationSerializer(serializers.ModelSerializer):
             "id", "requester", "requester_name", "requester_email",
             "subsidiary", "subsidiary_name",
             "trip_date", "departure_time", "estimated_return", "origin", "destination",
+            "trip_type", "trip_type_display", "return_time", "voyages",
             "purpose", "passengers", "needs_driver", "priority", "priority_display",
             "status", "status_display", "vehicle", "vehicle_registration",
-            "driver", "driver_name", "trip_id",
+            "driver", "driver_name", "trip_id", "trips",
             "validations", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "status", "created_at", "updated_at"]

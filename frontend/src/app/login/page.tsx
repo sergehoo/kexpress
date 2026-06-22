@@ -7,7 +7,7 @@ import { Button, Input, Label, Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { homeFor } from "@/lib/rbac";
 import { apiError } from "@/lib/api";
-import { AlertCircle, ArrowRight, Eye, EyeOff, LogIn, Lock, Mail, ShieldCheck } from "lucide-react";
+import { AlertCircle, ArrowRight, Eye, EyeOff, LogIn, Lock, Mail, ShieldCheck, Truck } from "lucide-react";
 
 import FleetBackdrop from "@/components/FleetBackdrop";
 
@@ -83,12 +83,12 @@ export default function LoginPage() {
           <div className="px-6 pb-7 pt-7 sm:px-8">
             {/* En-tête : logo + accroche. */}
             <div className="mb-7 flex flex-col items-center text-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/logo.png"
-                alt="Kaydan Express"
-                className="mb-4 h-14 w-auto rounded-xl bg-white px-3 py-1.5 shadow-md ring-1 ring-black/5"
-              />
+              <span
+                className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-lg shadow-brand-600/30 ring-1 ring-white/20"
+                aria-label="Kaydan Express"
+              >
+                <Truck className="h-8 w-8" aria-hidden="true" />
+              </span>
               <h1 className="text-lg font-semibold tracking-tight text-white">Bienvenue</h1>
               <p className="mt-1 text-sm text-white/75">Connexion à la plateforme de flotte</p>
             </div>

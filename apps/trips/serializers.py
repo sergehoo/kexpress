@@ -14,6 +14,7 @@ class TripIncidentSerializer(serializers.ModelSerializer):
 
 class TripSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    leg_display = serializers.CharField(source="get_leg_display", read_only=True)
     vehicle_registration = serializers.CharField(source="vehicle.registration", read_only=True)
     vehicle_label = serializers.SerializerMethodField()
     driver_name = serializers.CharField(source="driver.full_name", read_only=True, default=None)
@@ -47,6 +48,7 @@ class TripSerializer(serializers.ModelSerializer):
             "subsidiary", "subsidiary_name",
             "vehicle", "vehicle_registration", "vehicle_label",
             "driver", "driver_name", "destination",
+            "leg", "leg_display",
             "status", "status_display",
             "actual_departure", "actual_return", "start_mileage", "end_mileage",
             "distance_km", "fuel_consumed", "observations",

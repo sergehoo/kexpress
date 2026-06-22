@@ -85,11 +85,22 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
         return Response({"results": [self._mission(t, user) for t in qs]})
 
     def _mission(self, trip, user) -> dict:
-        """Représentation « mission » : course + infos réservation utiles au chauffeur."""
+        """Représentation « mission » : course + infos réservation utiles au chauffeur.
+
+        Sur le segment RETOUR d'un aller-retour, l'origine affichée est la destination
+        de l'aller et l'heure de départ est l'heure de retour de la réservation."""
+        from apps.core.enums import TripLeg
+
         res = getattr(trip, "reservation", None)
         route = getattr(trip, "route", None)
+        is_return = trip.leg == TripLeg.RETURN
+        leg_origin = (res.destination if is_return else (res.origin or "")) if res else ""
+        leg_departure = (res.return_time if is_return else res.departure_time) if res else None
         return {
             "trip_id": str(trip.id),
+            "leg": trip.leg,
+            "leg_display": trip.get_leg_display(),
+            "trip_type": res.trip_type if res else None,
             "status": trip.status,
             "status_display": trip.get_status_display(),
             "can_start": services.can_start_trip(trip, user),
@@ -101,9 +112,9 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
             } if trip.vehicle_id else None,
             "reservation": {
                 "id": str(res.id),
-                "origin": res.origin or "",
-                "destination": res.destination,
-                "departure_time": res.departure_time.isoformat() if res.departure_time else None,
+                "origin": leg_origin,
+                "destination": trip.destination,
+                "departure_time": leg_departure.isoformat() if leg_departure else None,
                 "estimated_return": res.estimated_return.isoformat() if res.estimated_return else None,
                 "passengers": res.passengers,
                 "purpose": res.purpose,

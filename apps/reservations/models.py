@@ -4,6 +4,7 @@ from django.db import models
 from apps.core.enums import (
     PriorityLevel,
     ReservationStatus,
+    TripType,
     ValidationDecision,
     ValidationLevel,
 )
@@ -67,6 +68,13 @@ class Reservation(TenantScopedModel):
     estimated_return = models.DateTimeField("heure estimée de retour")
     origin = models.CharField("point de départ", max_length=255, blank=True)
     destination = models.CharField("destination", max_length=255)
+    # Aller simple ou aller-retour. Un aller-retour génère DEUX courses (aller + retour),
+    # comptées comme deux voyages ; la destination du retour est le point de départ.
+    trip_type = models.CharField(
+        "type de trajet", max_length=12, choices=TripType.choices, default=TripType.ONE_WAY,
+    )
+    # Départ du trajet retour (aller-retour uniquement). L'aller part à `departure_time`.
+    return_time = models.DateTimeField("heure de retour", null=True, blank=True)
     purpose = models.CharField("motif", max_length=255)
     passengers = models.PositiveSmallIntegerField("nombre de passagers", default=1)
     needs_driver = models.BooleanField("besoin d'un chauffeur", default=True)
@@ -100,6 +108,15 @@ class Reservation(TenantScopedModel):
 
     def __str__(self):
         return f"Réservation {self.id} — {self.destination} ({self.get_status_display()})"
+
+    @property
+    def is_round_trip(self) -> bool:
+        return self.trip_type == TripType.ROUND_TRIP
+
+    @property
+    def voyages(self) -> int:
+        """Nombre de voyages : un aller-retour compte pour deux."""
+        return 2 if self.is_round_trip else 1
 
 
 class ReservationValidation(TimeStampedModel):

@@ -33,7 +33,9 @@ class ReservationViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
     Un employé demandeur ne voit que ses propres demandes ; les autres rôles voient
     celles de leur périmètre (filiale ou entreprise)."""
 
-    queryset = Reservation.objects.select_related("subsidiary", "requester", "vehicle", "driver")
+    queryset = Reservation.objects.select_related(
+        "subsidiary", "requester", "vehicle", "driver"
+    ).prefetch_related("trips")  # aller + retour exposés sans N+1
     serializer_class = ReservationSerializer
     permission_classes = [IsAuthenticated]
     filterset_fields = ["status", "priority", "trip_date", "subsidiary", "vehicle", "driver"]
@@ -165,6 +167,24 @@ class ReservationFromMapView(APIView):
         except ValueError:
             raise ValidationError({"departure_time": "Date/heure invalide."})
 
+        # Type de trajet : aller simple par défaut, ou aller-retour (2 voyages).
+        trip_type = d.get("trip_type") or "one_way"
+        return_time = None
+        if trip_type == "round_trip":
+            if not (d.get("origin") or "").strip():
+                raise ValidationError({"origin": "Point de départ requis pour un aller-retour (destination du retour)."})
+            if not d.get("return_time"):
+                raise ValidationError({"return_time": "Date et heure de retour requises pour un aller-retour."})
+            try:
+                return_time = datetime.fromisoformat(str(d["return_time"]).replace("Z", "+00:00"))
+            except ValueError:
+                raise ValidationError({"return_time": "Date/heure de retour invalide."})
+            if return_time <= dep:
+                raise ValidationError({"return_time": "Le retour doit être postérieur au départ."})
+            # La fin de fenêtre (retour estimé) doit couvrir le départ retour.
+            if ret < return_time:
+                ret = return_time
+
         reservation = Reservation.objects.create(
             subsidiary_id=subsidiary_id,
             requester=user,
@@ -172,6 +192,8 @@ class ReservationFromMapView(APIView):
             trip_date=dep.date(),
             departure_time=dep,
             estimated_return=ret,
+            trip_type=trip_type,
+            return_time=return_time,
             origin=d.get("origin", "")[:255],
             destination=str(d["destination"])[:255],
             purpose=str(d["purpose"])[:255],

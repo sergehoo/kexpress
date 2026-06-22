@@ -118,7 +118,10 @@ def end_trip(trip: Trip, actor, end_mileage: int | None = None, fuel_consumed=No
         trip.vehicle.mileage = end_mileage
         trip.vehicle.save(update_fields=["mileage", "updated_at"])
     _set_vehicle_status(trip.vehicle, VehicleStatus.AVAILABLE, "Retour de course", actor)
-    _set_reservation_status(trip.reservation, ReservationStatus.COMPLETED)
+    # Réservation « terminée » seulement quand TOUS les segments (aller + retour) sont
+    # revenus/clôturés — un aller-retour ne se clôt pas au retour de l'aller.
+    if _all_legs_in(trip.reservation, {TripStatus.RETURNED, TripStatus.CLOSED}):
+        _set_reservation_status(trip.reservation, ReservationStatus.COMPLETED)
 
     reservation_event(
         trip.reservation, NotificationType.RETURN_EXPECTED,
@@ -139,7 +142,9 @@ def close_trip(trip: Trip, actor) -> Trip:
         raise WorkflowError("La course doit être revenue avant d'être clôturée.")
     trip.status = TripStatus.CLOSED
     trip.save(update_fields=["status", "updated_at"])
-    _set_reservation_status(trip.reservation, ReservationStatus.CLOSED)
+    # Réservation clôturée uniquement quand tous les segments le sont (aller + retour).
+    if _all_legs_in(trip.reservation, {TripStatus.CLOSED}):
+        _set_reservation_status(trip.reservation, ReservationStatus.CLOSED)
     reservation_event(
         trip.reservation, NotificationType.TRIP_CLOSED,
         title=f"Course clôturée — {trip.destination}",
@@ -174,6 +179,15 @@ def _check_fuel_anomaly(trip, threshold_pct: float = 20.0):
 
 
 # --- Internes ------------------------------------------------------------
+
+
+def _all_legs_in(reservation, statuses) -> bool:
+    """Vrai si TOUS les segments (courses) de la réservation sont dans `statuses`.
+
+    Permet de ne faire avancer le statut de la réservation (terminée/clôturée) que
+    lorsque l'aller ET le retour sont achevés, pour un aller-retour."""
+    legs = list(Trip.objects.filter(reservation=reservation).values_list("status", flat=True))
+    return bool(legs) and all(s in statuses for s in legs)
 
 
 def _set_reservation_status(reservation, status):

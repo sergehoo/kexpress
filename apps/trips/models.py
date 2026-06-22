@@ -1,7 +1,7 @@
 """Suivi des courses : exécution réelle, remise/retour, incidents, photos."""
 from django.db import models
 
-from apps.core.enums import IncidentSeverity, TripStatus
+from apps.core.enums import IncidentSeverity, TripLeg, TripStatus
 from apps.core.models import TenantManager, TenantScopedModel, TimeStampedModel
 
 
@@ -31,9 +31,15 @@ class Trip(TenantScopedModel):
 
     objects = TripManager()
 
-    reservation = models.OneToOneField(
+    # FK (et non OneToOne) : une réservation aller-retour génère DEUX courses
+    # (aller + retour). related_name="trips" → reservation.trips.all().
+    reservation = models.ForeignKey(
         "reservations.Reservation", on_delete=models.CASCADE,
-        related_name="trip", verbose_name="réservation",
+        related_name="trips", verbose_name="réservation",
+    )
+    # Segment du trajet : aller (origine→destination) ou retour (destination→origine).
+    leg = models.CharField(
+        "segment", max_length=10, choices=TripLeg.choices, default=TripLeg.OUTBOUND, db_index=True,
     )
     requester = models.ForeignKey(
         "accounts.User", on_delete=models.PROTECT, related_name="trips", verbose_name="demandeur"

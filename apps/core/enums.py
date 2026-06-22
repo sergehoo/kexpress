@@ -86,6 +86,20 @@ class PriorityLevel(models.TextChoices):
     URGENT = "urgent", "Urgente"
 
 
+class TripType(models.TextChoices):
+    """Type de trajet d'une réservation. Un aller-retour génère deux courses
+    (aller + retour) et compte donc pour deux voyages."""
+    ONE_WAY = "one_way", "Aller simple"
+    ROUND_TRIP = "round_trip", "Aller-retour"
+
+
+class TripLeg(models.TextChoices):
+    """Segment d'une réservation : aller (origine→destination) ou retour
+    (destination→origine). Un aller simple n'a que le segment aller."""
+    OUTBOUND = "outbound", "Aller"
+    RETURN = "return", "Retour"
+
+
 class ValidationLevel(models.TextChoices):
     MANAGER = "manager", "Responsable hiérarchique"
     FLEET = "fleet", "Gestionnaire de flotte"

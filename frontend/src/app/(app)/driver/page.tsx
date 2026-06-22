@@ -93,8 +93,15 @@ function MissionCard({ m }: { m: DriverMission }) {
       <Card className="transition-shadow hover:shadow-md">
         <CardBody className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_TONE[m.status] ?? "bg-surface2 text-muted")}>
-              {m.status_display}
+            <span className="flex items-center gap-1.5">
+              <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_TONE[m.status] ?? "bg-surface2 text-muted")}>
+                {m.status_display}
+              </span>
+              {m.trip_type === "round_trip" && (
+                <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-[11px] font-medium text-brand-600">
+                  {m.leg_display}
+                </span>
+              )}
             </span>
             {m.can_start && (
               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600"><Play className="h-3 w-3" /> Prête</span>

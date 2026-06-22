@@ -38,7 +38,7 @@ def test_happy_path_reservation_to_closed_trip(
     vehicle_a.refresh_from_db()
     assert reservation.status == ReservationStatus.VEHICLE_ASSIGNED
     assert vehicle_a.status == VehicleStatus.RESERVED
-    assert hasattr(reservation, "trip")
+    assert reservation.trips.count() == 1  # aller simple → une course
 
     # 5) Affectation chauffeur
     services.assign_driver(reservation, driver_a, fleet_a)
@@ -155,5 +155,7 @@ def test_personal_drive_skips_driver(sub_a, requester_a, manager_a, fleet_a, veh
     # Pas de chauffeur requis : la course peut démarrer directement.
     from apps.trips import services as trip_services
 
-    trip_services.start_trip(r.trip, requester_a, start_mileage=500)
-    assert r.trip.status == TripStatus.IN_PROGRESS
+    trip = r.trips.first()
+    trip_services.start_trip(trip, requester_a, start_mileage=500)
+    trip.refresh_from_db()
+    assert trip.status == TripStatus.IN_PROGRESS

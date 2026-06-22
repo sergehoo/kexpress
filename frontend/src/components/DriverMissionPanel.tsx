@@ -62,7 +62,9 @@ export function DriverMissionPanel({
       <div className="flex items-center gap-2.5 bg-gradient-to-r from-navy-800 to-navy-900 px-4 py-3 text-white">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-500/20"><Navigation className="h-4 w-4 text-brand-400" /></span>
         <div className="leading-tight">
-          <p className="text-sm font-semibold">Ma mission</p>
+          <p className="text-sm font-semibold">
+            Ma mission{mission.trip_type === "round_trip" ? ` — ${mission.leg_display}` : ""}
+          </p>
           <p className="text-[11px] text-slate-300">{mission.status_display}</p>
         </div>
         {res?.id && (

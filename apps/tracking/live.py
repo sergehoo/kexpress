@@ -303,14 +303,20 @@ def ensure_trip_route(trip, allow_provision=True):
         return route
     try:
         if route is None:
+            from apps.core.enums import TripLeg
             from apps.maps.geocoding import geocode_one
 
             res = getattr(trip, "reservation", None)
-            dest_label = ((res.destination if res else None) or trip.destination or "").strip()
+            # `trip.destination` est déjà la destination du SEGMENT (aller ou retour).
+            # Sur le retour, l'origine du trajet est la destination de l'aller.
+            dest_label = (trip.destination or (res.destination if res else "") or "").strip()
+            if res and trip.leg == TripLeg.RETURN:
+                origin_label = (res.destination or "").strip()
+            else:
+                origin_label = ((res.origin if res else "") or "").strip()
             dest = geocode_one(dest_label)
             if not dest:
                 return None  # destination introuvable : pas d'itinéraire possible
-            origin_label = ((res.origin if res else "") or "").strip()
             origin = geocode_one(origin_label) if origin_label else None
             # get_or_create : tolère une création concurrente (TripRoute.trip est OneToOne)
             # — savepoint interne + renvoi de l'itinéraire « gagnant » au lieu de planter.

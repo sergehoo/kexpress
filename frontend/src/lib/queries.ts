@@ -568,6 +568,8 @@ export interface CreateReservationInput {
   estimated_return: string;
   origin?: string;
   destination: string;
+  trip_type?: "one_way" | "round_trip";
+  return_time?: string | null;
   purpose: string;
   passengers: number;
   needs_driver: boolean;

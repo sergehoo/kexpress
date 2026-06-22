@@ -90,11 +90,26 @@ def next_status_after(reservation, current_level: str) -> str:
 
 
 def check_duration_coherence(reservation) -> None:
-    """Cohérence de la durée estimée : retour après départ, durée raisonnable."""
+    """Cohérence de la durée estimée : retour après départ, durée raisonnable.
+
+    Pour un aller-retour : origine et heure de retour obligatoires, le retour partant
+    après l'aller et la fin de fenêtre (retour estimé) couvrant le départ retour."""
     if reservation.estimated_return <= reservation.departure_time:
         raise WorkflowError("L'heure de retour doit être postérieure à l'heure de départ.")
     if reservation.estimated_return - reservation.departure_time > timedelta(days=30):
         raise WorkflowError("La durée estimée de la course est incohérente (> 30 jours).")
+
+    from apps.core.enums import TripType
+
+    if reservation.trip_type == TripType.ROUND_TRIP:
+        if not (reservation.origin or "").strip():
+            raise WorkflowError("Un aller-retour exige un point de départ (destination du retour).")
+        if not reservation.return_time:
+            raise WorkflowError("Précisez la date et l'heure de retour pour un aller-retour.")
+        if reservation.return_time <= reservation.departure_time:
+            raise WorkflowError("L'heure de retour doit être postérieure à l'heure de départ.")
+        if reservation.estimated_return < reservation.return_time:
+            raise WorkflowError("Le retour estimé doit être au moins à l'heure du départ retour.")
 
 
 def check_capacity(vehicle, passengers: int) -> None:

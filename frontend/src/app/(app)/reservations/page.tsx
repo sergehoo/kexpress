@@ -6,6 +6,7 @@ import {
   Car,
   ChevronRight,
   Clock,
+  CornerUpLeft,
   LayoutGrid,
   Plus,
   Rows3,
@@ -263,6 +264,11 @@ function ReservationCard({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
           <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDate(r.departure_time, true)}</span>
           <span className="flex items-center gap-1"><Users className="h-3 w-3" />{r.passengers}</span>
+          {r.trip_type === "round_trip" && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-brand-500/10 px-1.5 py-0.5 text-[11px] font-medium text-brand-600">
+              <CornerUpLeft className="h-3 w-3" /> Aller-retour · {r.voyages} voyages
+            </span>
+          )}
           {!compact && <span>{r.needs_driver ? "Avec chauffeur" : "Conduite perso."}</span>}
         </div>
 
@@ -397,13 +403,17 @@ function CreateModal({ onClose, onError }: { onClose: () => void; onError: (s: s
     trip_date: "",
     departure_time: "",
     estimated_return: "",
+    origin: "",
     destination: "",
+    trip_type: "one_way",
+    return_time: "",
     purpose: "",
     passengers: 1,
     needs_driver: true,
     priority: "normal",
     requester: "",
   });
+  const isRoundTrip = form.trip_type === "round_trip";
 
   const set = (k: keyof CreateReservationInput, v: string | number | boolean) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -424,11 +434,25 @@ function CreateModal({ onClose, onError }: { onClose: () => void; onError: (s: s
       onError("Sélectionnez l'employé qui fait la demande.");
       return;
     }
+    let returnIso: string | null = null;
+    if (isRoundTrip) {
+      if (!(form.origin || "").trim()) {
+        onError("Indiquez le point de départ : il sert de destination au retour.");
+        return;
+      }
+      const rt = new Date(form.return_time || "");
+      if (Number.isNaN(rt.getTime()) || rt <= dep) {
+        onError("Indiquez une date/heure de retour postérieure au départ.");
+        return;
+      }
+      returnIso = rt.toISOString();
+    }
     const payload: CreateReservationInput = {
       ...form,
       trip_date: form.departure_time.slice(0, 10),
       departure_time: dep.toISOString(),
       estimated_return: ret.toISOString(),
+      return_time: returnIso,
     };
     if (!payload.requester) delete payload.requester;
 
@@ -466,19 +490,57 @@ function CreateModal({ onClose, onError }: { onClose: () => void; onError: (s: s
           />
         </div>
         <div>
+          <Label>Point de départ {isRoundTrip && <span className="text-brand-600">(destination du retour)</span>}</Label>
+          <PlaceSearch
+            placeholder="Adresse de départ…"
+            initialValue={form.origin}
+            onText={(t) => set("origin", t)}
+            onSelect={(p) => set("origin", p.label)}
+          />
+        </div>
+        <div>
           <Label>Motif</Label>
           <Input required value={form.purpose} onChange={(e) => set("purpose", e.target.value)} />
         </div>
+
+        {/* Type de trajet */}
+        <div>
+          <Label>Type de trajet</Label>
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface2 p-1">
+            {([["one_way", "Aller simple"], ["round_trip", "Aller-retour (2 voyages)"]] as const).map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => set("trip_type", val)}
+                className={cn(
+                  "rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                  form.trip_type === val ? "bg-brand-600 text-white shadow-sm" : "text-muted hover:text-ink",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label>Départ</Label>
+            <Label>{isRoundTrip ? "Départ (aller)" : "Départ"}</Label>
             <Input type="datetime-local" required value={form.departure_time} onChange={(e) => set("departure_time", e.target.value)} />
           </div>
           <div>
-            <Label>Retour estimé</Label>
+            <Label>Retour estimé (fin)</Label>
             <Input type="datetime-local" required value={form.estimated_return} onChange={(e) => set("estimated_return", e.target.value)} />
           </div>
         </div>
+
+        {isRoundTrip && (
+          <div className="rounded-xl border border-brand-500/20 bg-brand-500/5 p-3">
+            <Label>Départ du retour</Label>
+            <Input type="datetime-local" value={form.return_time || ""} onChange={(e) => set("return_time", e.target.value)} />
+            <p className="mt-1 text-[11px] text-faint">Le retour ramène au point de départ ; comptabilisé comme un second voyage.</p>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>Passagers</Label>

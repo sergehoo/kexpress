@@ -107,8 +107,10 @@ export default function MapPage() {
   const [form, setForm] = useState({
     date: today, time: "08:00", purpose: "", passengers: 1,
     needs_driver: true, priority: "normal",
+    trip_type: "one_way", return_date: today, return_time: "17:00",
   });
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  const isRoundTrip = form.trip_type === "round_trip";
 
   const nearby = useNearbyVehicles(origin?.lat, origin?.lng);
 
@@ -191,12 +193,23 @@ export default function MapPage() {
     if (!origin || !destination) { setError("Définissez un point de départ et une destination."); return; }
     if (!form.purpose) { setError("Précisez le motif de la course."); return; }
     const dep = new Date(`${form.date}T${form.time}:00`);
-    const ret = new Date(dep.getTime() + (estimate ? estimate.duration_min + 30 : 60) * 60000);
+    const legMin = (estimate ? estimate.duration_min + 30 : 60);
+    // Aller-retour : départ du retour précisé par l'usager ; la fenêtre se termine après
+    // le trajet retour. La destination du retour est le point de départ (géré côté serveur).
+    let returnAt: Date | null = null;
+    let endWindow = new Date(dep.getTime() + legMin * 60000);
+    if (isRoundTrip) {
+      returnAt = new Date(`${form.return_date}T${form.return_time}:00`);
+      if (returnAt <= dep) { setError("L'heure de retour doit être après le départ."); return; }
+      endWindow = new Date(returnAt.getTime() + legMin * 60000);
+    }
     setReserving(true);
     try {
       const { data } = await api.post("/reservations/from-map/", {
         origin: origin.label, destination: destination.label,
-        departure_time: dep.toISOString(), estimated_return: ret.toISOString(),
+        departure_time: dep.toISOString(), estimated_return: endWindow.toISOString(),
+        trip_type: form.trip_type,
+        return_time: returnAt ? returnAt.toISOString() : undefined,
         purpose: form.purpose, passengers: form.passengers, needs_driver: form.needs_driver,
         priority: form.priority, submit,
       });
@@ -324,11 +337,43 @@ export default function MapPage() {
               </div>
             )}
 
-            {/* Détails course */}
+            {/* Type de trajet : aller simple / aller-retour */}
+            <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-surface2 p-1">
+              {([["one_way", "Aller simple"], ["round_trip", "Aller-retour"]] as const).map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => set("trip_type", val)}
+                  className={cn(
+                    "rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                    form.trip_type === val ? "bg-brand-600 text-white shadow-sm" : "text-muted hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Détails course — aller */}
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <div><label className="mb-1 block text-[11px] text-muted"><Calendar className="mr-1 inline h-3 w-3" />Date</label><Input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} /></div>
+              <div><label className="mb-1 block text-[11px] text-muted"><Calendar className="mr-1 inline h-3 w-3" />{isRoundTrip ? "Départ (aller)" : "Date"}</label><Input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} /></div>
               <div><label className="mb-1 block text-[11px] text-muted"><Clock className="mr-1 inline h-3 w-3" />Heure</label><Input type="time" value={form.time} onChange={(e) => set("time", e.target.value)} /></div>
             </div>
+
+            {/* Retour (aller-retour uniquement) : destination = point de départ */}
+            {isRoundTrip && (
+              <div className="mt-2 rounded-xl border border-brand-500/20 bg-brand-500/5 p-2.5">
+                <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-brand-600">
+                  <CornerUpLeft className="h-3.5 w-3.5" /> Retour vers {origin?.label ? `« ${origin.label} »` : "le point de départ"}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="mb-1 block text-[11px] text-muted">Date retour</label><Input type="date" value={form.return_date} min={form.date} onChange={(e) => set("return_date", e.target.value)} /></div>
+                  <div><label className="mb-1 block text-[11px] text-muted">Heure retour</label><Input type="time" value={form.return_time} onChange={(e) => set("return_time", e.target.value)} /></div>
+                </div>
+                <p className="mt-1.5 text-[10px] text-faint">Comptabilisé comme 2 voyages (aller + retour).</p>
+              </div>
+            )}
+
             <div className="mt-2"><Input placeholder="Motif de la course *" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} /></div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div className="relative"><Users className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" /><Input type="number" min={1} value={form.passengers} onChange={(e) => set("passengers", Number(e.target.value))} className="pl-9" /></div>

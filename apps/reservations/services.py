@@ -197,9 +197,9 @@ def assign_vehicle(reservation: Reservation, vehicle, actor) -> Reservation:
     reservation.save(update_fields=["vehicle", "status", "updated_at"])
     _set_vehicle_status(vehicle, VehicleStatus.RESERVED, "Affecté à une réservation", actor)
 
-    trip = _ensure_trip(reservation)
-    trip.vehicle = vehicle
-    trip.save(update_fields=["vehicle", "updated_at"])
+    for trip in _ensure_trips(reservation):
+        trip.vehicle = vehicle
+        trip.save(update_fields=["vehicle", "updated_at"])
 
     reservation_event(
         reservation, NotificationType.VEHICLE_ASSIGNED,
@@ -225,9 +225,9 @@ def assign_driver(reservation: Reservation, driver, actor) -> Reservation:
     reservation.status = ReservationStatus.DRIVER_ASSIGNED
     reservation.save(update_fields=["driver", "status", "updated_at"])
 
-    trip = _ensure_trip(reservation)
-    trip.driver = driver
-    trip.save(update_fields=["driver", "updated_at"])
+    for trip in _ensure_trips(reservation):
+        trip.driver = driver
+        trip.save(update_fields=["driver", "updated_at"])
 
     # Parties prenantes (gestionnaires, demandeur…) — hors chauffeur, qui reçoit
     # un message dédié ci-dessous.
@@ -267,23 +267,40 @@ def _on_approved(reservation, actor):
     )
 
 
-def _ensure_trip(reservation):
-    """Crée la course liée si elle n'existe pas encore."""
+def _ensure_trips(reservation):
+    """Crée la/les course(s) liée(s) si absentes, selon le type de trajet.
+
+    * Aller simple → 1 course (aller : origine → destination).
+    * Aller-retour → 2 courses : l'aller, puis le retour dont la destination est le
+      point de départ de la réservation. Chaque course compte pour un voyage.
+
+    Idempotent (clé : réservation + segment). Retourne la liste des courses.
+    """
+    from apps.core.enums import TripLeg, TripType
     from apps.trips.models import Trip
 
-    trip = Trip.objects.filter(reservation=reservation).first()
-    if trip:
-        return trip
-    return Trip.objects.create(
-        subsidiary=reservation.subsidiary,
-        reservation=reservation,
-        requester=reservation.requester,
-        vehicle=reservation.vehicle,
-        driver=reservation.driver,
-        destination=reservation.destination,
-        status=TripStatus.SCHEDULED,
-        created_by=reservation.created_by,
-    )
+    specs = [(TripLeg.OUTBOUND, reservation.destination)]
+    if reservation.trip_type == TripType.ROUND_TRIP:
+        # Retour : on revient au point de départ (origine de la réservation).
+        specs.append((TripLeg.RETURN, reservation.origin or reservation.destination))
+
+    trips = []
+    for leg, destination in specs:
+        trip = Trip.objects.filter(reservation=reservation, leg=leg).first()
+        if trip is None:
+            trip = Trip.objects.create(
+                subsidiary=reservation.subsidiary,
+                reservation=reservation,
+                leg=leg,
+                requester=reservation.requester,
+                vehicle=reservation.vehicle,
+                driver=reservation.driver,
+                destination=destination,
+                status=TripStatus.SCHEDULED,
+                created_by=reservation.created_by,
+            )
+        trips.append(trip)
+    return trips
 
 
 def _set_vehicle_status(vehicle, new_status, reason, actor):
