@@ -38,6 +38,10 @@ DJANGO_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.gis",  # GeoDjango (PostGIS) : géométries, géofencing, distances
+    # Requis par les contraintes d'exclusion anti-double-booking de Trip (btree_gist).
+    # Sans cette app, `migrate` échoue au démarrage (postgres.E005) — l'app n'a aucun
+    # modèle, donc son ajout ne crée aucune table.
+    "django.contrib.postgres",
 ]
 
 THIRD_PARTY_APPS = [

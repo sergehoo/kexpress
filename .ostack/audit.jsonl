@@ -32,3 +32,5 @@
 {"id":"1ef5af4c-860d-451b-8622-93eee65f62ca","timestamp":"2026-07-29T19:47:30.594Z","actorId":"sergeogah","action":"update.auto_notified","projectId":"kexpress","outcome":"succeeded","details":{"behind":15,"touchesCore":true}}
 {"id":"843ba416-00b1-4d64-84e2-4d9956d231ca","timestamp":"2026-07-29T20:19:16.970Z","actorId":"sergeogah","action":"learn.observe","projectId":"kexpress","outcome":"succeeded","details":{"lessons":33}}
 {"id":"c54d3857-42d5-41fa-b863-a5d52cf6d5f8","timestamp":"2026-07-29T20:50:59.365Z","actorId":"sergeogah","action":"update.auto_notified","projectId":"kexpress","outcome":"succeeded","details":{"behind":15,"touchesCore":true}}
+{"id":"8cb85b4f-a818-4497-9a87-779c06a5ea33","timestamp":"2026-07-29T21:06:24.041Z","actorId":"sergeogah","action":"learn.observe","projectId":"kexpress","outcome":"succeeded","details":{"lessons":33}}
+{"id":"b7174b17-83b7-4208-8a13-ab1bb67b8d2c","timestamp":"2026-07-29T22:00:31.315Z","actorId":"sergeogah","action":"learn.observe","projectId":"kexpress","outcome":"succeeded","details":{"lessons":33}}
