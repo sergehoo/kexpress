@@ -64,6 +64,8 @@ LOCAL_APPS = [
     "apps.audit",
     "apps.fuelintel",
     "apps.kbot",
+    # Métriques d'occupation / kilométrage matérialisées (cache de lecture reconstructible).
+    "apps.analytics",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

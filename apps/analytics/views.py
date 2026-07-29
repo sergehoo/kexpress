@@ -31,6 +31,22 @@ class DashboardStatsView(APIView):
         return Response(decision_stats(request.user, request.query_params))
 
 
+class OccupancyStatsView(APIView):
+    """Occupation des véhicules et kilométrage à vide (§10-11).
+
+    Filtres : ?period=week|month|year|custom (&start=&end=), &subsidiary=.
+    Les véhicules les plus « à vide » arrivent en tête (cible d'optimisation).
+    Lecture seule : le périmètre et le RBAC viennent de `scoped()`.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.analytics.metrics import fleet_occupancy
+
+        return Response(fleet_occupancy(request.user, request.query_params))
+
+
 class LegacyDashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 

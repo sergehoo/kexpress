@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 
 import { Card, CardBody, CardHeader, CardTitle, EmptyState, Input, Select, Spinner } from "@/components/ui";
-import { useDashboardStats, useMaintenanceForecast } from "@/lib/queries";
+import { useDashboardStats, useMaintenanceForecast, useOccupancyStats } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
 import { useSubsidiaryFilter } from "@/lib/subsidiary";
@@ -262,6 +262,9 @@ export default function DashboardPage() {
             </div>
           </Section>
 
+          {/* ============ OCCUPATION & KM À VIDE ============ */}
+          {canForecast && <OccupancySection params={params} axis={axis} grid={grid} tooltipStyle={tooltipStyle} />}
+
           {/* ============ FILIALES & TOPS ============ */}
           <Section title="Coûts par filiale & tops">
             <div className="grid gap-6 lg:grid-cols-2">
@@ -435,7 +438,138 @@ export default function DashboardPage() {
   );
 }
 
+/** Occupation des véhicules et kilométrage à vide (§10-11).
+ *
+ *  Les véhicules les plus « à vide » remontent en tête : ce sont les cibles d'optimisation.
+ *  Un taux affiché « — » signifie « pas de donnée » (aucun kilomètre mesuré, ou mutualisation
+ *  pas encore disponible) et non « zéro » : la distinction est portée jusqu'à l'affichage. */
+function OccupancySection({
+  params,
+  axis,
+  grid,
+  tooltipStyle,
+}: {
+  params: Record<string, string>;
+  axis: string;
+  grid: string;
+  tooltipStyle: React.CSSProperties;
+}) {
+  const { data, isLoading } = useOccupancyStats(params);
+
+  if (isLoading) {
+    return (
+      <Section title="Occupation & kilomètres à vide">
+        <div className="flex justify-center py-10"><Spinner className="h-6 w-6" /></div>
+      </Section>
+    );
+  }
+  if (!data || data.results.length === 0) {
+    return (
+      <Section title="Occupation & kilomètres à vide">
+        <Card><CardBody>
+          <EmptyState
+            title="Aucune course mesurée sur la période"
+            hint="Les taux se calculent depuis les courses effectuées et les relevés de compteur."
+          />
+        </CardBody></Card>
+      </Section>
+    );
+  }
+
+  const chart = data.results
+    .filter((r) => r.total_km > 0)
+    .slice(0, 12)
+    .map((r) => ({ label: r.registration, loaded: r.loaded_km, empty: r.empty_km }));
+
+  return (
+    <Section title="Occupation & kilomètres à vide">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-3 lg:col-span-3">
+          <Kpi
+            label="Taux à vide de la flotte" tone="bg-rose-500/10 text-rose-600" icon={TrendingUp}
+            value={ratePct(data.fleet.empty_rate)}
+            sub={`${formatNumber(data.fleet.empty_km)} km sans mission`}
+          />
+          <Kpi
+            label="Kilomètres en charge" tone="bg-emerald-500/10 text-emerald-600" icon={Route}
+            value={`${formatNumber(data.fleet.loaded_km)} km`}
+            sub={`sur ${formatNumber(data.fleet.total_km)} km parcourus`}
+          />
+          <Kpi
+            label="Véhicules suivis" tone="bg-sky-500/10 text-sky-600" icon={ClipboardList}
+            value={data.results.length}
+            sub={`du ${data.start} au ${data.end}`}
+          />
+        </div>
+
+        {chart.length > 0 && (
+          <div className="lg:col-span-3">
+            <ChartCard title="Kilométrage en charge vs à vide, par véhicule">
+              <BarChart data={chart} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: axis }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: axis }} axisLine={false} tickLine={false} />
+                <Tooltip cursor={{ fill: grid }} contentStyle={tooltipStyle} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="loaded" name="En charge (km)" stackId="km" fill="#10b981" />
+                <Bar dataKey="empty" name="À vide (km)" stackId="km" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ChartCard>
+          </div>
+        )}
+
+        <Card className="lg:col-span-3">
+          <CardHeader><CardTitle>Détail par véhicule</CardTitle></CardHeader>
+          <CardBody className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-faint">
+                    <th className="px-5 py-2.5 font-medium">Véhicule</th>
+                    <th className="px-5 py-2.5 font-medium">Courses</th>
+                    <th className="px-5 py-2.5 font-medium">Occupation</th>
+                    <th className="px-5 py-2.5 font-medium">Remplissage</th>
+                    <th className="px-5 py-2.5 font-medium">Km en charge</th>
+                    <th className="px-5 py-2.5 font-medium">Km à vide</th>
+                    <th className="px-5 py-2.5 text-right font-medium">Taux à vide</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {data.results.map((row) => (
+                    <tr key={row.vehicle} className="hover:bg-surface2">
+                      <td className="px-5 py-2.5 font-medium text-ink">{row.registration}</td>
+                      <td className="px-5 py-2.5 text-muted">{row.trips}</td>
+                      <td className="px-5 py-2.5 text-muted" title={`${hours(row.hours_in_mission)} en mission`}>
+                        {ratePct(row.temporal_rate)}
+                      </td>
+                      <td className="px-5 py-2.5 text-muted" title={`${row.passengers_carried} passagers / ${row.seats_offered} places`}>
+                        {ratePct(row.fill_rate)}
+                      </td>
+                      <td className="px-5 py-2.5 text-muted">{formatNumber(row.loaded_km)}</td>
+                      <td className="px-5 py-2.5 text-muted">{formatNumber(row.empty_km)}</td>
+                      <td className={cn(
+                        "px-5 py-2.5 text-right font-semibold",
+                        row.empty_rate != null && row.empty_rate >= 0.3 ? "text-rose-600" : "text-ink",
+                      )}>
+                        {ratePct(row.empty_rate)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+    </Section>
+  );
+}
+
 // --- Aides d'affichage -----------------------------------------------------
+
+/** Taux exprimé en 0–1 côté API → pourcentage lisible ; « — » quand la donnée est absente. */
+function ratePct(v: number | null) {
+  return v != null ? `${Math.round(v * 100)}%` : "—";
+}
 
 function pct(v: number | null) {
   return v != null ? `${v}%` : "—";

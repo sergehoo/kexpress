@@ -95,6 +95,52 @@ export function useDashboardStats(params: Record<string, string>) {
   });
 }
 
+/** Occupation d'un véhicule et répartition de son kilométrage sur la période (§10). */
+export interface VehicleOccupancy {
+  vehicle: string;
+  registration: string;
+  capacity: number;
+  trips: number;
+  hours_in_mission: number;
+  hours_available: number;
+  temporal_rate: number | null;
+  passengers_carried: number;
+  seats_offered: number;
+  fill_rate: number | null;
+  passengers_per_trip: number | null;
+  /** Exige les missions regroupées : `null` tant qu'elles n'existent pas (≠ 0 %). */
+  mutualisation_rate: number | null;
+  total_km: number;
+  loaded_km: number;
+  empty_km: number;
+  loaded_rate: number | null;
+  empty_rate: number | null;
+}
+
+export interface OccupancyStats {
+  period: string;
+  start: string;
+  end: string;
+  results: VehicleOccupancy[];
+  fleet: {
+    total_km: number;
+    loaded_km: number;
+    empty_km: number;
+    loaded_rate: number | null;
+    empty_rate: number | null;
+  };
+}
+
+export function useOccupancyStats(params: Record<string, string>) {
+  return useQuery({
+    queryKey: ["dashboard-occupancy", params],
+    queryFn: async () => {
+      const { data } = await api.get<OccupancyStats>("/dashboard/occupancy/", { params });
+      return data;
+    },
+  });
+}
+
 export function useSubsidiaries() {
   return useQuery({
     queryKey: ["subsidiaries"],

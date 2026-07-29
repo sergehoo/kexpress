@@ -38,4 +38,12 @@ app.conf.beat_schedule = {
         "task": "apps.vehicles.tasks.check_vehicle_compliance",
         "schedule": crontab(hour="6,14", minute=30),
     },
+    # Occupation & kilométrage à vide : matérialisation nocturne des 2 derniers jours
+    # (la veille peut encore recevoir des clôtures tardives). La période « aujourd'hui »
+    # reste calculée à la volée par l'API — cf. décision D4 (hybride batch + live).
+    "recompute-occupancy-metrics": {
+        "task": "apps.analytics.tasks.recompute_metrics",
+        "schedule": crontab(hour=2, minute=20),
+        "kwargs": {"days_back": 2},
+    },
 }

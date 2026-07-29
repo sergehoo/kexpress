@@ -4,3 +4,7 @@
 pytest>=8.3
 pytest-django>=4.9
 django-extensions>=4.1
+# Tests de propriété : éprouve les identités des métriques (km à vide, taux) sur des
+# milliers d'entrées générées, là où quelques cas choisis à la main laisseraient passer
+# les divisions par zéro et les données incohérentes.
+hypothesis>=6.100
