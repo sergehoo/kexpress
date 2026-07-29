@@ -525,7 +525,27 @@ export interface ReservationTripLeg {
   leg_display: string;
   status: string;
   status_display: string;
+  origin: string;
   destination: string;
+  vehicle: string | null;
+  vehicle_registration: string | null;
+  driver: string | null;
+  driver_name: string | null;
+  planned_departure_at: string | null;
+  planned_arrival_at: string | null;
+}
+
+/** Suggestion d'affectation par segment : véhicule dispo classé par proximité (ETA). */
+export interface SuggestedVehicle {
+  id: string;
+  registration: string;
+  label: string;
+  subsidiary: string | null;
+  lat: number | null;
+  lng: number | null;
+  distance_km?: number;
+  eta_min?: number;
+  eta_source?: string;
 }
 
 export interface TripIncidentItem {

@@ -1,8 +1,50 @@
 """Suivi des courses : exécution réelle, remise/retour, incidents, photos."""
+from django.contrib.postgres.constraints import ExclusionConstraint
+from django.contrib.postgres.fields import RangeBoundary, RangeOperators
 from django.db import models
 
+from apps.core.db import TsTzRange
 from apps.core.enums import IncidentSeverity, TripLeg, TripStatus
 from apps.core.models import TenantManager, TenantScopedModel, TimeStampedModel
+
+# Statuts pour lesquels une course OCCUPE réellement son véhicule / son chauffeur.
+# Miroir de `apps.trips.services._ACTIVE_TRIP_STATUSES` (dupliqué ici volontairement :
+# les contraintes DB ne peuvent pas importer la couche service).
+_OCCUPYING_STATUSES = [
+    TripStatus.SCHEDULED, TripStatus.DEPARTED, TripStatus.IN_PROGRESS, TripStatus.RETURNED,
+]
+
+
+def _no_overlap(field: str) -> ExclusionConstraint:
+    """Interdit AU NIVEAU BASE deux courses actives du même véhicule (ou chauffeur) dont les
+    fenêtres prévues se chevauchent.
+
+    Filet de sécurité contre le double-booking : la vérification applicative
+    (`trip_time_conflicts`) est un check-then-write, donc vulnérable au write-skew sous
+    READ COMMITTED — deux transactions concurrentes peuvent la passer toutes les deux.
+    Cette contrainte rend la collision impossible même si un chemin de code oublie le verrou.
+    """
+    return ExclusionConstraint(
+        name=f"excl_trip_{field}_overlap",
+        expressions=[
+            (field, RangeOperators.EQUAL),
+            (
+                TsTzRange("planned_departure_at", "planned_arrival_at", RangeBoundary()),
+                RangeOperators.OVERLAPS,
+            ),
+        ],
+        condition=models.Q(
+            status__in=_OCCUPYING_STATUSES,
+            planned_departure_at__isnull=False,
+            planned_arrival_at__isnull=False,
+            **{f"{field}__isnull": False},
+        ),
+        violation_error_message=(
+            "Conflit horaire : ce véhicule est déjà engagé sur ce créneau."
+            if field == "vehicle"
+            else "Conflit horaire : ce chauffeur est déjà engagé sur ce créneau."
+        ),
+    )
 
 
 class TripManager(TenantManager):
@@ -44,8 +86,11 @@ class Trip(TenantScopedModel):
     requester = models.ForeignKey(
         "accounts.User", on_delete=models.PROTECT, related_name="trips", verbose_name="demandeur"
     )
+    # Nullable : une course peut exister « en attente d'affectation » (aller-retour →
+    # deux courses créées à la validation, chacune affectée séparément par la suite).
     vehicle = models.ForeignKey(
-        "vehicles.Vehicle", on_delete=models.PROTECT, related_name="trips", verbose_name="véhicule"
+        "vehicles.Vehicle", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="trips", verbose_name="véhicule",
     )
     driver = models.ForeignKey(
         "drivers.Driver", on_delete=models.SET_NULL, null=True, blank=True,
@@ -57,6 +102,11 @@ class Trip(TenantScopedModel):
         "statut", max_length=16, choices=TripStatus.choices,
         default=TripStatus.SCHEDULED, db_index=True,
     )
+
+    # Horaires PRÉVUS du segment (par course) — départ/arrivée estimés. Servent au
+    # planning, à la détection de conflit par segment et à la détection de retard.
+    planned_departure_at = models.DateTimeField("départ prévu", null=True, blank=True)
+    planned_arrival_at = models.DateTimeField("arrivée prévue", null=True, blank=True)
 
     # Exécution réelle
     actual_departure = models.DateTimeField("départ réel", null=True, blank=True)
@@ -79,6 +129,10 @@ class Trip(TenantScopedModel):
         constraints = [
             # Au plus une course par segment et par réservation (aller / retour).
             models.UniqueConstraint(fields=["reservation", "leg"], name="uniq_trip_reservation_leg"),
+            # Pas de double-booking : un véhicule / un chauffeur ne peut pas être engagé
+            # sur deux courses actives qui se chevauchent (garantie atomique, cf. _no_overlap).
+            _no_overlap("vehicle"),
+            _no_overlap("driver"),
         ]
 
     def __str__(self):

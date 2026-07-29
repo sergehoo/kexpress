@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.audit import services as audit
+from apps.core.db import lock_row
 from apps.core.enums import (
     AuditAction,
     NotificationType,
@@ -184,6 +185,8 @@ def assign_vehicle(reservation: Reservation, vehicle, actor) -> Reservation:
         ReservationStatus.DRIVER_ASSIGNED,
     ):
         raise WorkflowError("La réservation doit être validée avant d'affecter un véhicule.")
+    # Verrou exclusif : sérialise les affectations concurrentes de CE véhicule (cf. _lock).
+    vehicle = lock_row(vehicle)
     workflow.check_vehicle_assignable(vehicle, reservation)
 
     # Libère l'ancien véhicule si réaffectation.
@@ -219,6 +222,8 @@ def assign_driver(reservation: Reservation, driver, actor) -> Reservation:
         ReservationStatus.VEHICLE_ASSIGNED, ReservationStatus.DRIVER_ASSIGNED,
     ):
         raise WorkflowError("Affectez d'abord un véhicule.")
+    # Verrou exclusif : sérialise les affectations concurrentes de CE chauffeur (cf. _lock).
+    driver = lock_row(driver)
     workflow.check_driver_assignable(driver, reservation)
 
     reservation.driver = driver
@@ -317,6 +322,8 @@ def reschedule(reservation, departure_time, estimated_return, actor, return_time
     reservation.save(update_fields=[
         "departure_time", "estimated_return", "trip_date", "return_time", "updated_at",
     ])
+    # Répercute les nouveaux horaires PRÉVUS sur les courses déjà générées (aller/retour).
+    _ensure_trips(reservation)
     audit.record(actor, AuditAction.UPDATE, reservation, changes={
         "action": "reschedule",
         "departure_time": departure_time.isoformat(),
@@ -346,10 +353,13 @@ def _record_decision(reservation, level, actor, decision, comment):
 
 def _on_approved(reservation, actor):
     """Effets de bord à l'entrée dans le statut APPROVED."""
+    # Crée dès la validation la/les course(s) « en attente d'affectation » : pour un
+    # aller-retour, l'aller ET le retour existent, prêts à être affectés séparément.
+    _ensure_trips(reservation)
     reservation_event(
         reservation, NotificationType.RESERVATION_APPROVED,
         title=f"Demande validée — {reservation.destination}",
-        next_action="Affectation d'un véhicule par le gestionnaire de flotte.",
+        next_action="Affectation d'un véhicule à chaque course par le gestionnaire de flotte.",
     )
 
 
@@ -374,9 +384,10 @@ def _ensure_trips(reservation):
 
     trips = []
     for leg, destination in specs:
+        dep, arr = _leg_times(reservation, leg)
         # get_or_create sur (réservation, segment) : idempotent et tolérant aux courses
         # concurrentes (cf. contrainte d'unicité Trip.uniq_trip_reservation_leg).
-        trip, _ = Trip.objects.get_or_create(
+        trip, created = Trip.objects.get_or_create(
             reservation=reservation,
             leg=leg,
             defaults=dict(
@@ -387,10 +398,42 @@ def _ensure_trips(reservation):
                 destination=destination,
                 status=TripStatus.SCHEDULED,
                 created_by=reservation.created_by,
+                planned_departure_at=dep,
+                planned_arrival_at=arr,
             ),
         )
+        if not created:
+            # Aligne les horaires prévus / destination (ex. replanification) sans écraser
+            # une course déjà démarrée.
+            fields = []
+            for attr, val in (("planned_departure_at", dep), ("planned_arrival_at", arr), ("destination", destination)):
+                if getattr(trip, attr) != val:
+                    setattr(trip, attr, val)
+                    fields.append(attr)
+            if fields:
+                trip.save(update_fields=[*fields, "updated_at"])
         trips.append(trip)
     return trips
+
+
+def _leg_times(reservation, leg):
+    """Horaires PRÉVUS (départ, arrivée) d'un segment, dérivés de la réservation.
+
+    * Aller (ou aller simple) : départ = `departure_time` ; arrivée = départ du retour
+      s'il existe (l'aller doit être rentré pour laisser partir le retour), sinon
+      `estimated_return`.
+    * Retour : départ = `return_time` ; arrivée = `estimated_return` (fin de mission).
+    """
+    from apps.core.enums import TripLeg, TripType
+
+    if reservation.trip_type == TripType.ROUND_TRIP and leg == TripLeg.RETURN:
+        return reservation.return_time, reservation.estimated_return
+    outbound_arrival = (
+        reservation.return_time
+        if (reservation.trip_type == TripType.ROUND_TRIP and reservation.return_time)
+        else reservation.estimated_return
+    )
+    return reservation.departure_time, outbound_arrival
 
 
 def _set_vehicle_status(vehicle, new_status, reason, actor):

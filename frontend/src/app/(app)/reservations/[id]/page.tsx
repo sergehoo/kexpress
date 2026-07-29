@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  CornerUpLeft,
   Mail,
   MapPin,
   Route,
@@ -25,29 +26,39 @@ import {
   AssignVehicleModal,
   RejectModal,
 } from "@/components/reservation-modals";
-import { useReservation, useReservationAction } from "@/lib/queries";
+import { useReservation, useReservationAction, useTripAction } from "@/lib/queries";
+import { useAuth } from "@/lib/auth";
+import { canManageFleet } from "@/lib/rbac";
 import { apiError } from "@/lib/api";
-import type { Reservation } from "@/lib/types";
+import type { Reservation, ReservationTripLeg } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 
 type ModalState =
   | { type: "reject"; res: Reservation }
-  | { type: "assign-vehicle"; res: Reservation }
-  | { type: "assign-driver"; res: Reservation }
+  | { type: "assign-vehicle"; res: Reservation; trip?: ReservationTripLeg }
+  | { type: "assign-driver"; res: Reservation; trip?: ReservationTripLeg }
   | null;
+
+/** Libellé de course lisible : « Aller » / « Retour » pour un A/R, « Course » sinon. */
+function courseLabel(res: Reservation, t: ReservationTripLeg): string {
+  return res.trip_type === "round_trip" ? t.leg_display : "Course";
+}
 
 export default function ReservationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { data: r, isLoading, isError } = useReservation(id);
+  const { me } = useAuth();
   const [modal, setModal] = useState<ModalState>(null);
   const [toast, setToast] = useState("");
 
   const submit = useReservationAction("submit");
   const approve = useReservationAction("approve");
   const cancel = useReservationAction("cancel");
+  const cancelTrip = useTripAction("cancel");
   const run = (m: ReturnType<typeof useReservationAction>) =>
     r && m.mutate({ id: r.id }, { onError: (e) => setToast(apiError(e)) });
+  const canManage = canManageFleet(me?.role) || Boolean(me?.has_company_scope);
 
   if (isLoading) {
     return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>;
@@ -110,21 +121,19 @@ export default function ReservationDetailPage() {
               <Button size="sm" variant="danger" onClick={() => setModal({ type: "reject", res: r })}>Refuser</Button>
             </>
           )}
-          {r.status === "approved" && (
+          {/* Repli legacy : réservations validées AVANT la gestion par course (aucune course
+              générée) — l'affectation réservation-globale reste possible. Sinon, l'affectation
+              se fait par course dans la section « Courses » ci-dessous. */}
+          {r.trips.length === 0 && r.status === "approved" && (
             <Button size="sm" onClick={() => setModal({ type: "assign-vehicle", res: r })}>Affecter véhicule</Button>
           )}
-          {r.status === "vehicle_assigned" && r.needs_driver && (
+          {r.trips.length === 0 && r.status === "vehicle_assigned" && r.needs_driver && (
             <Button size="sm" onClick={() => setModal({ type: "assign-driver", res: r })}>Affecter chauffeur</Button>
           )}
           {cancellable && (
             <Button size="sm" variant="ghost" onClick={() => run(cancel)} disabled={cancel.isPending}>Annuler la demande</Button>
           )}
-          {r.trip_id && (
-            <Link href={`/trips/${r.trip_id}`} className="ml-auto">
-              <Button size="sm" variant="secondary"><Route className="h-4 w-4" /> Voir la course</Button>
-            </Link>
-          )}
-          {!cancellable && !["pending_manager", "pending_fleet", "approved"].includes(r.status) && !r.trip_id && (
+          {!cancellable && !["pending_manager", "pending_fleet", "approved"].includes(r.status) && r.trips.length === 0 && (
             <p className="text-xs text-faint">Aucune action disponible à ce statut.</p>
           )}
         </CardBody>
@@ -159,21 +168,10 @@ export default function ReservationDetailPage() {
               <InfoRow icon={UserRound} label="Conduite" value={r.needs_driver ? "Avec chauffeur" : "Conduite personnelle"} />
             </div>
             <InfoRow label="Motif" value={r.purpose} />
-            {r.trips.length > 1 && (
-              <div className="space-y-1.5 border-t border-line pt-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-faint">Courses ({r.trips.length})</p>
-                {r.trips.map((t) => (
-                  <div key={t.id} className="flex items-center justify-between text-xs">
-                    <span className="text-muted">{t.leg_display} → <span className="text-ink">{t.destination}</span></span>
-                    <span className="rounded-full bg-surface2 px-2 py-0.5 text-[10px] font-medium text-muted">{t.status_display}</span>
-                  </div>
-                ))}
-              </div>
-            )}
           </CardBody>
         </Card>
 
-        {/* Demandeur + affectations */}
+        {/* Demandeur */}
         <div className="space-y-4">
           <Card>
             <CardBody className="space-y-3">
@@ -183,29 +181,35 @@ export default function ReservationDetailPage() {
               <InfoRow icon={Building2} label="Filiale" value={r.subsidiary_name} />
             </CardBody>
           </Card>
-          <Card>
-            <CardBody className="space-y-3">
-              <SectionTitle>Affectations</SectionTitle>
-              {r.vehicle_registration || r.driver_name ? (
-                <div className="flex flex-wrap gap-2">
-                  {r.vehicle_registration && (
-                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 px-3 py-1.5 text-sm font-medium text-sky-600">
-                      <Car className="h-4 w-4" /> {r.vehicle_registration}
-                    </span>
-                  )}
-                  {r.driver_name && (
-                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-3 py-1.5 text-sm font-medium text-violet-600">
-                      <UserRound className="h-4 w-4" /> {r.driver_name}
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm text-faint">Aucun véhicule ni chauffeur affecté pour le moment.</p>
-              )}
-            </CardBody>
-          </Card>
         </div>
       </div>
+
+      {/* Courses (aller / retour) — affectation, horaires et statut INDÉPENDANTS par segment */}
+      {r.trips.length > 0 && (
+        <Card>
+          <CardBody className="space-y-3">
+            <SectionTitle>
+              {r.trip_type === "round_trip" ? `Courses — aller-retour (${r.trips.length})` : "Course"}
+            </SectionTitle>
+            <div className={cn("grid gap-3", r.trips.length > 1 && "sm:grid-cols-2")}>
+              {r.trips.map((t) => (
+                <CourseCard
+                  key={t.id}
+                  res={r}
+                  trip={t}
+                  canManage={canManage}
+                  cancelPending={cancelTrip.isPending}
+                  onAssignVehicle={() => setModal({ type: "assign-vehicle", res: r, trip: t })}
+                  onAssignDriver={() => setModal({ type: "assign-driver", res: r, trip: t })}
+                  onCancel={() =>
+                    cancelTrip.mutate({ id: t.id }, { onError: (e) => setToast(apiError(e)) })
+                  }
+                />
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* Circuit de validation */}
       <Card>
@@ -245,8 +249,94 @@ export default function ReservationDetailPage() {
       </p>
 
       {modal?.type === "reject" && <RejectModal res={modal.res} onClose={() => setModal(null)} onError={setToast} />}
-      {modal?.type === "assign-vehicle" && <AssignVehicleModal res={modal.res} onClose={() => setModal(null)} onError={setToast} />}
-      {modal?.type === "assign-driver" && <AssignDriverModal res={modal.res} onClose={() => setModal(null)} onError={setToast} />}
+      {modal?.type === "assign-vehicle" && <AssignVehicleModal res={modal.res} trip={modal.trip} onClose={() => setModal(null)} onError={setToast} />}
+      {modal?.type === "assign-driver" && <AssignDriverModal res={modal.res} trip={modal.trip} onClose={() => setModal(null)} onError={setToast} />}
+    </div>
+  );
+}
+
+/** Carte d'une course (segment) : itinéraire, horaires prévus, affectation et statut PROPRES,
+ *  avec actions indépendantes (affecter véhicule/chauffeur, annuler) — cœur de la gestion A/R. */
+function CourseCard({
+  res,
+  trip,
+  canManage,
+  cancelPending,
+  onAssignVehicle,
+  onAssignDriver,
+  onCancel,
+}: {
+  res: Reservation;
+  trip: ReservationTripLeg;
+  canManage: boolean;
+  cancelPending: boolean;
+  onAssignVehicle: () => void;
+  onAssignDriver: () => void;
+  onCancel: () => void;
+}) {
+  // Une course n'est (ré)affectable / annulable que tant qu'elle n'a pas démarré.
+  const assignable = trip.status === "scheduled";
+  const isReturn = trip.leg === "return";
+  return (
+    <div className="rounded-xl border border-line bg-surface2/40 p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink">
+          {isReturn ? <CornerUpLeft className="h-4 w-4 text-brand-500" /> : <Route className="h-4 w-4 text-brand-500" />}
+          {courseLabel(res, trip)}
+        </span>
+        <StatusBadge code={trip.status} label={trip.status_display} />
+      </div>
+
+      <div className="mt-2.5 flex items-center gap-1.5 text-sm text-ink">
+        <MapPin className="h-3.5 w-3.5 shrink-0 text-faint" />
+        <span className="truncate">{trip.origin || "—"}</span>
+        <span className="text-faint">→</span>
+        <span className="truncate font-medium">{trip.destination}</span>
+      </div>
+      {(trip.planned_departure_at || trip.planned_arrival_at) && (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+          <Clock className="h-3.5 w-3.5 shrink-0 text-faint" />
+          {trip.planned_departure_at ? formatDate(trip.planned_departure_at, true) : "—"}
+          {" → "}
+          {trip.planned_arrival_at ? formatDate(trip.planned_arrival_at, true) : "—"}
+        </p>
+      )}
+
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <span className={cn(
+          "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
+          trip.vehicle_registration ? "bg-sky-500/10 text-sky-600" : "bg-surface2 text-faint",
+        )}>
+          <Car className="h-3.5 w-3.5" /> {trip.vehicle_registration || "Véhicule non affecté"}
+        </span>
+        {res.needs_driver && (
+          <span className={cn(
+            "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
+            trip.driver_name ? "bg-violet-500/10 text-violet-600" : "bg-surface2 text-faint",
+          )}>
+            <UserRound className="h-3.5 w-3.5" /> {trip.driver_name || "Chauffeur non affecté"}
+          </span>
+        )}
+      </div>
+
+      {canManage && assignable && (
+        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-2.5">
+          <Button size="sm" variant="secondary" onClick={onAssignVehicle}>
+            {trip.vehicle ? "Changer véhicule" : "Affecter véhicule"}
+          </Button>
+          {res.needs_driver && (
+            <Button size="sm" variant="secondary" onClick={onAssignDriver}>
+              {trip.driver ? "Changer chauffeur" : "Affecter chauffeur"}
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={onCancel} disabled={cancelPending}>Annuler la course</Button>
+        </div>
+      )}
+      <div className="mt-2">
+        <Link href={`/trips/${trip.id}`} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+          <Route className="h-3.5 w-3.5" /> Voir la course
+        </Link>
+      </div>
     </div>
   );
 }

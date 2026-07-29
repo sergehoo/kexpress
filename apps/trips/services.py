@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.audit import services as audit
+from apps.core.db import lock_row
 from apps.core.enums import (
     AuditAction,
     NotificationType,
@@ -186,7 +187,236 @@ def _check_fuel_anomaly(trip, threshold_pct: float = 20.0):
     )
 
 
+# --- Affectation PAR SEGMENT (course) ------------------------------------
+
+# Statuts « course » actifs (comptent pour la détection de conflit horaire).
+_ACTIVE_TRIP_STATUSES = (
+    TripStatus.SCHEDULED, TripStatus.DEPARTED, TripStatus.IN_PROGRESS, TripStatus.RETURNED,
+)
+# Une course peut être (ré)affectée / annulée tant qu'elle n'est pas partie.
+_ASSIGNABLE_TRIP_STATUSES = (TripStatus.SCHEDULED,)
+
+
+def can_manage_trip(trip, user) -> bool:
+    """Peut affecter/annuler une course : superadmin, ou gestionnaire/flotte de son périmètre."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    if user.role in TRIP_START_MANAGER_ROLES:
+        return getattr(user, "has_company_scope", False) or user.subsidiary_id == trip.subsidiary_id
+    return False
+
+
+def trip_time_conflicts(trip, *, field):
+    """Autres courses actives (non annulées) du même véhicule/chauffeur dont la fenêtre
+    PRÉVUE chevauche celle de `trip`. `field` ∈ {"vehicle", "driver"}. Conflit PAR SEGMENT :
+    un aller 10h–12h et un retour 18h–20h sur le même véhicule ne se chevauchent pas."""
+    ref = getattr(trip, f"{field}_id")
+    if not ref or trip.planned_departure_at is None or trip.planned_arrival_at is None:
+        return Trip.objects.none()
+    return (
+        Trip.objects.filter(**{f"{field}_id": ref}, status__in=_ACTIVE_TRIP_STATUSES)
+        .filter(
+            planned_departure_at__lt=trip.planned_arrival_at,
+            planned_arrival_at__gt=trip.planned_departure_at,
+        )
+        .exclude(pk=trip.pk)
+    )
+
+
+@transaction.atomic
+def assign_vehicle_to_trip(trip, vehicle, actor) -> Trip:
+    """Affecte un véhicule à UNE course (aller ou retour), indépendamment de l'autre segment."""
+    from apps.core.enums import VehicleStatus as VS
+    from apps.reservations import workflow
+
+    if trip.status not in _ASSIGNABLE_TRIP_STATUSES:
+        raise WorkflowError("Cette course ne peut plus être (ré)affectée (déjà partie ou clôturée).")
+    vehicle = lock_row(vehicle)  # sérialise les affectations concurrentes de CE véhicule
+    workflow.check_capacity(vehicle, trip.reservation.passengers)
+    if vehicle.status in (VS.MAINTENANCE, VS.OUT_OF_SERVICE):
+        raise WorkflowError(f"Véhicule indisponible (état : {vehicle.get_status_display()}).")
+
+    old_vehicle = trip.vehicle
+    trip.vehicle = vehicle  # pour la vérif de conflit sur la fenêtre de CETTE course
+    conflict = trip_time_conflicts(trip, field="vehicle").first()
+    if conflict:
+        raise WorkflowError(
+            f"Conflit horaire : ce véhicule est déjà engagé sur une autre course "
+            f"({conflict.get_leg_display()} — {conflict.destination}) sur ce créneau."
+        )
+    trip.save(update_fields=["vehicle", "updated_at"])
+    _set_vehicle_status(vehicle, VehicleStatus.RESERVED, "Affecté à une course", actor)
+    if old_vehicle and old_vehicle.pk != vehicle.pk:
+        _release_if_idle(old_vehicle, actor)
+    _recompute_reservation_assignment(trip.reservation)
+    trip_event(trip, NotificationType.VEHICLE_ASSIGNED,
+               title=f"{_leg_label(trip)} — véhicule affecté ({vehicle.registration})",
+               next_action="Affectation du chauffeur." if trip.reservation.needs_driver and not trip.driver_id else "Départ de la course.")
+    audit.record(actor, AuditAction.UPDATE, trip,
+                 changes={"action": "assign_vehicle_to_trip", "leg": trip.leg, "vehicle": vehicle.registration})
+    return trip
+
+
+@transaction.atomic
+def assign_driver_to_trip(trip, driver, actor) -> Trip:
+    """Affecte un chauffeur à UNE course (aller ou retour)."""
+    if trip.status not in _ASSIGNABLE_TRIP_STATUSES:
+        raise WorkflowError("Cette course ne peut plus être (ré)affectée (déjà partie ou clôturée).")
+    driver = lock_row(driver)  # sérialise les affectations concurrentes de CE chauffeur
+    if not getattr(driver, "is_available", True):
+        raise WorkflowError("Ce chauffeur n'est pas disponible.")
+    trip.driver = driver
+    conflict = trip_time_conflicts(trip, field="driver").first()
+    if conflict:
+        raise WorkflowError(
+            f"Conflit horaire : ce chauffeur est déjà engagé sur une autre course "
+            f"({conflict.get_leg_display()} — {conflict.destination}) sur ce créneau."
+        )
+    trip.save(update_fields=["driver", "updated_at"])
+    _recompute_reservation_assignment(trip.reservation)
+    trip_event(trip, NotificationType.DRIVER_ASSIGNED,
+               title=f"{_leg_label(trip)} — chauffeur affecté ({driver.full_name})",
+               include_driver=False)
+    # Notification dédiée au chauffeur du segment.
+    if driver.user_id:
+        notify_many(
+            [driver.user], NotificationType.DRIVER_ASSIGNED,
+            title=f"Vous êtes affecté — {_leg_label(trip)} vers {trip.destination}",
+            message=f"Départ prévu : {trip.planned_departure_at:%d/%m %H:%M}" if trip.planned_departure_at else "",
+            link="/map", severity="info",
+        )
+    audit.record(actor, AuditAction.UPDATE, trip,
+                 changes={"action": "assign_driver_to_trip", "leg": trip.leg, "driver": driver.full_name})
+    return trip
+
+
+@transaction.atomic
+def cancel_trip(trip, actor) -> Trip:
+    """Annule UNE course (segment). La réservation reste active tant qu'un segment non
+    annulé subsiste ; si tous les segments sont annulés, la réservation passe ANNULÉE."""
+    if trip.status in (TripStatus.RETURNED, TripStatus.CLOSED, TripStatus.CANCELLED):
+        raise WorkflowError("Cette course est déjà terminée, clôturée ou annulée.")
+    if trip.status == TripStatus.IN_PROGRESS:
+        raise WorkflowError("Impossible d'annuler une course en cours — terminez-la d'abord.")
+    old_vehicle = trip.vehicle
+    trip.status = TripStatus.CANCELLED
+    trip.save(update_fields=["status", "updated_at"])
+    _release_if_idle(old_vehicle, actor)
+
+    res = trip.reservation
+    legs = list(Trip.objects.filter(reservation=res))
+    if legs and all(t.status == TripStatus.CANCELLED for t in legs):
+        _set_reservation_status(res, ReservationStatus.CANCELLED)
+    else:
+        _recompute_reservation_assignment(res)
+    trip_event(trip, NotificationType.RESERVATION_CANCELLED,
+               title=f"{_leg_label(trip)} annulée — {trip.destination}",
+               severity="warning")
+    audit.record(actor, AuditAction.UPDATE, trip, changes={"action": "cancel_trip", "leg": trip.leg})
+    return trip
+
+
+def suggest_vehicles_for_trip(trip, limit=5):
+    """Dispatching par segment : véhicules disponibles classés par proximité (ETA) du point
+    de départ de CETTE course. Réutilise `apps.maps.proximity.rank_by_eta`."""
+    from apps.maps.proximity import rank_by_eta
+    from apps.vehicles.models import Vehicle
+
+    route = getattr(trip, "route", None)
+    origin = None
+    if route and route.origin_lat is not None and route.origin_lng is not None:
+        origin = (float(route.origin_lat), float(route.origin_lng))
+
+    passengers = trip.reservation.passengers if trip.reservation_id else 1
+    candidates = []
+    for v in (
+        Vehicle.objects.filter(status=VehicleStatus.AVAILABLE, capacity__gte=passengers)
+        .select_related("subsidiary")[:50]
+    ):
+        loc = getattr(v, "last_location", None)
+        candidates.append({
+            "id": str(v.id),
+            "registration": v.registration,
+            "label": f"{v.brand} {v.model}".strip(),
+            "subsidiary": v.subsidiary.name if v.subsidiary_id else None,
+            "lat": float(loc.latitude) if (loc and loc.latitude is not None) else None,
+            "lng": float(loc.longitude) if (loc and loc.longitude is not None) else None,
+        })
+    if origin:
+        candidates = rank_by_eta(origin, candidates)
+    return candidates[:limit]
+
+
 # --- Internes ------------------------------------------------------------
+
+
+def _leg_label(trip) -> str:
+    """« Aller » / « Retour » pour un aller-retour, « Course » pour un aller simple."""
+    from apps.core.enums import TripType
+
+    return trip.get_leg_display() if trip.reservation.trip_type == TripType.ROUND_TRIP else "Course"
+
+
+def trip_event(trip, notification_type, *, title, next_action="", severity="info", include_driver=True):
+    """Notification liée à UN segment (lien vers la réservation qui regroupe les 2 courses)."""
+    from apps.core.enums import AlertSeverity
+
+    sev = {
+        "info": AlertSeverity.INFO,
+        "warning": AlertSeverity.WARNING,
+    }.get(severity, AlertSeverity.INFO)
+    reservation_event(
+        trip.reservation, notification_type,
+        title=title, next_action=next_action, severity=sev, include_driver=include_driver,
+    )
+
+
+def _release_if_idle(vehicle, actor):
+    """Repasse un véhicule RÉSERVÉ à DISPONIBLE s'il ne sert plus aucune course active."""
+    if vehicle is None or vehicle.status != VehicleStatus.RESERVED:
+        return
+    if not Trip.objects.filter(vehicle=vehicle, status__in=_ACTIVE_TRIP_STATUSES).exists():
+        _set_vehicle_status(vehicle, VehicleStatus.AVAILABLE, "Libéré (aucune course active)", actor)
+
+
+def _recompute_reservation_assignment(reservation):
+    """Aligne le statut d'affectation de la réservation sur ses segments NON annulés :
+    DRIVER_ASSIGNED si chaque segment a véhicule + chauffeur (si chauffeur requis),
+    VEHICLE_ASSIGNED si chaque segment a un véhicule, sinon APPROVED. Ne rétrograde jamais
+    une réservation déjà en cours / terminée / clôturée / annulée. Recopie aussi le
+    véhicule/chauffeur de l'aller sur la réservation (affichage « principal »)."""
+    if reservation.status in (
+        ReservationStatus.IN_PROGRESS, ReservationStatus.COMPLETED,
+        ReservationStatus.CLOSED, ReservationStatus.CANCELLED,
+    ):
+        return
+    legs = list(Trip.objects.filter(reservation=reservation).exclude(status=TripStatus.CANCELLED))
+    if not legs:
+        return
+    all_vehicles = all(t.vehicle_id for t in legs)
+    all_drivers = all(t.driver_id for t in legs)
+    if all_vehicles and (all_drivers or not reservation.needs_driver):
+        new_status = ReservationStatus.DRIVER_ASSIGNED if reservation.needs_driver else ReservationStatus.VEHICLE_ASSIGNED
+    elif all_vehicles:
+        new_status = ReservationStatus.VEHICLE_ASSIGNED
+    else:
+        new_status = ReservationStatus.APPROVED
+
+    outbound = next((t for t in legs if t.leg == TripLeg.OUTBOUND), legs[0])
+    fields = []
+    if reservation.status != new_status:
+        reservation.status = new_status
+        fields.append("status")
+    if reservation.vehicle_id != outbound.vehicle_id:
+        reservation.vehicle_id = outbound.vehicle_id
+        fields.append("vehicle")
+    if reservation.driver_id != outbound.driver_id:
+        reservation.driver_id = outbound.driver_id
+        fields.append("driver")
+    if fields:
+        reservation.save(update_fields=[*fields, "updated_at"])
 
 
 def _all_legs_in(reservation, statuses) -> bool:

@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "gitAutonomy": "pull-request",
+  "promotion": {
+    "minimumConfidence": 0.9,
+    "minimumObservations": 2,
+    "requireReproduction": true,
+    "requireEvidence": true,
+    "requireIndependentVerification": true
+  },
+  "git": {
+    "baseBranch": "main",
+    "branchPrefix": "ostack/evolution",
+    "forcePush": false,
+    "directPushToProtectedBranches": false,
+    "protectedBranches": ["main", "master", "develop", "release"]
+  },
+  "autoMerge": {
+    "enabled": true,
+    "allowedRiskLevels": ["low"],
+    "confidenceMinimum": 0.92,
+    "requirements": {
+      "evidencePack": true,
+      "testsPassed": true,
+      "securityPassed": true,
+      "lintPassed": true,
+      "buildPassed": true,
+      "signedCommit": true,
+      "noSecretsDetected": true,
+      "noPolicyViolations": true,
+      "independentVerification": true
+    }
+  },
+  "risk": {
+    "autoMerge": ["low"],
+    "requireApproval": ["medium", "high", "critical"]
+  },
+  "protectedPaths": [
+    "policies/evolution.json",
+    "policies/security.json",
+    "core/autonomous-evolution/",
+    "packages/evolution/",
+    "scripts/git-push",
+    ".github/workflows/ostack-evolution.yml"
+  ],
+  "forbiddenAutonomousActions": [
+    "direct_push_main",
+    "force_push",
+    "disable_tests",
+    "modify_branch_protection",
+    "expose_secrets",
+    "modify_production",
+    "auto_merge_security_policy",
+    "auto_merge_core_runtime",
+    "modify_own_guardrails"
+  ],
+  "note": "Ce fichier gouverne l'autonomie d'OStack. Toute modification est classée critique: revue humaine obligatoire, auto-merge désactivé (§32). L'auto-évolution ne peut pas réduire ses propres garde-fous."
+}

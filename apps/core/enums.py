@@ -117,6 +117,7 @@ class TripStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "En cours"
     RETURNED = "returned", "Retour effectué"
     CLOSED = "closed", "Clôturée"
+    CANCELLED = "cancelled", "Annulée"
 
 
 class IncidentSeverity(models.TextChoices):
@@ -208,6 +209,17 @@ class GeofenceType(models.TextChoices):
     MISSION = "mission", "Zone mission"
     FORBIDDEN = "forbidden", "Zone interdite"
     PARKING = "parking", "Zone de stationnement"
+    # Zone OPÉRATIONNELLE de dispatching (Plateau, Cocody, Aéroport…) : sert au rattachement
+    # des courses et au regroupement. Distincte des géofences d'alerte ci-dessus, qui ne
+    # doivent pas polluer la résolution de zone d'une course.
+    OPERATIONAL = "operational", "Zone opérationnelle"
+
+
+class ZoneCategory(models.TextChoices):
+    """Nature d'une zone opérationnelle (§3)."""
+
+    ADMINISTRATIVE = "administrative", "Zone administrative"
+    BUSINESS = "business", "Zone métier"
 
 
 class TrackingSessionStatus(models.TextChoices):
@@ -237,3 +249,6 @@ class AuditAction(models.TextChoices):
     LOGOUT = "logout", "Déconnexion"
     EXPORT = "export", "Export"
     ACCESS = "access", "Accès"
+    # Décision humaine sur une proposition de dispatching (acceptation, modification,
+    # réaffectation, rejet). Toute décision de dispatching doit être journalisée.
+    DISPATCH_DECISION = "dispatch_decision", "Décision de dispatching"

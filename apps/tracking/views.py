@@ -35,6 +35,11 @@ class GeofenceZonesView(APIView):
                 {
                     "id": str(z.id), "name": z.name, "zone_type": z.zone_type,
                     "zone_type_display": z.get_zone_type_display(), "polygon": z.polygon,
+                    # Zones opérationnelles (§3) : une zone peut être définie par un RAYON
+                    # plutôt qu'un polygone — sans ces champs elle serait invisible sur la carte.
+                    "code": z.code, "category": z.category,
+                    "center": [float(z.center_lat), float(z.center_lng)] if z.center_lat is not None else None,
+                    "radius_m": z.radius_m,
                 }
                 for z in zones
             ]

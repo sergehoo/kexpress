@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "dispatching-multi-passagers-et-gestion-de-l-ener",
+  "request": "Dispatching multi-passagers et gestion de l'énergie",
+  "functionalIntent": [
+    "Dispatching multi-passagers et gestion de l'énergie"
+  ],
+  "actors": [
+    "utilisateur"
+  ],
+  "invariants": [
+    {
+      "id": "actions-journalisees",
+      "statement": "Toute action de « Dispatching multi-passagers et gestion de l'énergie » doit être journalisée",
+      "kind": "obligation",
+      "given": "la fonctionnalité est utilisée",
+      "when": "une action aboutit ou échoue",
+      "outcome": "une entrée d'audit est créée",
+      "auditRequired": true
+    }
+  ],
+  "properties": [
+    {
+      "id": "actions-journalisees-holds",
+      "invariantId": "actions-journalisees",
+      "title": "L'obligation est respectée",
+      "gherkin": "Given la fonctionnalité est utilisée\nWhen une action aboutit ou échoue\nThen une entrée d'audit est créée\nAnd une entrée d'audit est créée",
+      "adversarial": false
+    }
+  ],
+  "controls": [
+    "audit_log"
+  ],
+  "requiredTests": [
+    "integration_test"
+  ],
+  "acceptanceCriteria": [
+    "Toute action de « Dispatching multi-passagers et gestion de l'énergie » doit être journalisée"
+  ],
+  "expectedEvidence": [
+    {
+      "invariantId": "actions-journalisees",
+      "kind": "integration_test",
+      "description": "Test d'intégration proving: Toute action de « Dispatching multi-passagers et gestion de l'énergie » doit être journalisée"
+    }
+  ],
+  "contentHash": "65d0fce9e1d9c5a4007316a59e5a5922ea1cf030664938e6c58720d3c67cb72e"
+}

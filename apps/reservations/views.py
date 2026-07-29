@@ -36,7 +36,7 @@ class ReservationViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
 
     queryset = Reservation.objects.select_related(
         "subsidiary", "requester", "vehicle", "driver"
-    ).prefetch_related("trips")  # aller + retour exposés sans N+1
+    ).prefetch_related("trips__vehicle", "trips__driver")  # aller + retour + affectation par leg
     serializer_class = ReservationSerializer
     permission_classes = [IsAuthenticated]
     filterset_fields = ["status", "priority", "trip_date", "subsidiary", "vehicle", "driver"]

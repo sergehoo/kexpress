@@ -1,0 +1,500 @@
+{
+  "schemaVersion": 1,
+  "lessons": [
+    {
+      "id": "usage-orchestration-completed",
+      "kind": "usage",
+      "key": "orchestration.completed",
+      "statement": "Action 'orchestration.completed' exécutée 6 fois (0 refus/échec)",
+      "occurrences": 6,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-orchestration-started",
+      "kind": "usage",
+      "key": "orchestration.started",
+      "statement": "Action 'orchestration.started' exécutée 6 fois (0 refus/échec)",
+      "occurrences": 6,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-workflow-started",
+      "kind": "usage",
+      "key": "workflow.started",
+      "statement": "Action 'workflow.started' exécutée 5 fois (0 refus/échec)",
+      "occurrences": 5,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-intent-compile",
+      "kind": "usage",
+      "key": "intent.compile",
+      "statement": "Action 'intent.compile' exécutée 3 fois (0 refus/échec)",
+      "occurrences": 3,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-architecture-check",
+      "kind": "usage",
+      "key": "architecture.check",
+      "statement": "Action 'architecture.check' exécutée 2 fois (0 refus/échec)",
+      "occurrences": 2,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-deliberation-challenge",
+      "kind": "usage",
+      "key": "deliberation.challenge",
+      "statement": "Action 'deliberation.challenge' exécutée 2 fois (0 refus/échec)",
+      "occurrences": 2,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-learn-observe",
+      "kind": "usage",
+      "key": "learn.observe",
+      "statement": "Action 'learn.observe' exécutée 2 fois (0 refus/échec)",
+      "occurrences": 2,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-workflow-approval-required",
+      "kind": "usage",
+      "key": "workflow.approval_required",
+      "statement": "Action 'workflow.approval_required' exécutée 2 fois (2 refus/échec)",
+      "occurrences": 2,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-aucune-suggestion-de-dispatching-systeme-ou-k-bot-n-est-executee-sans-valida",
+      "kind": "recurring_invariant",
+      "key": "aucune suggestion de dispatching (systeme ou k-bot) n'est executee sans validation humaine explicite",
+      "statement": "Invariant récurrent [prohibition]: Aucune suggestion de dispatching (systeme ou K-BOT) n'est executee sans validation humaine explicite",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-chaque-course-est-rattachee-automatiquement-a-une-zone-operationnelle-a-part",
+      "kind": "recurring_invariant",
+      "key": "chaque course est rattachee automatiquement a une zone operationnelle a partir de son depart et de sa destination",
+      "statement": "Invariant récurrent [obligation]: Chaque course est rattachee automatiquement a une zone operationnelle a partir de son depart et de sa destination",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-chaque-course-ou-mission-porte-une-estimation-energetique-un-releve-reel-et-",
+      "kind": "recurring_invariant",
+      "key": "chaque course ou mission porte une estimation energetique, un releve reel et un ecart, avec alerte si l'ecart est important",
+      "statement": "Invariant récurrent [obligation]: Chaque course ou mission porte une estimation energetique, un releve reel et un ecart, avec alerte si l'ecart est important",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-chaque-segment-peut-recevoir-un-vehicule-et-un-chauffeur-differents-valides-",
+      "kind": "recurring_invariant",
+      "key": "chaque segment peut recevoir un vehicule et un chauffeur differents, valides, modifies et annules independamment",
+      "statement": "Invariant récurrent [permission]: Chaque segment peut recevoir un vehicule et un chauffeur differents, valides, modifies et annules independamment",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-la-consommation-et-le-cout-energetique-d-une-course-sont-imputes-a-la-filial",
+      "kind": "recurring_invariant",
+      "key": "la consommation et le cout energetique d'une course sont imputes a la filiale de cette course et a aucune autre",
+      "statement": "Invariant récurrent [consistency]: La consommation et le cout energetique d'une course sont imputes a la filiale de cette course et a aucune autre",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-la-repartition-de-l-energie-d-une-mission-regroupee-entre-ses-courses-conser",
+      "kind": "recurring_invariant",
+      "key": "la repartition de l'energie d'une mission regroupee entre ses courses conserve le total selon une regle configurable",
+      "statement": "Invariant récurrent [consistency]: La repartition de l'energie d'une mission regroupee entre ses courses conserve le total selon une regle configurable",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-le-nombre-de-passagers-a-bord-d-un-vehicule-ne-depasse-jamais-sa-capacite-y-",
+      "kind": "recurring_invariant",
+      "key": "le nombre de passagers a bord d'un vehicule ne depasse jamais sa capacite, y compris pour une mission regroupee",
+      "statement": "Invariant récurrent [prohibition]: Le nombre de passagers a bord d'un vehicule ne depasse jamais sa capacite, y compris pour une mission regroupee",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-le-temps-de-deplacement-entre-deux-missions-consecutives-d-un-meme-vehicule-",
+      "kind": "recurring_invariant",
+      "key": "le temps de deplacement entre deux missions consecutives d'un meme vehicule ou chauffeur est pris en compte",
+      "statement": "Invariant récurrent [consistency]: Le temps de deplacement entre deux missions consecutives d'un meme vehicule ou chauffeur est pris en compte",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-le-vehicule-de-l-aller-n-est-pas-immobilise-pour-le-retour-il-redevient-disp",
+      "kind": "recurring_invariant",
+      "key": "le vehicule de l'aller n'est pas immobilise pour le retour: il redevient disponible des la fin de l'aller",
+      "statement": "Invariant récurrent [prohibition]: Le vehicule de l'aller n'est pas immobilise pour le retour: il redevient disponible des la fin de l'aller",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-les-km-a-vide-et-les-taux-d-occupation-sont-calcules-de-facon-coherente-km-a",
+      "kind": "recurring_invariant",
+      "key": "les km a vide et les taux d'occupation sont calcules de facon coherente: km a vide egale km totaux moins km en charge",
+      "statement": "Invariant récurrent [consistency]: Les km a vide et les taux d'occupation sont calcules de facon coherente: km a vide egale km totaux moins km en charge",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-les-litres-et-les-kwh-ne-sont-jamais-additionnes-ni-compares-sans-unite-affi",
+      "kind": "recurring_invariant",
+      "key": "les litres et les kwh ne sont jamais additionnes ni compares sans unite affichee et methode de conversion explicite",
+      "statement": "Invariant récurrent [consistency]: Les litres et les kWh ne sont jamais additionnes ni compares sans unite affichee et methode de conversion explicite",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-system-must-reject-invalid-commands",
+      "kind": "recurring_invariant",
+      "key": "system must reject invalid commands",
+      "statement": "Invariant récurrent [prohibition]: System must reject invalid commands",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-toute-action-de-dispatching-multi-passagers-et-gestion-de-l-energie-doit-etr",
+      "kind": "recurring_invariant",
+      "key": "toute action de « dispatching multi-passagers et gestion de l'energie » doit etre journalisee",
+      "statement": "Invariant récurrent [obligation]: Toute action de « Dispatching multi-passagers et gestion de l'énergie » doit être journalisée",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-toute-decision-de-dispatching-accepter-modifier-reaffecter-ajouter-ou-retire",
+      "kind": "recurring_invariant",
+      "key": "toute decision de dispatching (accepter, modifier, reaffecter, ajouter ou retirer une course, reorganiser, rejeter) est journalisee",
+      "statement": "Invariant récurrent [obligation]: Toute decision de dispatching (accepter, modifier, reaffecter, ajouter ou retirer une course, reorganiser, rejeter) est journalisee",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-un-chauffeur-n-est-jamais-affecte-a-deux-courses-ou-missions-dont-les-crenea",
+      "kind": "recurring_invariant",
+      "key": "un chauffeur n'est jamais affecte a deux courses ou missions dont les creneaux se chevauchent",
+      "statement": "Invariant récurrent [prohibition]: Un chauffeur n'est jamais affecte a deux courses ou missions dont les creneaux se chevauchent",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-un-vehicule-n-est-jamais-affecte-a-deux-courses-ou-missions-dont-les-creneau",
+      "kind": "recurring_invariant",
+      "key": "un vehicule n'est jamais affecte a deux courses ou missions dont les creneaux se chevauchent",
+      "statement": "Invariant récurrent [prohibition]: Un vehicule n'est jamais affecte a deux courses ou missions dont les creneaux se chevauchent",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-un-vehicule-non-conforme-documents-ou-controles-n-est-jamais-propose-ni-affe",
+      "kind": "recurring_invariant",
+      "key": "un vehicule non conforme (documents ou controles) n'est jamais propose ni affecte a une course ou mission",
+      "statement": "Invariant récurrent [prohibition]: Un vehicule non conforme (documents ou controles) n'est jamais propose ni affecte a une course ou mission",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-une-course-regroupee-conserve-son-demandeur-sa-reservation-sa-filiale-son-st",
+      "kind": "recurring_invariant",
+      "key": "une course regroupee conserve son demandeur, sa reservation, sa filiale, son statut et ses notifications propres",
+      "statement": "Invariant récurrent [consistency]: Une course regroupee conserve son demandeur, sa reservation, sa filiale, son statut et ses notifications propres",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-une-mission-n-est-validee-que-si-l-energie-estimee-disponible-carburant-ou-b",
+      "kind": "recurring_invariant",
+      "key": "une mission n'est validee que si l'energie estimee disponible (carburant ou batterie) couvre la distance prevue",
+      "statement": "Invariant récurrent [prohibition]: Une mission n'est validee que si l'energie estimee disponible (carburant ou batterie) couvre la distance prevue",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-une-proposition-de-regroupement-ne-retient-que-des-courses-compatibles-zone-",
+      "kind": "recurring_invariant",
+      "key": "une proposition de regroupement ne retient que des courses compatibles (zone, fenetre horaire, capacite, detour acceptable)",
+      "statement": "Invariant récurrent [prohibition]: Une proposition de regroupement ne retient que des courses compatibles (zone, fenetre horaire, capacite, detour acceptable)",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-une-reservation-aller-retour-genere-exactement-deux-courses-distinctes-aller",
+      "kind": "recurring_invariant",
+      "key": "une reservation aller-retour genere exactement deux courses distinctes (aller, retour) administrees separement",
+      "statement": "Invariant récurrent [consistency]: Une reservation aller-retour genere exactement deux courses distinctes (aller, retour) administrees separement",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-une-transaction-energetique-est-classee-en-carburant-ou-en-electricite-de-fa",
+      "kind": "recurring_invariant",
+      "key": "une transaction energetique est classee en carburant ou en electricite de facon coherente avec la motorisation du vehicule",
+      "statement": "Invariant récurrent [consistency]: Une transaction energetique est classee en carburant ou en electricite de facon coherente avec la motorisation du vehicule",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "recurring-invariant-users-may-request-help-with-available-commands",
+      "kind": "recurring_invariant",
+      "key": "users may request help with available commands",
+      "statement": "Invariant récurrent [permission]: Users may request help with available commands",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "intents"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-framework-install",
+      "kind": "usage",
+      "key": "framework.install",
+      "statement": "Action 'framework.install' exécutée 1 fois (0 refus/échec)",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    },
+    {
+      "id": "usage-update-auto-notified",
+      "kind": "usage",
+      "key": "update.auto_notified",
+      "statement": "Action 'update.auto_notified' exécutée 1 fois (0 refus/échec)",
+      "occurrences": 1,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-29T18:50:19.101Z",
+      "lastSeen": "2026-07-29T18:50:19.101Z"
+    }
+  ]
+}

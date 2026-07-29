@@ -50,6 +50,7 @@ class TripSerializer(serializers.ModelSerializer):
             "driver", "driver_name", "destination",
             "leg", "leg_display",
             "status", "status_display",
+            "planned_departure_at", "planned_arrival_at",
             "actual_departure", "actual_return", "start_mileage", "end_mileage",
             "distance_km", "fuel_consumed", "observations",
             "estimated_fuel_l", "fuel_intel", "can_start", "incidents",
@@ -84,7 +85,7 @@ class TripSerializer(serializers.ModelSerializer):
         score = None
         if gap_pct is not None:
             score = max(0, min(100, round(100 - abs(gap_pct))))
-        cost = fuel_cost(Decimal(real), obj.vehicle.fuel_type) if real else None
+        cost = fuel_cost(Decimal(real), obj.vehicle.fuel_type) if (real and obj.vehicle_id) else None
         return {
             "estimated_l": float(estimated) if estimated is not None else None,
             "real_l": float(real) if real is not None else None,
@@ -105,4 +106,18 @@ class EndTripInputSerializer(serializers.Serializer):
     end_mileage = serializers.IntegerField(min_value=0, required=False)
     fuel_consumed = serializers.DecimalField(
         max_digits=7, decimal_places=2, required=False, min_value=0
+    )
+
+
+class TripAssignVehicleInputSerializer(serializers.Serializer):
+    """Affectation d'un véhicule à UNE course (segment)."""
+    vehicle = serializers.PrimaryKeyRelatedField(
+        queryset=Trip._meta.get_field("vehicle").related_model.objects.all()
+    )
+
+
+class TripAssignDriverInputSerializer(serializers.Serializer):
+    """Affectation d'un chauffeur à UNE course (segment)."""
+    driver = serializers.PrimaryKeyRelatedField(
+        queryset=Trip._meta.get_field("driver").related_model.objects.all()
     )

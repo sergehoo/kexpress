@@ -1,0 +1,19 @@
+{
+  "$schema": "../schemas/workflow.schema.json",
+  "id": "software-lifecycle",
+  "name": "Cycle de vie logiciel",
+  "version": "1.0.0",
+  "description": "Pipeline de référence avec barrières qualité et approbations humaines.",
+  "steps": [
+    { "id": "discovery", "name": "Découverte", "agent": "business-analyst", "securityLevel": 1 },
+    { "id": "business", "name": "Analyse métier", "agent": "functional-analyst", "needs": ["discovery"], "securityLevel": 1 },
+    { "id": "architecture", "name": "Architecture", "agent": "solution-architect", "needs": ["business"], "securityLevel": 1 },
+    { "id": "validation", "name": "Validation humaine", "command": "approval:architecture", "needs": ["architecture"], "securityLevel": 3, "humanApproval": "always" },
+    { "id": "development", "name": "Développement", "agent": "backend-engineer", "needs": ["validation"], "securityLevel": 2 },
+    { "id": "tests", "name": "Tests", "agent": "test-engineer", "needs": ["development"], "securityLevel": 2 },
+    { "id": "security", "name": "Audit sécurité", "agent": "security-auditor", "needs": ["tests"], "securityLevel": 1 },
+    { "id": "documentation", "name": "Documentation", "agent": "technical-writer", "needs": ["security"], "securityLevel": 2 },
+    { "id": "release", "name": "Préparation release", "agent": "release-manager", "needs": ["documentation"], "securityLevel": 3, "humanApproval": "always" },
+    { "id": "production", "name": "Validation finale", "command": "deploy:production", "needs": ["release"], "securityLevel": 4, "humanApproval": "always" }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ostack.dev/schemas/evidence-input.schema.json",
+  "title": "OStack Evidence Input",
+  "description": "Observations a task must supply for the verification kernel to produce an Evidence Pack.",
+  "type": "object",
+  "required": ["taskId", "feature", "request", "specification", "acceptanceCriteria", "changedFiles", "tests", "security", "confidence", "evidenceItems"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "feature": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "intentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
+    "request": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "specification": {
+      "type": "object",
+      "required": ["summary", "coverage"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 100 }
+      },
+      "additionalProperties": false
+    },
+    "assumptions": { "type": "array", "items": { "type": "string" } },
+    "acceptanceCriteria": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "plan": { "type": "string" },
+    "changedFiles": { "type": "array", "items": { "type": "string" } },
+    "diffRef": { "type": "string" },
+    "architectureDecisions": { "type": "array", "items": { "type": "string" } },
+    "migrations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "reversible"],
+        "properties": {
+          "id": { "type": "string" },
+          "reversible": { "type": "boolean" },
+          "backupTaken": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "unit": { "$ref": "#/$defs/testSummary" },
+        "integration": { "$ref": "#/$defs/testSummary" },
+        "contract": { "$ref": "#/$defs/testSummary" },
+        "functional": { "$ref": "#/$defs/testSummary" },
+        "e2e": { "$ref": "#/$defs/testSummary" },
+        "permission": { "$ref": "#/$defs/testSummary" },
+        "mutationScore": { "type": "number", "minimum": 0, "maximum": 100 }
+      },
+      "additionalProperties": false
+    },
+    "security": {
+      "type": "object",
+      "required": ["critical", "high", "medium"],
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high": { "type": "integer", "minimum": 0 },
+        "medium": { "type": "integer", "minimum": 0 },
+        "low": { "type": "integer", "minimum": 0 },
+        "threatModelUpdated": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "performance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["endpoint", "afterP95Ms"],
+        "properties": {
+          "endpoint": { "type": "string" },
+          "beforeP95Ms": { "type": "number", "minimum": 0 },
+          "afterP95Ms": { "type": "number", "minimum": 0 },
+          "targetP95Ms": { "type": "number", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "testCoverage": { "type": "number", "minimum": 0, "maximum": 100 },
+        "accessibility": { "type": "number", "minimum": 0, "maximum": 100 },
+        "documentationDrift": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "permissionMatrixVerified": { "type": "boolean" },
+    "rollback": {
+      "type": "object",
+      "required": ["defined", "tested"],
+      "properties": { "defined": { "type": "boolean" }, "tested": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "humanApprovals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["approver", "reason", "approvedAt"],
+        "properties": {
+          "approver": { "type": "string" },
+          "reason": { "type": "string" },
+          "approvedAt": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "residualRisks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "description"],
+        "properties": {
+          "severity": { "$ref": "#/$defs/severity" },
+          "description": { "type": "string" },
+          "mitigation": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "deploymentProcedure": { "type": "string" },
+    "rollbackProcedure": { "type": "string" },
+    "confidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["dimension", "score"],
+        "properties": {
+          "dimension": { "$ref": "#/$defs/dimension" },
+          "score": { "type": "number", "minimum": 0, "maximum": 100 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidenceItems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "dimension", "status", "summary"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string", "enum": ["lint", "typecheck", "build", "unit_test", "integration_test", "contract_test", "functional_test", "e2e_test", "permission_test", "mutation_test", "property_test", "security_scan", "performance_measurement", "human_review", "trace"] },
+          "dimension": { "$ref": "#/$defs/dimension" },
+          "status": { "type": "string", "enum": ["passed", "failed", "observed", "approved", "rejected"] },
+          "summary": { "type": "string" },
+          "uri": { "type": "string" },
+          "metrics": { "type": "object", "additionalProperties": { "type": "number" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "testCoverageMinimum": { "type": "number" },
+        "criticalSecurityFindings": { "type": "integer", "minimum": 0 },
+        "highSecurityFindings": { "type": "integer", "minimum": 0 },
+        "mutationScoreMinimum": { "type": "number" },
+        "p95ApiLatencyMs": { "type": "number" },
+        "accessibilityScoreMinimum": { "type": "number" },
+        "documentationDriftMaximum": { "type": "number" },
+        "permissionTestsRequired": { "type": "boolean" },
+        "rollbackRequired": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "derogations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["metric", "owner", "justification", "expiresAt", "acceptedRisks", "remediationPlan"],
+        "properties": {
+          "metric": { "type": "string" },
+          "owner": { "type": "string" },
+          "justification": { "type": "string" },
+          "expiresAt": { "type": "string" },
+          "acceptedRisks": { "type": "array", "items": { "type": "string" } },
+          "remediationPlan": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "released": { "type": "boolean" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "testSummary": {
+      "type": "object",
+      "required": ["passed", "failed"],
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "severity": { "type": "string", "enum": ["info", "low", "medium", "high", "critical"] },
+    "dimension": {
+      "type": "string",
+      "enum": ["requirements_understanding", "implementation_correctness", "test_strength", "security_assurance", "performance_assurance", "documentation_consistency", "rollback_readiness"]
+    }
+  }
+}

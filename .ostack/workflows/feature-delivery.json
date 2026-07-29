@@ -1,0 +1,116 @@
+{
+  "$schema": "../schemas/workflow.schema.json",
+  "id": "feature-delivery",
+  "name": "Livraison d’une fonctionnalité",
+  "version": "1.1.0",
+  "description": "Transforme un besoin en intention compilée, spécification, architecture, implémentation contestée et Evidence Pack préparé.",
+  "steps": [
+    {
+      "id": "intent",
+      "name": "Compilation de l'intention",
+      "command": "intent:compile",
+      "securityLevel": 2
+    },
+    {
+      "id": "discovery",
+      "name": "Clarification du besoin",
+      "agent": "business-analyst",
+      "securityLevel": 1,
+      "needs": [
+        "intent"
+      ]
+    },
+    {
+      "id": "specification",
+      "name": "Spécification fonctionnelle",
+      "agent": "functional-analyst",
+      "needs": [
+        "discovery"
+      ],
+      "securityLevel": 1
+    },
+    {
+      "id": "architecture",
+      "name": "Conception technique",
+      "agent": "software-architect",
+      "needs": [
+        "specification"
+      ],
+      "securityLevel": 1
+    },
+    {
+      "id": "design-approval",
+      "name": "Validation de la conception",
+      "command": "approval:feature-design",
+      "needs": [
+        "architecture"
+      ],
+      "securityLevel": 3,
+      "humanApproval": "always"
+    },
+    {
+      "id": "implementation",
+      "name": "Plan d’implémentation",
+      "agent": "backend-engineer",
+      "needs": [
+        "design-approval"
+      ],
+      "securityLevel": 2
+    },
+    {
+      "id": "challenge",
+      "name": "Délibération contradictoire",
+      "command": "deliberation:challenge",
+      "needs": [
+        "implementation"
+      ],
+      "securityLevel": 1
+    },
+    {
+      "id": "tests",
+      "name": "Plan de tests",
+      "agent": "test-engineer",
+      "needs": [
+        "challenge"
+      ],
+      "securityLevel": 2
+    },
+    {
+      "id": "security",
+      "name": "Revue sécurité",
+      "agent": "security-auditor",
+      "needs": [
+        "tests"
+      ],
+      "securityLevel": 1
+    },
+    {
+      "id": "documentation",
+      "name": "Plan documentaire",
+      "agent": "technical-writer",
+      "needs": [
+        "security"
+      ],
+      "securityLevel": 2
+    },
+    {
+      "id": "release-readiness",
+      "name": "Validation de livraison",
+      "command": "approval:release-readiness",
+      "needs": [
+        "documentation"
+      ],
+      "securityLevel": 3,
+      "humanApproval": "always"
+    },
+    {
+      "id": "evidence-scaffold",
+      "name": "Préparation de l'Evidence Pack",
+      "command": "evidence:scaffold",
+      "needs": [
+        "release-readiness"
+      ],
+      "securityLevel": 2
+    }
+  ]
+}

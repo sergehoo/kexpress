@@ -13,6 +13,8 @@ from apps.trips.models import Trip, TripIncident
 from apps.trips.serializers import (
     EndTripInputSerializer,
     StartTripInputSerializer,
+    TripAssignDriverInputSerializer,
+    TripAssignVehicleInputSerializer,
     TripIncidentSerializer,
     TripSerializer,
 )
@@ -162,6 +164,46 @@ class TripViewSet(TenantScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
         return self._ok(_run(services.close_trip, self.get_object(), request.user))
+
+    # --- Affectation PAR SEGMENT (course) : véhicule/chauffeur différents aller/retour ---
+
+    @extend_schema(request=TripAssignVehicleInputSerializer, responses=TripSerializer)
+    @action(detail=True, methods=["post"], url_path="assign-vehicle")
+    def assign_vehicle(self, request, pk=None):
+        trip = self.get_object()
+        if not services.can_manage_trip(trip, request.user):
+            raise PermissionDenied("Vous n'êtes pas autorisé à affecter cette course.")
+        s = TripAssignVehicleInputSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        return self._ok(_run(services.assign_vehicle_to_trip, trip, s.validated_data["vehicle"], request.user))
+
+    @extend_schema(request=TripAssignDriverInputSerializer, responses=TripSerializer)
+    @action(detail=True, methods=["post"], url_path="assign-driver")
+    def assign_driver(self, request, pk=None):
+        trip = self.get_object()
+        if not services.can_manage_trip(trip, request.user):
+            raise PermissionDenied("Vous n'êtes pas autorisé à affecter cette course.")
+        s = TripAssignDriverInputSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        return self._ok(_run(services.assign_driver_to_trip, trip, s.validated_data["driver"], request.user))
+
+    @extend_schema(request=None, responses=TripSerializer)
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        trip = self.get_object()
+        if not services.can_manage_trip(trip, request.user):
+            raise PermissionDenied("Vous n'êtes pas autorisé à annuler cette course.")
+        return self._ok(_run(services.cancel_trip, trip, request.user))
+
+    @extend_schema(responses=None)
+    @action(detail=True, methods=["get"], url_path="suggest-vehicle")
+    def suggest_vehicle(self, request, pk=None):
+        """Véhicules disponibles classés par proximité (ETA) au point de départ de CETTE
+        course, à son horaire — aide à l'affectation par segment (dispatching)."""
+        trip = self.get_object()
+        if not services.can_manage_trip(trip, request.user):
+            raise PermissionDenied("Non autorisé.")
+        return Response({"results": services.suggest_vehicles_for_trip(trip)})
 
     @action(detail=True, methods=["post"], url_path="report-incident")
     def report_incident(self, request, pk=None):

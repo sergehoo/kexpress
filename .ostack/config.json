@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "kexpress",
+    "name": "kexpress",
+    "root": "."
+  },
+  "ai": {
+    "preferredProviders": [
+      "ollama",
+      "openai",
+      "anthropic",
+      "azure-openai",
+      "google",
+      "mistral",
+      "deepseek",
+      "openrouter"
+    ],
+    "models": {
+      "openai": "gpt-5.4-mini",
+      "anthropic": "claude-sonnet-4-5",
+      "ollama": "qwen3"
+    }
+  },
+  "security": {
+    "defaultLevel": 1,
+    "productionApproval": "always"
+  },
+  "knowledge": {
+    "include": [
+      "AGENTS.md",
+      "README.md",
+      "docs/**/*",
+      "**/*.{md,json,yaml,yml}"
+    ],
+    "exclude": [
+      "node_modules/**",
+      ".git/**",
+      "dist/**",
+      ".env*"
+    ]
+  },
+  "quality": {
+    "commands": [
+      {
+        "command": "npm",
+        "args": [
+          "run",
+          "check"
+        ]
+      },
+      {
+        "command": "npm",
+        "args": [
+          "test"
+        ]
+      }
+    ]
+  },
+  "plugins": []
+}

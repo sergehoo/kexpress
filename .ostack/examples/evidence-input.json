@@ -1,0 +1,94 @@
+{
+  "$schema": "https://ostack.dev/schemas/evidence-input.schema.json",
+  "taskId": "OST-2026-0042",
+  "feature": "Générateur de formation IA (BestÉpargne)",
+  "intentId": "ai-course-generator",
+  "request": "Permettre au formateur de générer une formation avec l'IA, mais empêcher sa publication automatique.",
+  "specification": {
+    "summary": "La génération IA produit une proposition modifiable en brouillon ; seul un formateur autorisé peut générer ; toute action est journalisée ; aucune publication automatique.",
+    "coverage": 98
+  },
+  "assumptions": [
+    "Le fournisseur IA est disponible dans un environnement sandbox",
+    "Le formateur possède déjà une formation au statut brouillon"
+  ],
+  "acceptanceCriteria": [
+    "Une génération IA ne peut jamais publier directement une formation",
+    "Seul un utilisateur autorisé peut générer du contenu pour sa formation",
+    "Toute génération ou validation doit être journalisée",
+    "Les quiz générés sont associés aux bonnes sections",
+    "Les échecs du fournisseur IA sont traités sans corrompre la formation"
+  ],
+  "plan": "Endpoint de génération protégé par permission objet ; service de génération renvoyant une proposition brouillon ; journalisation ; UI responsive ordinateur/mobile.",
+  "changedFiles": [
+    "backend/courses/ai_generation.py",
+    "backend/courses/permissions.py",
+    "backend/courses/audit.py",
+    "frontend/components/CourseGenerator.tsx"
+  ],
+  "diffRef": "git:feature/ai-course-generator",
+  "architectureDecisions": [
+    "La génération renvoie une proposition ; l'application du statut publié reste une action humaine distincte"
+  ],
+  "migrations": [
+    { "id": "0042_course_ai_drafts", "reversible": true, "backupTaken": true }
+  ],
+  "tests": {
+    "unit": { "passed": 84, "failed": 0 },
+    "integration": { "passed": 21, "failed": 0 },
+    "functional": { "passed": 9, "failed": 0 },
+    "e2e": { "passed": 12, "failed": 0 },
+    "permission": { "passed": 6, "failed": 0 },
+    "mutationScore": 78
+  },
+  "security": { "critical": 0, "high": 0, "medium": 2, "threatModelUpdated": true },
+  "performance": [
+    { "endpoint": "POST /api/courses/generate", "beforeP95Ms": 0, "afterP95Ms": 320, "targetP95Ms": 500 }
+  ],
+  "metrics": { "testCoverage": 88, "accessibility": 93, "documentationDrift": 0 },
+  "permissionMatrixVerified": true,
+  "rollback": { "defined": true, "tested": true },
+  "humanApprovals": [
+    { "approver": "release_arbiter", "reason": "Preuves examinées, invariant brouillon vérifié", "approvedAt": "2026-07-11T10:00:00Z" }
+  ],
+  "residualRisks": [
+    { "severity": "low", "description": "Safari mobile non testé", "mitigation": "Ajouter au prochain lot E2E" },
+    { "severity": "medium", "description": "Deux findings sécurité moyens ouverts", "mitigation": "Correctifs planifiés sous 7 jours" }
+  ],
+  "deploymentProcedure": "Migration appliquée puis déploiement backend/frontend derrière drapeau de fonctionnalité.",
+  "rollbackProcedure": "Désactiver le drapeau, exécuter la migration inverse 0042, restaurer la sauvegarde.",
+  "confidence": [
+    { "dimension": "requirements_understanding", "score": 96 },
+    { "dimension": "implementation_correctness", "score": 92 },
+    { "dimension": "test_strength", "score": 88 },
+    { "dimension": "security_assurance", "score": 91 },
+    { "dimension": "performance_assurance", "score": 84 },
+    { "dimension": "documentation_consistency", "score": 97 },
+    { "dimension": "rollback_readiness", "score": 90 }
+  ],
+  "evidenceItems": [
+    { "id": "lint", "kind": "lint", "dimension": "implementation_correctness", "status": "passed", "summary": "Lint sans erreur" },
+    { "id": "typecheck", "kind": "typecheck", "dimension": "implementation_correctness", "status": "passed", "summary": "Typage vérifié" },
+    { "id": "build", "kind": "build", "dimension": "implementation_correctness", "status": "passed", "summary": "Build réussi" },
+    { "id": "unit", "kind": "unit_test", "dimension": "test_strength", "status": "passed", "summary": "84 tests unitaires" },
+    { "id": "perm-bypass", "kind": "permission_test", "dimension": "security_assurance", "status": "passed", "summary": "Contournement de permission refusé" },
+    { "id": "invariant-draft", "kind": "functional_test", "dimension": "requirements_understanding", "status": "passed", "summary": "Génération IA reste en brouillon" },
+    { "id": "sec-scan", "kind": "security_scan", "dimension": "security_assurance", "status": "passed", "summary": "Aucun finding critique/haut" },
+    { "id": "perf", "kind": "performance_measurement", "dimension": "performance_assurance", "status": "observed", "summary": "p95 320ms < cible 500ms" },
+    { "id": "docs", "kind": "trace", "dimension": "documentation_consistency", "status": "observed", "summary": "Documentation alignée sur le code" },
+    { "id": "rollback", "kind": "human_review", "dimension": "rollback_readiness", "status": "approved", "summary": "Rollback répété en staging" }
+  ],
+  "budget": {
+    "testCoverageMinimum": 85,
+    "criticalSecurityFindings": 0,
+    "highSecurityFindings": 0,
+    "mutationScoreMinimum": 70,
+    "p95ApiLatencyMs": 500,
+    "accessibilityScoreMinimum": 90,
+    "documentationDriftMaximum": 0,
+    "permissionTestsRequired": true,
+    "rollbackRequired": true
+  },
+  "derogations": [],
+  "released": false
+}

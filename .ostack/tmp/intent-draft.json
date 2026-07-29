@@ -1,0 +1,208 @@
+{
+  "$schema": "https://ostack.dev/schemas/intent-draft.schema.json",
+  "schemaVersion": 1,
+  "id": "kexpress-dispatching-energie",
+  "request": "Faire evoluer K-Express vers un dispatching intelligent multi-passagers avec gestion unifiee de l'energie: separer aller/retour en deux courses, liberer les vehicules entre segments, affecter chaque segment independamment, rattacher chaque course a une zone operationnelle, regrouper les courses compatibles en missions de transport sans jamais depasser la capacite ni le detour acceptable, suggerer sans jamais executer automatiquement (validation humaine obligatoire et journalisee), estimer et imputer l'energie (carburant et electricite) par course et par mission sans melanger litres et kWh, mesurer les km a vide et le taux d'occupation, et respecter toutes les regles de securite (capacite, double affectation, conformite, energie suffisante, tracabilite par filiale).",
+  "functionalIntent": [
+    "Une reservation aller-retour genere deux courses distinctes administrees separement",
+    "Le vehicule de l'aller redevient disponible des la fin de l'aller",
+    "Chaque segment recoit vehicule et chauffeur affectes independamment",
+    "Chaque course est rattachee automatiquement a une zone operationnelle (PostGIS)",
+    "Le systeme identifie et propose des regroupements de courses compatibles",
+    "Une mission de transport porte plusieurs courses tout en preservant leur autonomie",
+    "Le moteur suggere le meilleur vehicule/chauffeur/regroupement sans executer",
+    "L'administrateur accepte, modifie ou rejette chaque suggestion, tout est journalise",
+    "L'energie (carburant et electricite) est estimee et imputee par course et par mission",
+    "Le tableau de bord expose occupation, km a vide, comparaison thermique vs electrique"
+  ],
+  "actors": [
+    "administrateur-dispatching",
+    "gestionnaire-filiale",
+    "chauffeur",
+    "demandeur",
+    "moteur-de-suggestion",
+    "k-bot"
+  ],
+  "invariants": [
+    {
+      "id": "rt-deux-courses-distinctes",
+      "statement": "Une reservation aller-retour genere exactement deux courses distinctes (aller, retour) administrees separement",
+      "kind": "consistency",
+      "given": "une reservation de type aller-retour approuvee",
+      "when": "les courses de la reservation sont generees",
+      "outcome": "exactement deux courses existent, une leg aller et une leg retour rattachees a la meme reservation",
+      "auditRequired": false
+    },
+    {
+      "id": "vehicule-non-immobilise-entre-legs",
+      "statement": "Le vehicule de l'aller n'est pas immobilise pour le retour: il redevient disponible des la fin de l'aller",
+      "kind": "prohibition",
+      "given": "une course aller terminee dont le vehicule est en etat de servir",
+      "when": "la course aller se termine",
+      "outcome": "le vehicule reste automatiquement reserve pour la course retour de la meme reservation",
+      "auditRequired": false
+    },
+    {
+      "id": "affectation-par-segment-independante",
+      "statement": "Chaque segment peut recevoir un vehicule et un chauffeur differents, valides, modifies et annules independamment",
+      "kind": "permission",
+      "given": "une reservation aller-retour avec ses deux courses",
+      "when": "un administrateur affecte un vehicule ou un chauffeur a un segment",
+      "outcome": "l'affectation s'applique uniquement au segment cible sans modifier l'autre segment",
+      "auditRequired": true
+    },
+    {
+      "id": "capacite-jamais-depassee",
+      "statement": "Le nombre de passagers a bord d'un vehicule ne depasse jamais sa capacite, y compris pour une mission regroupee",
+      "kind": "prohibition",
+      "given": "un vehicule de capacite C avec des passagers deja affectes",
+      "when": "une course ou une mission ajoute des passagers au vehicule",
+      "outcome": "la somme des passagers simultanement a bord depasse la capacite C",
+      "auditRequired": true
+    },
+    {
+      "id": "chauffeur-pas-de-double-affectation",
+      "statement": "Un chauffeur n'est jamais affecte a deux courses ou missions dont les creneaux se chevauchent",
+      "kind": "prohibition",
+      "given": "un chauffeur affecte a une course ou mission sur un creneau",
+      "when": "on affecte le chauffeur a une autre course ou mission au creneau chevauchant",
+      "outcome": "le chauffeur est affecte simultanement a deux missions qui se chevauchent",
+      "auditRequired": true
+    },
+    {
+      "id": "vehicule-pas-de-double-affectation",
+      "statement": "Un vehicule n'est jamais affecte a deux courses ou missions dont les creneaux se chevauchent",
+      "kind": "prohibition",
+      "given": "un vehicule affecte a une course ou mission sur un creneau",
+      "when": "on affecte le vehicule a une autre course ou mission au creneau chevauchant",
+      "outcome": "le vehicule est affecte simultanement a deux missions qui se chevauchent",
+      "auditRequired": true
+    },
+    {
+      "id": "vehicule-non-conforme-jamais-propose",
+      "statement": "Un vehicule non conforme (documents ou controles) n'est jamais propose ni affecte a une course ou mission",
+      "kind": "prohibition",
+      "given": "un vehicule presentant une non-conformite",
+      "when": "le moteur de suggestion liste les vehicules ou un admin tente une affectation",
+      "outcome": "le vehicule non conforme est propose ou affecte",
+      "auditRequired": true
+    },
+    {
+      "id": "energie-suffisante-pour-mission",
+      "statement": "Une mission n'est validee que si l'energie estimee disponible (carburant ou batterie) couvre la distance prevue",
+      "kind": "prohibition",
+      "given": "un vehicule dont l'energie disponible estimee est inferieure au besoin de la mission",
+      "when": "un administrateur valide l'affectation de la mission a ce vehicule",
+      "outcome": "la mission est validee malgre une energie estimee insuffisante",
+      "auditRequired": true
+    },
+    {
+      "id": "temps-trajet-entre-missions",
+      "statement": "Le temps de deplacement entre deux missions consecutives d'un meme vehicule ou chauffeur est pris en compte",
+      "kind": "consistency",
+      "given": "deux missions consecutives affectees au meme vehicule ou chauffeur",
+      "when": "on evalue la faisabilite de l'enchainement",
+      "outcome": "le debut de la seconde mission est posterieur a la fin de la premiere augmentee du temps de trajet estime entre elles",
+      "auditRequired": false
+    },
+    {
+      "id": "imputation-filiale-de-la-course",
+      "statement": "La consommation et le cout energetique d'une course sont imputes a la filiale de cette course et a aucune autre",
+      "kind": "consistency",
+      "given": "une course rattachee a une filiale avec une consommation enregistree",
+      "when": "la consommation ou le cout est impute",
+      "outcome": "l'imputation cible exclusivement la filiale de la course",
+      "auditRequired": false
+    },
+    {
+      "id": "repartition-mission-conserve-total",
+      "statement": "La repartition de l'energie d'une mission regroupee entre ses courses conserve le total selon une regle configurable",
+      "kind": "consistency",
+      "given": "une mission regroupee dont l'energie totale est connue et une regle de repartition",
+      "when": "l'energie est repartie entre les courses de la mission",
+      "outcome": "la somme des parts imputees aux courses est egale a l'energie totale de la mission",
+      "auditRequired": false
+    },
+    {
+      "id": "course-tracable-meme-regroupee",
+      "statement": "Une course regroupee conserve son demandeur, sa reservation, sa filiale, son statut et ses notifications propres",
+      "kind": "consistency",
+      "given": "une course integree a une mission de transport",
+      "when": "la mission est constituee ou modifiee",
+      "outcome": "la course conserve son demandeur, sa reservation, sa filiale d'imputation, son statut et ses notifications d'origine",
+      "auditRequired": false
+    },
+    {
+      "id": "suggestion-jamais-auto-executee",
+      "statement": "Aucune suggestion de dispatching (systeme ou K-BOT) n'est executee sans validation humaine explicite",
+      "kind": "prohibition",
+      "given": "une suggestion de dispatching produite par le systeme ou K-BOT",
+      "when": "la suggestion est generee",
+      "outcome": "l'affectation ou le regroupement suggere est applique automatiquement sans decision humaine",
+      "auditRequired": true
+    },
+    {
+      "id": "decision-dispatch-journalisee",
+      "statement": "Toute decision de dispatching (accepter, modifier, reaffecter, ajouter ou retirer une course, reorganiser, rejeter) est journalisee",
+      "kind": "obligation",
+      "given": "une suggestion de dispatching soumise a un administrateur",
+      "when": "l'administrateur prend une decision sur cette suggestion",
+      "outcome": "une entree d'audit reliant la suggestion, la decision et l'acteur est creee",
+      "auditRequired": true
+    },
+    {
+      "id": "zone-rattachee-automatiquement",
+      "statement": "Chaque course est rattachee automatiquement a une zone operationnelle a partir de son depart et de sa destination",
+      "kind": "obligation",
+      "given": "une course avec des coordonnees de depart et de destination",
+      "when": "la course est creee ou son itineraire est calcule",
+      "outcome": "la course recoit une zone de depart et une zone de destination resolues via PostGIS",
+      "auditRequired": false
+    },
+    {
+      "id": "unite-energetique-explicite",
+      "statement": "Les litres et les kWh ne sont jamais additionnes ni compares sans unite affichee et methode de conversion explicite",
+      "kind": "consistency",
+      "given": "des consommations thermiques en litres et electriques en kWh",
+      "when": "elles sont agregees ou comparees dans un tableau de bord ou une reponse",
+      "outcome": "chaque valeur porte son unite et toute comparaison passe par une unite energetique commune documentee",
+      "auditRequired": false
+    },
+    {
+      "id": "regroupement-respecte-contraintes",
+      "statement": "Une proposition de regroupement ne retient que des courses compatibles (zone, fenetre horaire, capacite, detour acceptable)",
+      "kind": "prohibition",
+      "given": "un ensemble de courses candidates au regroupement",
+      "when": "le moteur propose un regroupement",
+      "outcome": "un regroupement viole la capacite, la fenetre horaire, le detour maximal ou la compatibilite de zone",
+      "auditRequired": false
+    },
+    {
+      "id": "energie-classee-carburant-ou-electrique",
+      "statement": "Une transaction energetique est classee en carburant ou en electricite de facon coherente avec la motorisation du vehicule",
+      "kind": "consistency",
+      "given": "une transaction energetique saisie pour un vehicule",
+      "when": "la transaction est enregistree",
+      "outcome": "les champs carburant (litres, prix au litre) ou electricite (kWh, cout kWh) correspondent au type de motorisation du vehicule",
+      "auditRequired": false
+    },
+    {
+      "id": "ecart-estime-reel-alerte",
+      "statement": "Chaque course ou mission porte une estimation energetique, un releve reel et un ecart, avec alerte si l'ecart est important",
+      "kind": "obligation",
+      "given": "une course ou mission terminee avec estimation et releve reel",
+      "when": "la consommation reelle est enregistree",
+      "outcome": "l'ecart estime/reel est calcule et une alerte est emise au-dela du seuil defini",
+      "auditRequired": true
+    },
+    {
+      "id": "km-a-vide-et-occupation-coherents",
+      "statement": "Les km a vide et les taux d'occupation sont calcules de facon coherente: km a vide egale km totaux moins km en charge",
+      "kind": "consistency",
+      "given": "les km totaux et les km en charge d'un vehicule sur une periode",
+      "when": "les metriques d'occupation sont calculees",
+      "outcome": "km a vide egale km totaux moins km en charge, et les taux en charge, a vide et occupation en decoulent",
+      "auditRequired": false
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "record": {
+    "taskId": "challenge-1785345668559",
+    "objective": "Évaluer la proposition avant implémentation",
+    "proposals": [
+      {
+        "id": "P1",
+        "author": "inline",
+        "content": "--help",
+        "claims": []
+      }
+    ],
+    "challenges": [
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Utilisation incohérente de '--help' et '/think' dans un contexte CLI (le premier est standard, le second n'est pas courant)",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Absence de spécification des fonctionnalités de la commande d'aide (ex: liste de commandes, exemples)",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Hypothèse non vérifiée que '/think' est un opérateur valide dans le contexte d'implémentation",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Exposition de configurations sensibles via --help",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Accès non autorisé à des options d'administration via --help",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Perte accidentelle de données lors de l'affichage d'aide",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Surcharge des ressources par un --help mal optimisé",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Bypass de mécanismes d'authentification via --help",
+        "blocking": true
+      }
+    ],
+    "evidence": []
+  },
+  "verdict": {
+    "decision": "insufficient_evidence",
+    "scores": [
+      {
+        "proposalId": "P1",
+        "supportedClaims": 0,
+        "failedClaims": 0,
+        "unsupportedClaims": 0,
+        "unresolvedBlockingChallenges": 4,
+        "score": -16
+      }
+    ],
+    "preservedDisagreements": [
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Utilisation incohérente de '--help' et '/think' dans un contexte CLI (le premier est standard, le second n'est pas courant)",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Absence de spécification des fonctionnalités de la commande d'aide (ex: liste de commandes, exemples)",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Hypothèse non vérifiée que '/think' est un opérateur valide dans le contexte d'implémentation",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Exposition de configurations sensibles via --help",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Accès non autorisé à des options d'administration via --help",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Perte accidentelle de données lors de l'affichage d'aide",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Surcharge des ressources par un --help mal optimisé",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "Bypass de mécanismes d'authentification via --help",
+        "blocking": true
+      }
+    ],
+    "rationale": "Aucune preuve exécutée n'a été rattachée aux affirmations ; escalade humaine requise (§36.1)."
+  }
+}

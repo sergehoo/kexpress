@@ -1,0 +1,114 @@
+{
+  "$schema": "https://ostack.dev/schemas/domain-pack.schema.json",
+  "schemaVersion": 1,
+  "id": "credit-bancaire-ci",
+  "name": "Crédit bancaire — Côte d'Ivoire",
+  "sector": "banque",
+  "country": "CI",
+  "language": "fr",
+  "version": "1.0.0",
+  "sources": [
+    { "id": "procedure-credit-v4", "title": "Procédure crédit v4", "kind": "document", "date": "2026-01-01" },
+    { "id": "interview-direction-risque", "title": "Entretien direction des risques", "kind": "interview", "date": "2026-02-10" }
+  ],
+  "experts": [
+    { "name": "responsable_credit", "role": "Responsable crédit" },
+    { "name": "responsable_conformite", "role": "Responsable conformité" }
+  ],
+  "glossary": [
+    { "term": "décaissement", "definition": "Mise à disposition effective des fonds au client", "concept": "transaction", "status": "confirmed", "sources": ["procedure-credit-v4"] },
+    { "term": "dossier de crédit", "definition": "Dossier rassemblant la demande, les pièces et les analyses", "concept": "case_file", "status": "confirmed", "sources": ["procedure-credit-v4"] },
+    { "term": "validation finale", "definition": "Approbation du niveau de délégation compétent avant décaissement", "concept": "approval", "status": "confirmed", "sources": ["procedure-credit-v4", "interview-direction-risque"] },
+    { "term": "KYC", "definition": "Vérification de l'identité et de la situation du client", "concept": "control", "status": "extracted", "sources": ["procedure-credit-v4"] }
+  ],
+  "actors": [
+    { "id": "conseiller", "name": "Conseiller", "roles": ["instruction du dossier"], "status": "confirmed", "sources": ["procedure-credit-v4"] },
+    { "id": "responsable-credit", "name": "Responsable crédit", "roles": ["validation"], "status": "confirmed", "sources": ["procedure-credit-v4"] },
+    { "id": "conformite", "name": "Conformité", "roles": ["contrôle KYC"], "status": "confirmed", "sources": ["interview-direction-risque"] }
+  ],
+  "workflows": [
+    {
+      "id": "souscription-credit",
+      "name": "Souscription d'un crédit",
+      "status": "confirmed",
+      "sources": ["procedure-credit-v4"],
+      "steps": [
+        { "id": "demande", "name": "Demande", "actor": "conseiller", "produces": ["dossier de crédit"] },
+        { "id": "kyc", "name": "Contrôle KYC", "actor": "conformite", "requires": ["dossier de crédit"] },
+        { "id": "validation", "name": "Validation finale", "actor": "responsable-credit", "requires": ["kyc"] },
+        { "id": "decaissement", "name": "Décaissement", "requires": ["validation"], "irreversible": true }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "br-credit-042",
+      "statement": "Un dossier ne peut être décaissé sans validation finale",
+      "kind": "internal_rule",
+      "when": { "action": "dossier.decaissement" },
+      "conditions": [{ "path": "dossier.validationFinale", "equals": true }],
+      "otherwise": { "block": true, "message": "La validation finale est requise avant tout décaissement" },
+      "status": "confirmed",
+      "sources": ["procedure-credit-v4", "interview-direction-risque"],
+      "validatedBy": [
+        { "expert": "responsable_credit", "role": "Responsable crédit", "reason": "Procédure v4 §3.2", "validatedAt": "2026-02-15T09:00:00Z" },
+        { "expert": "responsable_conformite", "role": "Responsable conformité", "reason": "Contrôle de premier niveau", "validatedAt": "2026-02-15T10:00:00Z" }
+      ],
+      "effectiveFrom": "2026-01-01"
+    },
+    {
+      "id": "br-credit-051-kyc",
+      "statement": "Aucun décaissement sans contrôle KYC conforme",
+      "kind": "regulatory_obligation",
+      "when": { "action": "dossier.decaissement" },
+      "conditions": [{ "path": "dossier.kycConforme", "equals": true }],
+      "otherwise": { "block": true, "message": "Le contrôle KYC doit être conforme avant décaissement" },
+      "status": "confirmed",
+      "sources": ["interview-direction-risque"],
+      "validatedBy": [
+        { "expert": "responsable_conformite", "role": "Responsable conformité", "reason": "Obligation LBC/FT applicable", "validatedAt": "2026-02-15T10:30:00Z" }
+      ],
+      "jurisdiction": "CI",
+      "effectiveFrom": "2026-01-01"
+    }
+  ],
+  "decisionTables": [
+    {
+      "id": "validation-requise",
+      "name": "Niveau de validation requis",
+      "status": "confirmed",
+      "sources": ["procedure-credit-v4"],
+      "inputs": [
+        { "name": "montant", "values": ["faible", "moyen", "eleve", "tres-eleve"] },
+        { "name": "profil", "values": ["standard", "sensible"] }
+      ],
+      "rows": [
+        { "conditions": { "montant": "faible", "profil": "*" }, "outcome": "automatique" },
+        { "conditions": { "montant": "moyen", "profil": "*" }, "outcome": "responsable" },
+        { "conditions": { "montant": "eleve", "profil": "*" }, "outcome": "comite" },
+        { "conditions": { "montant": "tres-eleve", "profil": "*" }, "outcome": "direction-generale" }
+      ]
+    }
+  ],
+  "kpis": [
+    {
+      "name": "taux-de-traitement-dans-les-delais",
+      "objective": "Mesurer le respect des délais de traitement des dossiers",
+      "formula": "dossiers_dans_delai / dossiers_total * 100",
+      "dataSources": ["cases", "deadlines"],
+      "frequency": "weekly",
+      "owner": "operations_manager",
+      "threshold": { "target": 95, "warning": 90 }
+    }
+  ],
+  "mappings": [
+    { "universalConcept": "customer", "localTerms": ["emprunteur", "client"] },
+    { "universalConcept": "transaction", "localTerms": ["décaissement"] },
+    { "universalConcept": "case_file", "localTerms": ["dossier de crédit"] },
+    { "universalConcept": "approval", "localTerms": ["validation finale"] }
+  ],
+  "openQuestions": [
+    "Quels délais maximaux s'appliquent entre validation finale et décaissement ?",
+    "Quelles exceptions au contrôle KYC sont tolérées pour les renouvellements ?"
+  ]
+}

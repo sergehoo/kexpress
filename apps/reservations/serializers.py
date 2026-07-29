@@ -53,15 +53,27 @@ class ReservationSerializer(serializers.ModelSerializer):
         return str(trips[0].id) if trips else None
 
     def get_trips(self, obj):
-        """Tous les segments : l'aller, et le retour pour un aller-retour."""
-        return [
-            {
-                "id": str(t.id), "leg": t.leg, "leg_display": t.get_leg_display(),
-                "status": t.status, "status_display": t.get_status_display(),
+        """Tous les segments : l'aller, et le retour pour un aller-retour — avec leur
+        affectation (véhicule/chauffeur), horaires prévus et origine PROPRES."""
+        trips = []
+        for t in self._ordered_trips(obj):
+            is_return = t.leg == "return"
+            trips.append({
+                "id": str(t.id),
+                "leg": t.leg,
+                "leg_display": t.get_leg_display(),
+                "status": t.status,
+                "status_display": t.get_status_display(),
+                "origin": (obj.destination if is_return else obj.origin) or "",
                 "destination": t.destination,
-            }
-            for t in self._ordered_trips(obj)
-        ]
+                "vehicle": str(t.vehicle_id) if t.vehicle_id else None,
+                "vehicle_registration": t.vehicle.registration if t.vehicle_id else None,
+                "driver": str(t.driver_id) if t.driver_id else None,
+                "driver_name": t.driver.full_name if t.driver_id else None,
+                "planned_departure_at": t.planned_departure_at.isoformat() if t.planned_departure_at else None,
+                "planned_arrival_at": t.planned_arrival_at.isoformat() if t.planned_arrival_at else None,
+            })
+        return trips
 
     def validate(self, attrs):
         """Aller-retour : point de départ + heure de retour cohérents (le retour ramène

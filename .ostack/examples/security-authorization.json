@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ostack.dev/schemas/security-authorization.schema.json",
+  "schemaVersion": 1,
+  "authorizationId": "AUTH-2026-001",
+  "owner": "Organisation concernée",
+  "environment": "isolated-staging",
+  "allowedTargets": ["app-staging.internal"],
+  "forbiddenTargets": ["production", "third-party-services"],
+  "allowedTestCategories": [
+    "authentication_validation",
+    "authorization_validation",
+    "input_validation",
+    "dependency_analysis"
+  ],
+  "startAt": "2026-07-15T08:00:00Z",
+  "expiresAt": "2026-07-15T18:00:00Z",
+  "approvedBy": ["security_manager"],
+  "emergencyContact": "secops@example.org",
+  "maxRequestsPerSecond": 5
+}

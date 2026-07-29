@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "id": "help",
+  "request": "--help",
+  "functionalIntent": [
+    "Provide assistance to users",
+    "Explain available commands"
+  ],
+  "actors": [
+    "User",
+    "System"
+  ],
+  "invariants": [
+    {
+      "id": "command-usage-permission",
+      "statement": "Users may request help with available commands",
+      "kind": "permission",
+      "given": "User requests assistance",
+      "when": "User sends --help command",
+      "outcome": "System provides command documentation"
+    },
+    {
+      "id": "invalid-command-prohibition",
+      "statement": "System must reject invalid commands",
+      "kind": "prohibition",
+      "given": "User sends unrecognized command",
+      "when": "Command parsing occurs",
+      "outcome": "System returns error message",
+      "auditRequired": true
+    }
+  ],
+  "properties": [
+    {
+      "id": "command-usage-permission-allowed",
+      "invariantId": "command-usage-permission",
+      "title": "L'acteur autorisé peut agir",
+      "gherkin": "Given User requests assistance\nWhen User sends --help command\nThen System provides command documentation",
+      "adversarial": false
+    },
+    {
+      "id": "command-usage-permission-denied",
+      "invariantId": "command-usage-permission",
+      "title": "Un acteur non autorisé est refusé",
+      "gherkin": "Given User requests assistance\nWhen un acteur non autorisé tente la même action\nThen l'action est refusée\nAnd aucun changement n'est appliqué",
+      "adversarial": true
+    },
+    {
+      "id": "invalid-command-prohibition-holds",
+      "invariantId": "invalid-command-prohibition",
+      "title": "L'issue interdite ne se produit pas",
+      "gherkin": "Given User sends unrecognized command\nWhen Command parsing occurs\nThen il est vérifié que « System returns error message » ne s'est pas produit\nAnd une entrée d'audit est créée",
+      "adversarial": false
+    },
+    {
+      "id": "invalid-command-prohibition-adversarial",
+      "invariantId": "invalid-command-prohibition",
+      "title": "Une tentative directe de provoquer l'issue interdite est refusée",
+      "gherkin": "Given User sends unrecognized command\nWhen Command parsing occurs en tentant délibérément de provoquer \"System returns error message\"\nThen la tentative est refusée\nAnd il est vérifié que « System returns error message » ne s'est pas produit",
+      "adversarial": true
+    }
+  ],
+  "controls": [
+    "authentication",
+    "object_permission",
+    "endpoint_protection",
+    "status_validation",
+    "audit_log"
+  ],
+  "requiredTests": [
+    "permission_test",
+    "integration_test",
+    "functional_test",
+    "e2e_test"
+  ],
+  "acceptanceCriteria": [
+    "Users may request help with available commands",
+    "System must reject invalid commands"
+  ],
+  "expectedEvidence": [
+    {
+      "invariantId": "command-usage-permission",
+      "kind": "permission_test",
+      "description": "Test de permission (incluant tentative de contournement) proving: Users may request help with available commands"
+    },
+    {
+      "invariantId": "command-usage-permission",
+      "kind": "integration_test",
+      "description": "Test d'intégration proving: Users may request help with available commands"
+    },
+    {
+      "invariantId": "invalid-command-prohibition",
+      "kind": "functional_test",
+      "description": "Test fonctionnel proving: System must reject invalid commands"
+    },
+    {
+      "invariantId": "invalid-command-prohibition",
+      "kind": "e2e_test",
+      "description": "Test E2E proving: System must reject invalid commands"
+    }
+  ],
+  "contentHash": "a139d8a6b099a39aaae0605c8197165a13070ea3bf72362e233f78aa9489ed62"
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://ostack.dev/schemas/intent-draft.schema.json",
+  "schemaVersion": 1,
+  "id": "ai-course-generator",
+  "request": "Permettre au formateur de générer une formation avec l'IA, mais empêcher sa publication automatique.",
+  "functionalIntent": [
+    "Le formateur peut demander une génération",
+    "L'IA produit une proposition modifiable",
+    "La proposition reste en brouillon",
+    "Le formateur garde le contrôle de la publication"
+  ],
+  "actors": ["formateur", "apprenant", "administrateur"],
+  "invariants": [
+    {
+      "id": "no-auto-publish",
+      "statement": "Une génération IA ne peut jamais publier directement une formation",
+      "kind": "prohibition",
+      "given": "une formation au statut brouillon",
+      "when": "le formateur demande une génération IA",
+      "outcome": "un statut publié est appliqué",
+      "auditRequired": true
+    },
+    {
+      "id": "owner-only-generation",
+      "statement": "Seul un utilisateur autorisé peut générer du contenu pour sa formation",
+      "kind": "permission",
+      "given": "une formation appartenant à un formateur",
+      "when": "le formateur propriétaire demande une génération IA",
+      "outcome": "les contenus proposés sont enregistrés en brouillon",
+      "auditRequired": true
+    },
+    {
+      "id": "audit-everything",
+      "statement": "Toute génération ou validation doit être journalisée",
+      "kind": "obligation",
+      "given": "une génération IA terminée",
+      "when": "le résultat est enregistré",
+      "outcome": "une entrée d'audit est créée"
+    },
+    {
+      "id": "quiz-section-consistency",
+      "statement": "Les quiz générés sont associés aux bonnes sections",
+      "kind": "consistency",
+      "given": "une proposition générée contenant sections et quiz",
+      "when": "la proposition est enregistrée",
+      "outcome": "chaque quiz référence une section existante de la même formation"
+    }
+  ]
+}

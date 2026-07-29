@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ostack.dev/schemas/benchmark-suite.schema.json",
+  "title": "OStack Benchmark Suite",
+  "description": "A benchmark suite: each task runs several times and is judged by mechanical checks; the score measures stability, never the single best run (§33).",
+  "type": "object",
+  "required": ["schemaVersion", "id", "repetitions", "tasks"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
+    "repetitions": { "type": "integer", "minimum": 2, "maximum": 20 },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "category", "description", "command", "args", "checks"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
+          "category": {
+            "type": "string",
+            "enum": ["greenfield_feature", "brownfield_feature", "complex_bug", "security_regression", "permission_bypass_prevention", "data_migration", "performance_regression", "ux_functional_regression", "incident_diagnosis", "release_readiness"]
+          },
+          "description": { "type": "string", "minLength": 10, "maxLength": 300 },
+          "command": { "type": "string", "minLength": 1, "maxLength": 50 },
+          "args": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "equals": { "type": ["string", "number", "boolean"] },
+                "minimum": { "type": "number" },
+                "exists": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

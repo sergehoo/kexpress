@@ -6,6 +6,8 @@ qui sert de colonne spatiale canonique pour le géofencing (ST_Covers) et les
 distances en mètres (ST_Distance). La géométrie est synchronisée depuis lat/lng
 (et depuis le polygone JSON pour les zones) à chaque save().
 """
+from decimal import Decimal
+
 from django.contrib.gis.db import models as gis_models
 from django.db import models
 
@@ -15,6 +17,7 @@ from apps.core.enums import (
     GeofenceType,
     SyncStatus,
     TrackingSessionStatus,
+    ZoneCategory,
 )
 from apps.core.models import TenantScopedModel, TimeStampedModel
 
@@ -170,6 +173,18 @@ class TripRoute(TimeStampedModel):
     )
     reroute_count = models.PositiveSmallIntegerField("nombre de recalculs", default=0)
     last_rerouted_at = models.DateTimeField("dernier recalcul", null=True, blank=True)
+    # --- Zones opérationnelles (§3) ---
+    # Rattachement du segment à une zone de départ / d'arrivée, résolu depuis les coordonnées
+    # (cf. `apps.tracking.zones.resolve_route_zones`). Nullable : une course dont l'origine
+    # n'est pas géocodée, ou hors de toute zone connue, reste parfaitement exploitable.
+    origin_zone = models.ForeignKey(
+        "tracking.GeofenceZone", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="routes_from", verbose_name="zone de départ",
+    )
+    destination_zone = models.ForeignKey(
+        "tracking.GeofenceZone", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="routes_to", verbose_name="zone de destination",
+    )
 
     class Meta:
         verbose_name = "itinéraire de course"
@@ -266,20 +281,53 @@ class GeofenceZone(TenantScopedModel):
     zone_type = models.CharField(
         "type de zone", max_length=12, choices=GeofenceType.choices, default=GeofenceType.MISSION
     )
+    # Identifiant stable et lisible (« plateau », « aeroport ») : permet de semer et de
+    # retrouver une zone sans dépendre de son libellé, qui peut être renommé.
+    code = models.SlugField("code", max_length=64, blank=True, default="")
+    category = models.CharField(
+        "catégorie", max_length=16, choices=ZoneCategory.choices, blank=True, default=""
+    )
     # Polygone éditable côté UI : liste de [lat, lng] (ordre Leaflet).
     polygon = models.JSONField("polygone", default=list)
     # Géométrie spatiale synchronisée depuis `polygon` : géofencing par ST_Covers.
     area = gis_models.PolygonField("zone", geography=True, srid=4326, null=True, blank=True)
+    # Définition par RAYON (§3) : alternative au polygone pour les zones circulaires
+    # (aéroport, site industriel). `center` est aussi le point de référence utilisé pour
+    # trouver la zone la PLUS PROCHE d'un point hors de toute zone.
+    center_lat = models.DecimalField("latitude centre", null=True, blank=True, **LAT_KWARGS)
+    center_lng = models.DecimalField("longitude centre", null=True, blank=True, **LNG_KWARGS)
+    center = gis_models.PointField("centre", geography=True, srid=4326, null=True, blank=True)
+    radius_m = models.PositiveIntegerField("rayon (m)", null=True, blank=True)
     is_active = models.BooleanField("active", default=True)
 
     class Meta:
         verbose_name = "zone géographique"
         verbose_name_plural = "zones géographiques"
         ordering = ["name"]
+        constraints = [
+            # Un code de zone est unique DANS une filiale (il sert de clé de semis idempotent).
+            models.UniqueConstraint(
+                fields=["subsidiary", "code"], condition=~models.Q(code=""),
+                name="uniq_zone_subsidiary_code",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         self.area = _polygon_from(self.polygon)
         kwargs = _with_geo_update_field(kwargs, ("polygon",), "area")
+        kwargs = _with_geo_update_field(kwargs, ("center_lat", "center_lng", "polygon"), "center")
+        # Centre explicite s'il est fourni, sinon déduit du polygone : toute zone dispose
+        # ainsi d'un point de référence, ce qui rend la recherche « zone la plus proche »
+        # utilisable même sur les zones dessinées à la main.
+        self.center = _point_from(self.center_lat, self.center_lng)
+        if self.center is None and self.area is not None:
+            self.center = self.area.centroid
+            self.center_lat = round(Decimal(self.center.y), 6)
+            self.center_lng = round(Decimal(self.center.x), 6)
+            # Le centre déduit modifie aussi lat/lng : elles doivent suivre dans un save partiel.
+            uf = kwargs.get("update_fields")
+            if uf is not None:
+                kwargs["update_fields"] = list(set(uf) | {"center_lat", "center_lng"})
         super().save(*args, **kwargs)
 
     def __str__(self):

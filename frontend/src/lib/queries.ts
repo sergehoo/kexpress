@@ -25,6 +25,7 @@ import type {
   Reservation,
   Subsidiary,
   SubsidiaryStats,
+  SuggestedVehicle,
   Trip,
   TripRouteData,
   Vehicle,
@@ -503,6 +504,12 @@ export interface GeofenceZoneData {
   zone_type: string;
   zone_type_display: string;
   polygon: [number, number][];
+  /** Zone opérationnelle (§3) : identification stable et définition par rayon.
+   *  Une telle zone a un `center` + `radius_m` au lieu d'un `polygon`. */
+  code: string;
+  category: string;
+  center: [number, number] | null;
+  radius_m: number | null;
 }
 
 export function useGeofenceZones() {
@@ -640,6 +647,21 @@ export function useTrip(id?: string | null) {
     queryFn: async () => {
       const { data } = await api.get<Trip>(`/trips/${id}/`);
       return data;
+    },
+  });
+}
+
+/** Dispatching par segment : véhicules dispo classés par proximité (ETA) du point de
+ *  départ de la course. Alimente le modal d'affectation par course. */
+export function useTripSuggestVehicle(tripId?: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["trip-suggest-vehicle", tripId],
+    enabled: !!tripId && enabled,
+    queryFn: async () => {
+      const { data } = await api.get<{ results: SuggestedVehicle[] }>(
+        `/trips/${tripId}/suggest-vehicle/`,
+      );
+      return data.results;
     },
   });
 }

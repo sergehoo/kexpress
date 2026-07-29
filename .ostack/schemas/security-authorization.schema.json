@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ostack.dev/schemas/security-authorization.schema.json",
+  "title": "OStack Authorized Security Test Manifest",
+  "description": "Mandatory authorization manifest checked before any active security operation. Defensive scope only.",
+  "type": "object",
+  "required": ["schemaVersion", "authorizationId", "owner", "environment", "allowedTargets", "forbiddenTargets", "allowedTestCategories", "startAt", "expiresAt", "approvedBy", "emergencyContact"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "authorizationId": { "type": "string", "pattern": "^[A-Z0-9][A-Z0-9-]{2,63}$" },
+    "owner": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "environment": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "allowedTargets": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 253 } },
+    "forbiddenTargets": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 253 } },
+    "allowedTestCategories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": ["authentication_validation", "authorization_validation", "input_validation", "session_validation", "dependency_analysis", "configuration_review", "header_inspection", "business_abuse_simulation", "patch_validation"]
+      }
+    },
+    "startAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "approvedBy": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+    "emergencyContact": { "type": "string", "minLength": 3, "maxLength": 200 },
+    "maxRequestsPerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+  },
+  "additionalProperties": false
+}

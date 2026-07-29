@@ -109,19 +109,19 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
     if _has(q, "suivi", "tracking", "ou sont", "ou est", "en cours") and _has(q, "course", "trajet", "vehicul", "voiture"):
         return _trip_tracking(qs)
 
-    if _has(q, "resume", "synthese", "bilan", "aujourd", "journee") and not _has(q, "reservation", "demande"):
+    if _has(q, "resume", "synthese", "bilan", "aujourd", "journee", "point", "situation", "etat des lieux") and not _has(q, "reservation", "demande"):
         return _today_summary(user, qs, period)
 
-    if _has(q, "disponible", "libre") and _has(q, "vehicul", "voiture", "flotte"):
+    if _has(q, "disponible", "libre", "dispo") and _has(q, "vehicul", "voiture", "flotte"):
         return _available_vehicles(qs)
-    if _has(q, "disponible", "libre") and _has(q, "chauffeur", "conducteur"):
+    if _has(q, "disponible", "libre", "dispo") and _has(q, "chauffeur", "conducteur"):
         return _available_drivers(qs)
     if _has(q, "statut", "etat") and _has(q, "vehicul", "voiture", "flotte", "parc"):
         return _vehicle_status(qs)
     if _has(q, "statut", "etat", "combien") and _has(q, "chauffeur", "conducteur"):
         return _driver_status(qs)
 
-    if _has(q, "reservation", "demande"):
+    if _has(q, "reservation", "demande", "commande"):
         if _has(q, "attente", "valider", "a traiter", "en cours de validation"):
             return _reservations_by_status(qs, ["submitted", "pending_manager", "pending_fleet"], "en attente", "pending_reservations")
         if _has(q, "valide", "approuve", "acceptee"):
@@ -134,7 +134,7 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
         return _expired_insurance(qs)
     if _has(q, "visite technique", "visite", "controle technique", "ct ") and _has(q, "expir", "echu", "perim", "a passer", "prevoir"):
         return _expired_technical_visit(qs)
-    if _has(q, "maintenance", "entretien", "revision") and not _has(q, "cout", "cher"):
+    if _has(q, "maintenance", "entretien", "revision", "panne", "vidange", "reparation") and not _has(q, "cout", "cher"):
         return _upcoming_maintenance(qs)
 
     if _has(q, "filiale", "agence", "entite") and _has(q, "km", "kilometr", "roule", "parcour", "distance"):
@@ -143,7 +143,7 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
         return _branch_performance(qs)
     if _has(q, "consommation", "consomme", "carburant", "litres") and not _has(q, "econome", "surconsomm", "gourmand"):
         return _fuel_consumption(user, qs, period)
-    if _has(q, "cout", "couteux", "cher", "depense", "budget"):
+    if _has(q, "cout", "couteux", "cher", "depense", "budget", "facture"):
         return _fleet_costs(user, qs, period)
 
     if _has(q, "econome", "efficacite", "efficience") and _has(q, "chauffeur", "conducteur"):
@@ -164,6 +164,24 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
                 "llm", answer=answer, blocks=[B.markdown(answer)],
                 confidence=0.6, data_source="llm", suggestions=DEFAULT_SUGGESTIONS,
             )
+
+    # Repli « domaine » : aucune intention précise (et pas de LLM disponible) mais la
+    # question évoque clairement un domaine → on oriente vers la vue la plus utile plutôt
+    # que l'aide générique. Garde K-BOT exploitable même sans clé LLM.
+    if _has(q, "vehicul", "voiture", "flotte", "parc", "engin"):
+        return _available_vehicles(qs) if _has(q, "disponible", "libre", "dispo", "partir", "utilisable") else _vehicle_status(qs)
+    if _has(q, "chauffeur", "conducteur"):
+        return _available_drivers(qs) if _has(q, "disponible", "libre", "dispo") else _driver_status(qs)
+    if _has(q, "reservation", "demande", "commande"):
+        return _reservation_summary(qs, period)
+    if _has(q, "cout", "depense", "budget", "facture", "argent", "carburant", "consommation", "litres"):
+        return _fleet_costs(user, qs, period)
+    if _has(q, "maintenance", "entretien", "revision", "panne", "reparation", "vidange", "garage"):
+        return _upcoming_maintenance(qs)
+    if _has(q, "assurance", "visite", "conformite", "expir", "echu", "perim"):
+        return _expired_insurance(qs)
+    if _has(q, "resume", "synthese", "bilan", "situation", "point", "aujourd", "journee", "jour"):
+        return _today_summary(user, qs, period)
 
     return B.respond(
         "help",

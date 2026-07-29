@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "defaultDeny": true,
+  "levels": {
+    "1": { "name": "read-only", "description": "Lecture et analyse sans mutation", "approval": "none" },
+    "2": { "name": "local-write", "description": "Modification locale réversible dans le projet", "approval": "policy-dependent" },
+    "3": { "name": "sensitive", "description": "Secrets, réseau, dépendances, infrastructure ou changement difficilement réversible", "approval": "human" },
+    "4": { "name": "production", "description": "Toute action affectant la production ou des utilisateurs réels", "approval": "explicit-human-always" }
+  },
+  "hardRules": [
+    "Une approbation est liée à une seule demande et ne peut pas être réutilisée.",
+    "Un agent ne peut jamais s’auto-approuver.",
+    "Les secrets ne doivent jamais apparaître dans les journaux ou prompts.",
+    "Les actions de niveau 4 sont refusées en l’absence d’une approbation humaine explicite.",
+    "Une confirmation de changement est liée au plan, aux préimages des fichiers et aux commandes qualité exactes."
+  ]
+}

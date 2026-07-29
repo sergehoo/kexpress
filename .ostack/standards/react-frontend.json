@@ -1,0 +1,28 @@
+{
+  "$schema": "../schemas/standard.schema.json",
+  "schemaVersion": 1,
+  "id": "react-frontend",
+  "name": "Frontend React",
+  "version": "1.0.0",
+  "domain": "frontend",
+  "detect": {
+    "dependencies": ["react"]
+  },
+  "rules": [
+    { "id": "api-client-layer", "statement": "Les appels réseau passent par la couche client API, jamais par des fetch dispersés dans les composants", "severity": "high", "verifiableBy": "architecture_check", "rationale": "Une couche unique permet d'appliquer authentification, erreurs et traçage partout (§19)." },
+    { "id": "no-dangerous-html", "statement": "dangerouslySetInnerHTML est interdit sauf contenu assaini et revu", "severity": "critical", "verifiableBy": "lint", "rationale": "C'est le chemin XSS le plus direct de React." },
+    { "id": "no-secret-in-bundle", "statement": "Aucun secret ni clé privée n'est présent dans le bundle client", "severity": "critical", "verifiableBy": "review" },
+    { "id": "accessibility-checked", "statement": "Les parcours critiques passent un contrôle d'accessibilité automatisé", "severity": "medium", "verifiableBy": "test" },
+    { "id": "permission-driven-ui", "statement": "L'interface masque les actions non autorisées ET le backend les refuse; l'UI n'est jamais la seule barrière", "severity": "critical", "verifiableBy": "test", "rationale": "Cacher un bouton n'est pas une permission (§14)." }
+  ],
+  "controls": [
+    { "name": "lint", "command": "npm", "args": ["run", "lint"] },
+    { "name": "tests", "command": "npm", "args": ["test"] },
+    { "name": "build", "command": "npm", "args": ["run", "build"] }
+  ],
+  "qualityBudget": {
+    "accessibilityScoreMinimum": 90,
+    "criticalSecurityFindings": 0,
+    "permissionTestsRequired": true
+  }
+}

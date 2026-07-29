@@ -1,0 +1,31 @@
+{
+  "$schema": "../schemas/standard.schema.json",
+  "schemaVersion": 1,
+  "id": "typescript-node",
+  "name": "TypeScript sur Node.js",
+  "version": "1.0.0",
+  "domain": "backend",
+  "detect": {
+    "files": ["tsconfig.json", "package.json"],
+    "dependencies": ["typescript"]
+  },
+  "rules": [
+    { "id": "strict-mode", "statement": "Le compilateur TypeScript fonctionne en mode strict, sans any implicite", "severity": "high", "verifiableBy": "typecheck", "rationale": "Les erreurs de type détectées à la compilation ne deviennent pas des incidents en production." },
+    { "id": "no-floating-promises", "statement": "Aucune promesse n'est abandonnée sans await ni gestion d'erreur", "severity": "high", "verifiableBy": "lint", "rationale": "Une promesse flottante avale les échecs et corrompt l'état silencieusement." },
+    { "id": "esm-only", "statement": "Les modules utilisent la syntaxe ESM avec des imports explicites", "severity": "medium", "verifiableBy": "typecheck" },
+    { "id": "locked-dependencies", "statement": "Les versions de dépendances sont verrouillées par un lockfile commité", "severity": "high", "verifiableBy": "dependency_scan", "rationale": "Sans lockfile, deux builds du même commit peuvent différer (§18)." },
+    { "id": "no-secret-in-env-log", "statement": "Aucun secret n'est journalisé ni commité; .env est exclu du dépôt", "severity": "critical", "verifiableBy": "review" },
+    { "id": "tests-required", "statement": "Tout module exporté possède des tests exécutés en CI", "severity": "high", "verifiableBy": "test" }
+  ],
+  "controls": [
+    { "name": "typecheck", "command": "npm", "args": ["run", "check"] },
+    { "name": "tests", "command": "npm", "args": ["test"] },
+    { "name": "audit-dependances", "command": "npm", "args": ["audit", "--audit-level=high"] }
+  ],
+  "qualityBudget": {
+    "criticalSecurityFindings": 0,
+    "highSecurityFindings": 0,
+    "permissionTestsRequired": true,
+    "rollbackRequired": true
+  }
+}

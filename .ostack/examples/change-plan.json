@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/change-plan.schema.json",
+  "schemaVersion": 1,
+  "id": "example-documentation-change",
+  "projectId": "ostack",
+  "description": "Example plan that creates a small documentation artifact.",
+  "changes": [
+    {
+      "path": "docs/example-generated.md",
+      "content": "# Generated example\n\nThis file demonstrates the controlled OStack change-plan format.\n"
+    }
+  ]
+}

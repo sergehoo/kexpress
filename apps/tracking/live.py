@@ -344,6 +344,10 @@ def ensure_trip_route(trip, allow_provision=True):
                 route.planned_distance_km = Decimal(str(km))
                 route.planned_duration_min = max(1, round(km / AVG_SPEED_KMH * 60))
                 route.save(update_fields=["planned_distance_km", "planned_duration_min", "updated_at"])
+        # Rattachement aux zones opérationnelles (§3) : dès que les coordonnées existent.
+        from apps.tracking.zones import resolve_route_zones
+
+        resolve_route_zones(route, subsidiary_id=trip.subsidiary_id)
         return route
     except Exception:
         logger.warning("ensure_trip_route: échec pour trip=%s", getattr(trip, "pk", None), exc_info=True)

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ostack.dev/schemas/policy.schema.json",
+  "title": "OStack Security Policy",
+  "type": "object",
+  "required": ["version", "defaultDeny", "levels", "hardRules"],
+  "properties": {
+    "version": { "type": "string" },
+    "defaultDeny": { "const": true },
+    "levels": {
+      "type": "object",
+      "required": ["1", "2", "3", "4"],
+      "patternProperties": {
+        "^[1-4]$": {
+          "type": "object",
+          "required": ["name", "description", "approval"],
+          "properties": { "name": { "type": "string" }, "description": { "type": "string" }, "approval": { "type": "string" } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "hardRules": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

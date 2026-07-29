@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "rules": [
+    {
+      "name": "core-depends-on-nothing-internal",
+      "description": "Le noyau est la fondation: il n'importe aucun autre package OStack",
+      "source": "packages/core/**",
+      "forbiddenDependencies": ["@ostack/*"]
+    },
+    {
+      "name": "packages-never-import-apps",
+      "description": "Les packages sont headless: aucune dépendance vers les surfaces (API, Web)",
+      "source": "packages/**",
+      "forbiddenDependencies": ["apps/**", "@ostack/api"]
+    },
+    {
+      "name": "verification-kernel-provider-neutral",
+      "description": "Les moteurs de vérification restent neutres vis-à-vis des fournisseurs IA",
+      "source": "packages/evidence/**",
+      "forbiddenDependencies": ["@ostack/providers", "@ostack/cli"]
+    },
+    {
+      "name": "domain-knowledge-engine-pure",
+      "description": "La couche métier ne dépend ni des fournisseurs ni des surfaces",
+      "source": "packages/domain/**",
+      "forbiddenDependencies": ["@ostack/providers", "@ostack/cli", "apps/**"]
+    },
+    {
+      "name": "apps-use-packages-not-cli-internals",
+      "description": "Les apps consomment les packages publics, jamais l'intérieur du CLI",
+      "source": "apps/**",
+      "forbiddenDependencies": ["@ostack/cli"]
+    }
+  ]
+}

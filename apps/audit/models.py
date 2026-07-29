@@ -12,7 +12,7 @@ class AuditLog(TimeStampedModel):
         "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="audit_logs", verbose_name="utilisateur",
     )
-    action = models.CharField("action", max_length=12, choices=AuditAction.choices, db_index=True)
+    action = models.CharField("action", max_length=32, choices=AuditAction.choices, db_index=True)
 
     # Cible générique
     target_type = models.ForeignKey(

@@ -47,6 +47,11 @@ export const PAGE_ROLES: Record<string, Role[]> = {
   "/settings": [...ALL_ROLES],
 };
 
+/** Rôles habilités à gérer l'affectation des courses (miroir de TRIP_START_MANAGER_ROLES). */
+export function canManageFleet(role?: string | null): boolean {
+  return MANAGERS.includes(role as Role);
+}
+
 /** Page d'accueil par rôle (atterrissage après connexion). */
 export function homeFor(role: string): string {
   if (role === "requester" || role === "driver") return "/map";

@@ -27,7 +27,11 @@ class VehiclePositionSerializer(serializers.Serializer):
 class GeofenceZoneSerializer(serializers.ModelSerializer):
     class Meta:
         model = GeofenceZone
-        fields = ["id", "name", "zone_type", "polygon", "is_active", "subsidiary"]
+        fields = [
+            "id", "name", "zone_type", "polygon", "is_active", "subsidiary",
+            # Zone opérationnelle (§3) : définition par rayon + identification stable.
+            "code", "category", "center_lat", "center_lng", "radius_m",
+        ]
 
 
 class VehicleLocationSerializer(serializers.ModelSerializer):

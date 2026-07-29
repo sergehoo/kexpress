@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ostack.dev/schemas/agent-catalog.schema.json",
+  "title": "OStack Agent Catalog",
+  "type": "object",
+  "required": ["agents", "defaults"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$" },
+          { "type": "string", "minLength": 2 },
+          { "enum": ["product", "architecture", "ux", "engineering", "quality", "security", "operations", "documentation"] },
+          { "type": "string", "minLength": 10 }
+        ],
+        "items": false,
+        "minItems": 4,
+        "maxItems": 4
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "required": ["responsibilities", "limits", "tools", "qualityCriteria", "outputFormat", "defaultSecurityLevel"],
+      "properties": {
+        "responsibilities": { "type": "array", "items": { "type": "string" } },
+        "limits": { "type": "array", "items": { "type": "string" } },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "qualityCriteria": { "type": "array", "items": { "type": "string" } },
+        "outputFormat": { "type": "string" },
+        "defaultSecurityLevel": { "type": "integer", "minimum": 1, "maximum": 4 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

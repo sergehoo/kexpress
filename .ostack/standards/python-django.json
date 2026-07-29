@@ -1,0 +1,32 @@
+{
+  "$schema": "../schemas/standard.schema.json",
+  "schemaVersion": 1,
+  "id": "python-django",
+  "name": "Python avec Django",
+  "version": "1.0.0",
+  "domain": "backend",
+  "detect": {
+    "files": ["manage.py"],
+    "dependencies": ["django"]
+  },
+  "rules": [
+    { "id": "orm-no-raw-sql", "statement": "Les requêtes passent par l'ORM; tout SQL brut est paramétré et revu", "severity": "critical", "verifiableBy": "review", "rationale": "Le SQL concaténé est le vecteur d'injection le plus courant." },
+    { "id": "object-permissions", "statement": "Chaque vue d'écriture vérifie la permission au niveau de l'objet, pas seulement l'authentification", "severity": "critical", "verifiableBy": "test", "rationale": "Un IDOR naît d'une vue qui vérifie qui vous êtes mais pas ce qui vous appartient." },
+    { "id": "migrations-reversible", "statement": "Toute migration de schéma définit une opération inverse ou documente son irréversibilité", "severity": "high", "verifiableBy": "review", "rationale": "Sans chemin de retour, un déploiement raté devient un incident de données (§36.8)." },
+    { "id": "debug-off", "statement": "DEBUG est désactivé et ALLOWED_HOSTS est explicite en production", "severity": "critical", "verifiableBy": "architecture_check" },
+    { "id": "csrf-enabled", "statement": "La protection CSRF n'est jamais désactivée sur les vues à effet de bord", "severity": "high", "verifiableBy": "review" },
+    { "id": "audit-sensitive-actions", "statement": "Les actions sensibles (permissions, statuts, paiements) créent une entrée d'audit", "severity": "high", "verifiableBy": "test" }
+  ],
+  "controls": [
+    { "name": "tests", "command": "python", "args": ["manage.py", "test"] },
+    { "name": "migrations-check", "command": "python", "args": ["manage.py", "makemigrations", "--check", "--dry-run"] },
+    { "name": "deploiement-check", "command": "python", "args": ["manage.py", "check", "--deploy"] }
+  ],
+  "qualityBudget": {
+    "testCoverageMinimum": 85,
+    "criticalSecurityFindings": 0,
+    "highSecurityFindings": 0,
+    "permissionTestsRequired": true,
+    "rollbackRequired": true
+  }
+}
