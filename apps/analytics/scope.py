@@ -1,6 +1,6 @@
 """Querysets scopés selon le périmètre de l'utilisateur (réutilisés par stats & K-BOT)."""
 from apps.drivers.models import Driver
-from apps.expenses.models import Expense, FuelLog
+from apps.expenses.models import ElectricCharge, Expense, FuelLog
 from apps.maintenance.models import MaintenanceRecord
 from apps.reservations.models import Reservation
 from apps.trips.models import Trip
@@ -19,6 +19,7 @@ def scoped(user, subsidiary_id=None):
         "reservations": Reservation.objects.for_user(user),
         "trips": Trip.objects.for_user(user),
         "fuel": FuelLog.objects.for_user(user),
+        "charges": ElectricCharge.objects.for_user(user),
         "expenses": Expense.objects.for_user(user),
         "maintenance": MaintenanceRecord.objects.for_user(user),
     }

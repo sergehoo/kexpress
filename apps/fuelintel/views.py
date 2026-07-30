@@ -1,4 +1,9 @@
-"""Fleet Fuel Intelligence — tableau de bord carburant (gestionnaires & admins)."""
+"""Tableau de bord ÉNERGIE (gestionnaires & admins) : carburants + électricité (§18).
+
+Les deux énergies sont présentées côte à côte mais JAMAIS fusionnées en une seule quantité :
+les litres et les kWh restent dans leurs sections respectives, et seuls les coûts (et les
+mégajoules, cf. `fuelintel.units`) sont additionnés.
+"""
 from datetime import timedelta
 from decimal import Decimal
 
@@ -11,7 +16,8 @@ from rest_framework.views import APIView
 
 from apps.fuelintel.access import can_see_costs
 from apps.fuelintel.engine import FUEL_CODE_BY_TYPE
-from apps.fuelintel.models import FuelConsumptionProfile, FuelPrice
+from apps.fuelintel.models import ElectricityPrice, FuelConsumptionProfile, FuelPrice
+from apps.fuelintel.units import LITER
 
 
 def _f(value):
@@ -46,21 +52,23 @@ class FuelIntelView(APIView):
         forecast_cost = round(month_cost / elapsed * days_in_month)
 
         # Profils appris : tops + alertes de surconsommation
-        fleet = FuelConsumptionProfile.objects.filter(scope="fleet").first()
+        # `unit=LITER` est indispensable : depuis l'unification des énergies, un profil peut
+        # être exprimé en kWh/100 km — l'afficher ici comme des litres serait faux.
+        fleet = FuelConsumptionProfile.objects.filter(scope="fleet", unit=LITER).first()
         fleet_rate = float(fleet.rate_l_per_100km) if fleet else None
 
         vehicles = list(
-            FuelConsumptionProfile.objects.filter(scope="vehicle", samples__gte=1)
+            FuelConsumptionProfile.objects.filter(scope="vehicle", unit=LITER, samples__gte=1)
             .order_by("-rate_l_per_100km")[:5]
             .values("label", "rate_l_per_100km", "samples")
         )
         drivers = list(
-            FuelConsumptionProfile.objects.filter(scope="driver", samples__gte=1)
+            FuelConsumptionProfile.objects.filter(scope="driver", unit=LITER, samples__gte=1)
             .order_by("rate_l_per_100km")[:5]
             .values("label", "rate_l_per_100km", "samples")
         )
         subsidiaries = list(
-            FuelConsumptionProfile.objects.filter(scope="subsidiary", samples__gte=1)
+            FuelConsumptionProfile.objects.filter(scope="subsidiary", unit=LITER, samples__gte=1)
             .order_by("rate_l_per_100km")
             .values("label", "rate_l_per_100km", "samples")
         )
@@ -101,10 +109,20 @@ class FuelIntelView(APIView):
                 "history": [{"price": _f(h["price"]), "date": h["effective_date"].isoformat()} for h in history],
             }
 
+        electricity = self._electricity_section(today, month_start)
+
         return Response({
             "day": {"liters": day_l, "cost": day_cost},
             "month": {"liters": month_l, "cost": month_cost},
             "forecast": {"liters": forecast_l, "cost": forecast_cost},
+            # Section Électricité (§14, §18) — quantités en kWh, jamais mêlées aux litres.
+            "electricity": electricity,
+            # Coût TOTAL de l'énergie : la seule agrégation légitime des deux sections
+            # (additionner des litres et des kWh n'aurait aucun sens).
+            "energy_cost": {
+                "day": round(day_cost + electricity["day"]["cost"]),
+                "month": round(month_cost + electricity["month"]["cost"]),
+            },
             "fleet_rate": fleet_rate,
             "gap_pct": gap_pct,
             "top_vehicles": [
@@ -123,3 +141,28 @@ class FuelIntelView(APIView):
             "prices": prices,
             "fuel_code_map": FUEL_CODE_BY_TYPE,
         })
+
+    def _electricity_section(self, today, month_start) -> dict:
+        """Recharges électriques de la période + tarif kWh applicable.
+
+        `price` vaut None si aucun tarif n'est renseigné : le coût d'une recharge est alors
+        celui effectivement saisi, mais aucune estimation n'est possible.
+        """
+        from apps.expenses.models import ElectricCharge
+
+        charges = ElectricCharge.objects.all()
+        day = charges.filter(date=today).aggregate(kwh=Sum("kwh_recharged"), cost=Sum("amount"))
+        month = charges.filter(date__gte=month_start).aggregate(
+            kwh=Sum("kwh_recharged"), cost=Sum("amount")
+        )
+        tariff = ElectricityPrice.latest()
+        return {
+            "day": {"kwh": _f(day["kwh"]), "cost": _f(day["cost"])},
+            "month": {"kwh": _f(month["kwh"]), "cost": _f(month["cost"])},
+            "charges_count": charges.filter(date__gte=month_start).count(),
+            "price": {
+                "price": _f(tariff.price) if tariff else None,
+                "date": tariff.effective_date.isoformat() if tariff else None,
+                "currency": tariff.currency if tariff else "XOF",
+            },
+        }

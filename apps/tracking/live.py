@@ -256,23 +256,29 @@ def ensure_geometry(route):
         route.planned_distance_km = Decimal(str(result["distance_km"]))
     if result["duration_min"]:
         route.planned_duration_min = int(result["duration_min"])
-    # Estimation carburant (moteur apprenant) pour la course planifiée.
+    # Estimation énergétique (moteur apprenant) pour la course planifiée : litres pour un
+    # thermique, kWh pour un électrique — chacun dans sa propre colonne.
     try:
-        from apps.fuelintel.engine import estimate_fuel
+        from apps.fuelintel.engine import estimate_energy
+        from apps.fuelintel.units import KWH
 
         trip = route.trip
-        est = estimate_fuel(
+        est = estimate_energy(
             float(route.planned_distance_km or 0),
             vehicle=trip.vehicle, driver=trip.driver,
             subsidiary_id=trip.subsidiary_id,
             departure_time=trip.actual_departure,
+            passengers=getattr(trip.reservation, "passengers", None) if trip.reservation_id else None,
         )
-        route.estimated_fuel_l = est["liters"]
+        if est.unit == KWH:
+            route.estimated_energy_kwh = est.quantity
+        else:
+            route.estimated_fuel_l = est.quantity.quantize(Decimal("0.1"))
     except Exception:
         pass
     route.save(update_fields=[
         "geometry", "planned_distance_km", "planned_duration_min",
-        "estimated_fuel_l", "updated_at",
+        "estimated_fuel_l", "estimated_energy_kwh", "updated_at",
     ])
     return route.geometry
 

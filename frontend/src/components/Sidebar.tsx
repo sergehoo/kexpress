@@ -49,6 +49,7 @@ const GROUPS: Group[] = [
     items: [
       { href: "/driver", label: "Mes missions", icon: Navigation },
       { href: "/reservations", label: "Réservations", icon: CalendarCheck },
+      { href: "/dispatching", label: "Dispatching", icon: Route },
       { href: "/planning-vehicles", label: "Planning véhicules", icon: CalendarRange },
       { href: "/planning-drivers", label: "Planning chauffeurs", icon: CalendarClock },
       { href: "/trips", label: "Courses", icon: Route },
@@ -65,7 +66,7 @@ const GROUPS: Group[] = [
   {
     title: "Finance",
     items: [
-      { href: "/fuel", label: "Carburant", icon: Fuel },
+      { href: "/energie", label: "Énergie", icon: Fuel },
       { href: "/expenses", label: "Dépenses", icon: Wallet },
       { href: "/reports", label: "Rapports", icon: FileText },
     ],

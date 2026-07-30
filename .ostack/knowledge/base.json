@@ -2,6 +2,21 @@
   "schemaVersion": 1,
   "lessons": [
     {
+      "id": "usage-learn-observe",
+      "kind": "usage",
+      "key": "learn.observe",
+      "statement": "Action 'learn.observe' exécutée 13 fois (0 refus/échec)",
+      "occurrences": 13,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
+    },
+    {
       "id": "usage-orchestration-completed",
       "kind": "usage",
       "key": "orchestration.completed",
@@ -13,8 +28,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-orchestration-started",
@@ -28,23 +43,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
-    },
-    {
-      "id": "usage-learn-observe",
-      "kind": "usage",
-      "key": "learn.observe",
-      "statement": "Action 'learn.observe' exécutée 5 fois (0 refus/échec)",
-      "occurrences": 5,
-      "projects": [
-        "kexpress"
-      ],
-      "sources": [
-        "audit.jsonl"
-      ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-workflow-started",
@@ -58,8 +58,23 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
+    },
+    {
+      "id": "usage-deliberation-challenge",
+      "kind": "usage",
+      "key": "deliberation.challenge",
+      "statement": "Action 'deliberation.challenge' exécutée 4 fois (0 refus/échec)",
+      "occurrences": 4,
+      "projects": [
+        "kexpress"
+      ],
+      "sources": [
+        "audit.jsonl"
+      ],
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-intent-compile",
@@ -73,8 +88,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-update-auto-notified",
@@ -88,8 +103,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-architecture-check",
@@ -103,23 +118,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
-    },
-    {
-      "id": "usage-deliberation-challenge",
-      "kind": "usage",
-      "key": "deliberation.challenge",
-      "statement": "Action 'deliberation.challenge' exécutée 2 fois (0 refus/échec)",
-      "occurrences": 2,
-      "projects": [
-        "kexpress"
-      ],
-      "sources": [
-        "audit.jsonl"
-      ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-workflow-approval-required",
@@ -133,8 +133,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-aucune-suggestion-de-dispatching-systeme-ou-k-bot-n-est-executee-sans-valida",
@@ -148,8 +148,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-chaque-course-est-rattachee-automatiquement-a-une-zone-operationnelle-a-part",
@@ -163,8 +163,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-chaque-course-ou-mission-porte-une-estimation-energetique-un-releve-reel-et-",
@@ -178,8 +178,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-chaque-segment-peut-recevoir-un-vehicule-et-un-chauffeur-differents-valides-",
@@ -193,8 +193,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-la-consommation-et-le-cout-energetique-d-une-course-sont-imputes-a-la-filial",
@@ -208,8 +208,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-la-repartition-de-l-energie-d-une-mission-regroupee-entre-ses-courses-conser",
@@ -223,8 +223,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-le-nombre-de-passagers-a-bord-d-un-vehicule-ne-depasse-jamais-sa-capacite-y-",
@@ -238,8 +238,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-le-temps-de-deplacement-entre-deux-missions-consecutives-d-un-meme-vehicule-",
@@ -253,8 +253,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-le-vehicule-de-l-aller-n-est-pas-immobilise-pour-le-retour-il-redevient-disp",
@@ -268,8 +268,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-les-km-a-vide-et-les-taux-d-occupation-sont-calcules-de-facon-coherente-km-a",
@@ -283,8 +283,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-les-litres-et-les-kwh-ne-sont-jamais-additionnes-ni-compares-sans-unite-affi",
@@ -298,8 +298,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-system-must-reject-invalid-commands",
@@ -313,8 +313,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-toute-action-de-dispatching-multi-passagers-et-gestion-de-l-energie-doit-etr",
@@ -328,8 +328,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-toute-decision-de-dispatching-accepter-modifier-reaffecter-ajouter-ou-retire",
@@ -343,8 +343,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-un-chauffeur-n-est-jamais-affecte-a-deux-courses-ou-missions-dont-les-crenea",
@@ -358,8 +358,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-un-vehicule-n-est-jamais-affecte-a-deux-courses-ou-missions-dont-les-creneau",
@@ -373,8 +373,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-un-vehicule-non-conforme-documents-ou-controles-n-est-jamais-propose-ni-affe",
@@ -388,8 +388,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-une-course-regroupee-conserve-son-demandeur-sa-reservation-sa-filiale-son-st",
@@ -403,8 +403,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-une-mission-n-est-validee-que-si-l-energie-estimee-disponible-carburant-ou-b",
@@ -418,8 +418,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-une-proposition-de-regroupement-ne-retient-que-des-courses-compatibles-zone-",
@@ -433,8 +433,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-une-reservation-aller-retour-genere-exactement-deux-courses-distinctes-aller",
@@ -448,8 +448,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-une-transaction-energetique-est-classee-en-carburant-ou-en-electricite-de-fa",
@@ -463,8 +463,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "recurring-invariant-users-may-request-help-with-available-commands",
@@ -478,8 +478,8 @@
       "sources": [
         "intents"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     },
     {
       "id": "usage-framework-install",
@@ -493,8 +493,8 @@
       "sources": [
         "audit.jsonl"
       ],
-      "firstSeen": "2026-07-29T22:00:31.296Z",
-      "lastSeen": "2026-07-29T22:00:31.296Z"
+      "firstSeen": "2026-07-30T02:10:27.653Z",
+      "lastSeen": "2026-07-30T02:10:27.653Z"
     }
   ]
 }

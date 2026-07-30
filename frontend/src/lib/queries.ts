@@ -12,6 +12,7 @@ import type {
   AuditEntry,
   Driver,
   DriverMission,
+  ElectricCharge,
   Employee,
   Expense,
   FuelLog,
@@ -117,7 +118,17 @@ export interface VehicleOccupancy {
   empty_rate: number | null;
 }
 
+export interface MutualisationStats {
+  trips: number;
+  grouped_trips: number;
+  missions: number;
+  /** `null` = aucune course sur la période (≠ 0 %, qui signifie « rien de mutualisé »). */
+  rate: number | null;
+  trips_per_mission: number | null;
+}
+
 export interface OccupancyStats {
+  mutualisation: MutualisationStats;
   period: string;
   start: string;
   end: string;
@@ -434,6 +445,17 @@ export function useFuel(params: Record<string, string> = {}) {
   });
 }
 
+/** Recharges électriques (section Électricité de la gestion de l'énergie). */
+export function useElectricCharges(params: Record<string, string> = {}) {
+  return useQuery({
+    queryKey: ["electric-charges", params],
+    queryFn: async () => {
+      const { data } = await api.get<Paginated<ElectricCharge>>("/electric-charges/", { params });
+      return data;
+    },
+  });
+}
+
 // --- Itinéraire d'une course (prévu vs réel) ---------------------------
 
 export function useTripRoute(tripId?: string | null) {
@@ -725,6 +747,134 @@ export function useTripAction(action: string) {
       qc.invalidateQueries({ queryKey: ["reservations"] });
       qc.invalidateQueries({ queryKey: ["reservation"] });
       qc.invalidateQueries({ queryKey: ["vehicles"] });
+    },
+  });
+}
+
+// --- Centre de dispatching (§4) -----------------------------------------
+
+export interface BoardTrip {
+  id: string;
+  destination: string;
+  leg: string;
+  status: string;
+  status_display: string;
+  subsidiary_name: string | null;
+  passengers: number | null;
+  priority: string | null;
+  planned_departure_at: string | null;
+  planned_arrival_at: string | null;
+  vehicle: string | null;
+  vehicle_registration: string | null;
+  driver_name: string | null;
+  origin_zone_name: string | null;
+  destination_zone_name: string | null;
+  grouped: boolean;
+}
+
+export interface ZoneMatrixCell {
+  origin_zone_name: string;
+  destination_zone_name: string;
+  trips: number;
+  passengers: number;
+  unassigned: number;
+}
+
+export interface BoardMission {
+  id: string;
+  code: string;
+  status: string;
+  status_display: string;
+  vehicle_registration: string;
+  vehicle_capacity: number;
+  driver_name: string | null;
+  planned_departure_at: string | null;
+  trips: number;
+}
+
+export interface DispatchBoard {
+  window: { start: string; end: string };
+  trips: BoardTrip[];
+  unassigned: BoardTrip[];
+  zone_matrix: ZoneMatrixCell[];
+  missions: BoardMission[];
+  available_vehicles: {
+    id: string; registration: string; label: string; capacity: number;
+    fuel_type: string; subsidiary_name: string | null;
+  }[];
+  pending_suggestions: number;
+  totals: { trips: number; unassigned: number; passengers: number; grouped: number };
+}
+
+export function useDispatchBoard(params: Record<string, string> = {}) {
+  return useQuery({
+    queryKey: ["dispatch-board", params],
+    queryFn: async () => {
+      const { data } = await api.get<DispatchBoard>("/dispatch/board/", { params });
+      return data;
+    },
+    refetchInterval: 60_000,
+  });
+}
+
+/** Proposition du moteur de dispatching — LECTURE. Rien ne s'applique sans décision. */
+export interface DispatchSuggestion {
+  id: string;
+  kind: string;
+  kind_display: string;
+  payload: { trip_ids: string[]; capacity_required?: number };
+  metrics: Record<string, unknown>;
+  rationale: string;
+  score: number;
+  rank: number;
+  status: string;
+  status_display: string;
+  created_at: string;
+}
+
+export function useDispatchSuggestions() {
+  return useQuery({
+    queryKey: ["dispatch-suggestions"],
+    queryFn: async () => {
+      const { data } = await api.get<Paginated<DispatchSuggestion>>("/dispatch-suggestions/", {
+        params: { status: "proposed" },
+      });
+      return data.results;
+    },
+  });
+}
+
+export function useGenerateSuggestions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<DispatchSuggestion[]>("/dispatch-suggestions/generate/", {});
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dispatch-suggestions"] });
+      qc.invalidateQueries({ queryKey: ["dispatch-board"] });
+    },
+  });
+}
+
+/** Décision humaine sur une suggestion (§9) : accepter, modifier, rejeter. */
+export function useDecideSuggestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      id: string; action: "accept" | "modify" | "reject";
+      vehicle?: string; driver?: string; comment?: string;
+    }) => {
+      const { id, ...body } = vars;
+      const { data } = await api.post(`/dispatch-suggestions/${id}/decide/`, body);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dispatch-suggestions"] });
+      qc.invalidateQueries({ queryKey: ["dispatch-board"] });
+      qc.invalidateQueries({ queryKey: ["missions"] });
+      qc.invalidateQueries({ queryKey: ["trips"] });
     },
   });
 }

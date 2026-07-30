@@ -20,6 +20,8 @@ export const PAGE_ROLES: Record<string, Role[]> = {
   // Pilotage
   "/dashboard": [...MANAGERS, "department_manager", "finance", "auditor"],
   "/fleet-control": MANAGERS,
+  // Centre de dispatching (§4) : exploitation de la flotte, pas consultation.
+  "/dispatching": MANAGERS,
   "/map": [...MANAGERS, "department_manager", "requester", "driver"],
   // Exploitation
   "/driver": ["driver", ...ADMINS],
@@ -32,6 +34,9 @@ export const PAGE_ROLES: Record<string, Role[]> = {
   "/drivers": MANAGERS,
   "/maintenance": [...MANAGERS, "finance"],
   // Finance
+  // « Carburant » renommé « Énergie » (§12) ; `/fuel` redirige (cf. next.config.mjs) et
+  // reste listé pour que la redirection ne soit pas coupée par le garde d'accès.
+  "/energie": [...MANAGERS, "finance"],
   "/fuel": [...MANAGERS, "finance"],
   "/expenses": [...MANAGERS, "finance"],
   "/reports": [...MANAGERS, "finance", "auditor"],

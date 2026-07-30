@@ -2,8 +2,12 @@ from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
 from apps.core.mixins import TenantScopedViewSetMixin
-from apps.expenses.models import Expense, FuelLog
-from apps.expenses.serializers import ExpenseSerializer, FuelLogSerializer
+from apps.expenses.models import ElectricCharge, Expense, FuelLog
+from apps.expenses.serializers import (
+    ElectricChargeSerializer,
+    ExpenseSerializer,
+    FuelLogSerializer,
+)
 
 
 class FuelLogViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
@@ -31,6 +35,37 @@ class FuelLogViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
                 + (f"\nCourse liée : {log.trip.destination}" if log.trip_id else "")
             ),
             link="/fuel",
+        )
+
+
+class ElectricChargeViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
+    """Recharges électriques (§14) — le pendant des pleins pour la flotte électrique."""
+
+    queryset = ElectricCharge.objects.select_related("vehicle", "subsidiary", "validated_by")
+    serializer_class = ElectricChargeSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ["vehicle", "subsidiary", "charge_type"]
+    search_fields = ["vehicle__registration", "charger"]
+    ordering_fields = ["date", "amount", "kwh_recharged"]
+
+    def perform_create(self, serializer):
+        charge = serializer.save()
+        from apps.core.enums import NotificationType
+        from apps.notifications.events import finance_users, managers_of
+        from apps.notifications.services import notify_many
+
+        notify_many(
+            managers_of(charge.subsidiary_id) + finance_users(),
+            NotificationType.FUEL_DECLARED,
+            title=f"Recharge déclarée — {charge.vehicle.registration}",
+            message=(
+                f"Véhicule : {charge.vehicle.registration}\n"
+                f"Filiale : {charge.subsidiary.name}\n"
+                f"{charge.kwh_recharged} kWh pour {charge.amount} XOF le {charge.date:%d/%m/%Y}"
+                f" ({charge.get_charge_type_display()})."
+                + (f"\nCourse liée : {charge.trip.destination}" if charge.trip_id else "")
+            ),
+            link="/energie",
         )
 
 

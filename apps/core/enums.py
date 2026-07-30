@@ -215,6 +215,37 @@ class GeofenceType(models.TextChoices):
     OPERATIONAL = "operational", "Zone opérationnelle"
 
 
+class MissionStatus(models.TextChoices):
+    """Cycle de vie d'une mission de transport regroupée (§6)."""
+
+    PLANNED = "planned", "Planifiée"
+    DISPATCHED = "dispatched", "Affectée"
+    IN_PROGRESS = "in_progress", "En cours"
+    COMPLETED = "completed", "Terminée"
+    CANCELLED = "cancelled", "Annulée"
+
+    @classmethod
+    def active_values(cls):
+        """Statuts pour lesquels la mission OCCUPE son véhicule et son chauffeur."""
+        return [cls.PLANNED, cls.DISPATCHED, cls.IN_PROGRESS]
+
+
+class FuelCode(models.TextChoices):
+    """Carburants tarifés (Côte d'Ivoire). Partagé par les prix et les pleins."""
+
+    SUPER = "super", "Super sans plomb"
+    GASOIL = "gasoil", "Gasoil"
+
+
+class ChargeType(models.TextChoices):
+    """Mode de recharge d'un véhicule électrique (§14)."""
+
+    AC_SLOW = "ac_slow", "Recharge lente (AC)"
+    AC_FAST = "ac_fast", "Recharge accélérée (AC)"
+    DC_RAPID = "dc_rapid", "Recharge rapide (DC)"
+    OTHER = "other", "Autre"
+
+
 class ZoneCategory(models.TextChoices):
     """Nature d'une zone opérationnelle (§3)."""
 

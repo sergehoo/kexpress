@@ -1,10 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import {
   AlertTriangle,
+  BatteryWarning,
+  Car,
   Clock,
   FileWarning,
+  Fuel,
   IdCard,
+  Lightbulb,
+  PauseCircle,
+  Route,
+  TrendingUp,
+  Users,
   Wrench,
 } from "lucide-react";
 
@@ -17,6 +26,16 @@ const TYPE_ICON: Record<string, React.ElementType> = {
   license: IdCard,
   maintenance: Wrench,
   late: Clock,
+  // Alertes intelligentes (§19) — une icône par famille rend la liste lisible d'un coup d'œil.
+  energy_variance: Fuel,
+  abnormal_charge: BatteryWarning,
+  energy_insufficient: BatteryWarning,
+  empty_mileage: TrendingUp,
+  low_occupancy: Users,
+  groupable_not_grouped: Lightbulb,
+  idle_vehicle: PauseCircle,
+  return_without_vehicle: Route,
+  ill_suited_vehicle: Car,
 };
 
 export default function AlertsPage() {
@@ -65,18 +84,29 @@ export default function AlertsPage() {
               {alerts.map((a, i) => {
                 const Icon = TYPE_ICON[a.type] ?? AlertTriangle;
                 const critical = a.severity === "critical";
+                const info = a.severity === "info";
                 return (
                   <li key={i} className="flex items-center gap-3 px-5 py-3.5 hover:bg-surface2">
                     <span
                       className={cn(
                         "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-                        critical ? "bg-rose-500/10 text-rose-600" : "bg-amber-500/10 text-amber-600",
+                        critical ? "bg-rose-500/10 text-rose-600"
+                          : info ? "bg-sky-500/10 text-sky-600"
+                          : "bg-amber-500/10 text-amber-600",
                       )}
                     >
                       <Icon className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-ink">{a.title}</p>
+                      {/* Une alerte actionnable mène à l'objet concerné : sans lien, le
+                          gestionnaire doit retrouver la course à la main. */}
+                      {a.link ? (
+                        <Link href={a.link} className="truncate text-sm font-medium text-ink hover:text-brand-600 hover:underline">
+                          {a.title}
+                        </Link>
+                      ) : (
+                        <p className="truncate text-sm font-medium text-ink">{a.title}</p>
+                      )}
                       <p className="text-xs text-muted">{a.detail}</p>
                     </div>
                     <div className="text-right">
@@ -85,10 +115,12 @@ export default function AlertsPage() {
                           "rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset",
                           critical
                             ? "bg-rose-500/10 text-rose-600 ring-rose-500/20"
-                            : "bg-amber-500/10 text-amber-600 ring-amber-500/20",
+                            : info
+                              ? "bg-sky-500/10 text-sky-600 ring-sky-500/20"
+                              : "bg-amber-500/10 text-amber-600 ring-amber-500/20",
                         )}
                       >
-                        {critical ? "Critique" : "À surveiller"}
+                        {critical ? "Critique" : info ? "Opportunité" : "À surveiller"}
                       </span>
                       <p className="mt-1 text-[11px] text-faint">{formatDate(a.date)}</p>
                     </div>

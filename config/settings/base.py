@@ -70,6 +70,8 @@ LOCAL_APPS = [
     "apps.kbot",
     # Métriques d'occupation / kilométrage matérialisées (cache de lecture reconstructible).
     "apps.analytics",
+    # Missions regroupées + suggestions de dispatching.
+    "apps.dispatch",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -152,6 +154,20 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- Alertes intelligentes (§19) ------------------------------------------
+# Seuils de déclenchement. Une alerte qui se déclenche en permanence cesse d'être lue :
+# ces valeurs s'ajustent au terrain (une flotte qui roule structurellement beaucoup à vide
+# relève `empty_rate` plutôt que de subir une alerte constante).
+# Clés disponibles : cf. apps/analytics/detectors.py::DEFAULT_THRESHOLDS
+ALERT_THRESHOLDS: dict = {}
+
+# --- Imputation énergétique (§17) -----------------------------------------
+# Clé de répartition de l'énergie d'une mission regroupée entre ses courses.
+# `passenger_distance` (défaut) facture au prorata des passagers à bord sur chaque tronçon :
+# plus juste que la distance seule, qui ferait payer autant une course d'un passager et une
+# course de quatre sur le même trajet. Autres valeurs : distance, passengers, duration.
+ENERGY_ALLOCATION_RULE = env("ENERGY_ALLOCATION_RULE", default="passenger_distance")
 
 # --- Keycloak / OIDC (SSO) -------------------------------------------------
 # Keycloak authentifie ; Kexpress gère l'autorisation (rôle + filiale).

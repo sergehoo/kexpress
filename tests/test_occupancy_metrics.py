@@ -4,7 +4,7 @@ L'identité `km à vide = km totaux − km en charge` est éprouvée par des tes
 sur des milliers d'entrées générées, y compris incohérentes (compteur non relevé, division
 par zéro), là où quelques cas choisis à la main laisseraient passer les cas limites.
 """
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import pytest
 from django.utils import timezone
@@ -106,12 +106,18 @@ def fleet(db, sub_a, requester_a, vehicle_a):
     from apps.reservations.services import _ensure_trips
     from apps.trips.models import Trip
 
-    now = timezone.now()
+    # Journée de référence : la VEILLE, entièrement écoulée. Ancrer sur « maintenant moins
+    # quelques heures » rendrait le test dépendant de l'heure d'exécution (peu après minuit,
+    # les courses basculent sur la veille et sortent de la période « aujourd'hui »).
+    day_start = timezone.make_aware(
+        datetime.combine(timezone.localdate() - timedelta(days=1), time(8, 0)),
+        timezone.get_current_timezone(),
+    )
     made = []
     # (départ, retour, compteur début, compteur fin, passagers)
     plan = [
-        (now - timedelta(hours=6), now - timedelta(hours=5), 1000, 1015, 2),
-        (now - timedelta(hours=3), now - timedelta(hours=2), 1025, 1050, 4),
+        (day_start, day_start + timedelta(hours=1), 1000, 1015, 2),
+        (day_start + timedelta(hours=3), day_start + timedelta(hours=4), 1025, 1050, 4),
     ]
     for index, (dep, ret, odo_start, odo_end, passengers) in enumerate(plan):
         res = Reservation.objects.create(
@@ -135,7 +141,8 @@ def test_metrics_by_vehicle_separates_loaded_from_empty(db, fleet, vehicle_a):
     """Le kilométrage entre deux courses (repositionnement) est compté comme à vide."""
     from apps.trips.models import Trip
 
-    start_dt, end_dt = period_bounds(timezone.localdate(), timezone.localdate())
+    reference_day = timezone.localdate() - timedelta(days=1)
+    start_dt, end_dt = period_bounds(reference_day, reference_day)
     computed = metrics_by_vehicle(
         Trip.objects.all(), start_dt=start_dt, end_dt=end_dt,
         capacities={vehicle_a.pk: vehicle_a.capacity},
@@ -150,7 +157,8 @@ def test_metrics_by_vehicle_separates_loaded_from_empty(db, fleet, vehicle_a):
 def test_metrics_by_vehicle_counts_occupancy(db, fleet, vehicle_a):
     from apps.trips.models import Trip
 
-    start_dt, end_dt = period_bounds(timezone.localdate(), timezone.localdate())
+    reference_day = timezone.localdate() - timedelta(days=1)
+    start_dt, end_dt = period_bounds(reference_day, reference_day)
     occupancy = metrics_by_vehicle(
         Trip.objects.all(), start_dt=start_dt, end_dt=end_dt,
         capacities={vehicle_a.pk: vehicle_a.capacity},
@@ -178,7 +186,8 @@ def test_scheduled_trips_are_not_counted(db, sub_a, requester_a, vehicle_a):
     trip = _ensure_trips(res)[0]
     Trip.objects.filter(pk=trip.pk).update(vehicle=vehicle_a)  # planifiée, jamais partie
 
-    start_dt, end_dt = period_bounds(timezone.localdate(), timezone.localdate())
+    reference_day = timezone.localdate() - timedelta(days=1)
+    start_dt, end_dt = period_bounds(reference_day, reference_day)
     computed = metrics_by_vehicle(
         Trip.objects.all(), start_dt=start_dt, end_dt=end_dt,
         capacities={vehicle_a.pk: vehicle_a.capacity},
@@ -195,8 +204,9 @@ def test_recompute_metrics_is_idempotent(fleet, vehicle_a):
     from apps.analytics.models import EmptyMileageMetric, OccupancyMetric
     from apps.analytics.tasks import recompute_metrics
 
-    recompute_metrics(days_back=1)
-    recompute_metrics(days_back=1)
+    day = (timezone.localdate() - timedelta(days=1)).isoformat()
+    recompute_metrics(day=day)
+    recompute_metrics(day=day)  # rejouable : met à jour au lieu de dupliquer
 
     assert OccupancyMetric.objects.filter(vehicle=vehicle_a).count() == 1
     assert EmptyMileageMetric.objects.filter(vehicle=vehicle_a).count() == 1
@@ -213,7 +223,7 @@ def test_materialized_row_imputes_the_vehicle_subsidiary(fleet, vehicle_a, sub_a
     from apps.analytics.models import OccupancyMetric
     from apps.analytics.tasks import recompute_metrics
 
-    recompute_metrics(days_back=1)
+    recompute_metrics(day=(timezone.localdate() - timedelta(days=1)).isoformat())
     assert OccupancyMetric.objects.get(vehicle=vehicle_a).subsidiary_id == sub_a.pk
 
 

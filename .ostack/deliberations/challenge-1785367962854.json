@@ -1,0 +1,141 @@
+{
+  "record": {
+    "taskId": "challenge-1785367962854",
+    "objective": "Évaluer la proposition avant implémentation",
+    "proposals": [
+      {
+        "id": "P1",
+        "author": "inline",
+        "content": "P5 covoiturage: dispatch_group=COALESCE discriminant de la contrainte anti-double-booking, MissionTrip.is_active denormalise, _rebuild supprime et recree les MissionStop, aucun service de completion de mission, remove_trip/cancel_mission delegue a release_assignment qui leve si la course n'est plus SCHEDULED",
+        "claims": []
+      }
+    ],
+    "challenges": [
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Utilisation de COALESCE comme discriminant pour la contrainte anti-double-booking peut entraîner des comportements imprévisibles si non géré correctement",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "La denormalisation de MissionTrip.is_active risque de générer des incohérences de données si non synchronisée avec les autres tables",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Suppression de _rebuild sans service de remplacement pour MissionStop pourrait laisser des données incomplètes",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Délegation de remove_trip/cancel_mission à release_assignment sans vérification robuste de l'état de la course peut laisser des cas non gérés",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "La denormalisation de MissionTrip.is_active peut entraîner des incohérences de données si non gérée correctement",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "_rebuild supprime et recrée MissionStop sans garantie de cohérence, risque de perte de données",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "L'absence de service de completion de mission peut provoquer des états incohérents",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "release_assignment leve une erreur si la course n'est pas SCHEDULED, empêchant l'annulation de missions en états valides",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "COALESCE sur dispatch_group peut générer des groupes de covoiturage incorrects, violation de la contrainte anti-double-booking",
+        "blocking": true
+      }
+    ],
+    "evidence": []
+  },
+  "verdict": {
+    "decision": "insufficient_evidence",
+    "scores": [
+      {
+        "proposalId": "P1",
+        "supportedClaims": 0,
+        "failedClaims": 0,
+        "unsupportedClaims": 0,
+        "unresolvedBlockingChallenges": 7,
+        "score": -28
+      }
+    ],
+    "preservedDisagreements": [
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Utilisation de COALESCE comme discriminant pour la contrainte anti-double-booking peut entraîner des comportements imprévisibles si non géré correctement",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "La denormalisation de MissionTrip.is_active risque de générer des incohérences de données si non synchronisée avec les autres tables",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Suppression de _rebuild sans service de remplacement pour MissionStop pourrait laisser des données incomplètes",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "critic",
+        "message": "Délegation de remove_trip/cancel_mission à release_assignment sans vérification robuste de l'état de la course peut laisser des cas non gérés",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "La denormalisation de MissionTrip.is_active peut entraîner des incohérences de données si non gérée correctement",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "_rebuild supprime et recrée MissionStop sans garantie de cohérence, risque de perte de données",
+        "blocking": true
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "L'absence de service de completion de mission peut provoquer des états incohérents",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "release_assignment leve une erreur si la course n'est pas SCHEDULED, empêchant l'annulation de missions en états valides",
+        "blocking": false
+      },
+      {
+        "proposalId": "P1",
+        "challenger": "adversarial",
+        "message": "COALESCE sur dispatch_group peut générer des groupes de covoiturage incorrects, violation de la contrainte anti-double-booking",
+        "blocking": true
+      }
+    ],
+    "rationale": "Aucune preuve exécutée n'a été rattachée aux affirmations ; escalade humaine requise (§36.1)."
+  }
+}

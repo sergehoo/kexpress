@@ -317,8 +317,16 @@ class AlertsView(APIView):
                     "date": er.date().isoformat(),
                 })
 
+        # Alertes intelligentes (§19) : détecteurs enfichables — énergie, occupation,
+        # km à vide, regroupements manqués, immobilisation, retour sans véhicule.
+        from apps.analytics.detectors import run_detectors
+
+        alerts += run_detectors(qs)
+
         order = {"critical": 0, "warning": 1, "info": 2}
-        alerts.sort(key=lambda a: (order.get(a["severity"], 3), a["date"]))
+        # Certaines alertes n'ont pas de date (agrégats de période) : les trier sur une chaîne
+        # vide plutôt que de faire échouer la comparaison entre None et str.
+        alerts.sort(key=lambda a: (order.get(a["severity"], 3), a.get("date") or ""))
         counts = {
             "critical": sum(1 for a in alerts if a["severity"] == "critical"),
             "warning": sum(1 for a in alerts if a["severity"] == "warning"),

@@ -374,6 +374,36 @@ export interface FuelLog {
   price_per_liter: string | null;
   mileage: number | null;
   subsidiary_name: string;
+  /** Traçabilité du plein. `variance_pct` est calculé côté serveur (lecture seule). */
+  fuel_code: string;
+  station: string;
+  estimated_liters: string | null;
+  variance_pct: number | null;
+}
+
+/** Recharge d'un véhicule électrique — le pendant du plein, en kWh. */
+export interface ElectricCharge {
+  id: string;
+  vehicle: string;
+  vehicle_registration: string;
+  trip: string | null;
+  date: string;
+  battery_capacity_kwh: string | null;
+  soc_start_pct: number | null;
+  soc_end_pct: number | null;
+  /** Énergie attendue d'après l'écart d'état de charge — repère un relevé douteux. */
+  soc_delta_kwh: string | null;
+  kwh_recharged: string;
+  kwh_consumed: string | null;
+  range_estimate_km: number | null;
+  charger: string;
+  charge_type: string;
+  charge_type_display: string;
+  duration_min: number | null;
+  kwh_price: string | null;
+  amount: string;
+  mileage: number | null;
+  subsidiary_name: string;
 }
 
 export interface Employee {
@@ -423,7 +453,10 @@ export interface AlertItem {
   severity: string;
   title: string;
   detail: string;
-  date: string;
+  /** Les alertes agrégées sur une période n'ont pas de date ponctuelle. */
+  date: string | null;
+  /** Lien vers l'objet concerné, quand l'alerte est actionnable (§19). */
+  link?: string | null;
 }
 
 export interface AlertsResponse {

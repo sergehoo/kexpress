@@ -496,9 +496,11 @@ function OccupancySection({
             sub={`sur ${formatNumber(data.fleet.total_km)} km parcourus`}
           />
           <Kpi
-            label="Véhicules suivis" tone="bg-sky-500/10 text-sky-600" icon={ClipboardList}
-            value={data.results.length}
-            sub={`du ${data.start} au ${data.end}`}
+            label="Taux de mutualisation" tone="bg-violet-500/10 text-violet-600" icon={ClipboardList}
+            value={ratePct(data.mutualisation.rate)}
+            sub={data.mutualisation.missions > 0
+              ? `${data.mutualisation.grouped_trips} course(s) sur ${data.mutualisation.missions} tournée(s)`
+              : "aucune tournée regroupée sur la période"}
           />
         </div>
 

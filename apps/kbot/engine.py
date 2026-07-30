@@ -30,6 +30,18 @@ def _has(q: str, *words: str) -> bool:
 # --- Suggestions contextuelles --------------------------------------------
 
 PAGE_SUGGESTIONS = {
+    # Centre de dispatching : les questions de §20, pour qu'elles soient découvrables
+    # plutôt que devinées.
+    "dispatching": [
+        "Quelles courses peuvent être regroupées aujourd'hui ?",
+        "Quelle mission permettrait de réduire le plus les kilomètres à vide ?",
+        "Quel véhicule est le mieux positionné pour le retour ?",
+    ],
+    "energie": [
+        "Quelle est la consommation électrique des véhicules ce mois-ci ?",
+        "Compare les coûts énergétiques des véhicules thermiques et électriques",
+        "Quels véhicules roulent le plus souvent à vide ?",
+    ],
     "dashboard": [
         "Donne-moi le résumé du jour",
         "Quels sont les coûts du mois ?",
@@ -94,6 +106,29 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
     period = context.get("period") or "today"
     # branch_id n'est honoré que pour un périmètre entreprise (sinon isolation préservée).
     qs = scoped(user, subsidiary_id=branch_id if (user.is_superuser or user.has_company_scope) else None)
+
+    # --- Dispatching & énergie (§20) ---
+    # Placés AVANT les règles génériques : sans cela « consommation électrique » serait
+    # capté par la consommation carburant, et « coûts thermique/électrique » par les coûts
+    # de flotte — deux réponses hors sujet.
+    from apps.kbot import dispatch_intents as D
+
+    if _has(q, "regroup", "mutualis", "partager", "covoitur") and _has(q, "course", "trajet", "peut", "peuvent", "possible", "aujourd"):
+        return D.groupable_trips(user, qs)
+    if _has(q, "reduire", "economis", "gagner", "eviter") and _has(q, "a vide", "vide", "kilometr", "km"):
+        return D.best_empty_km_saving(user, qs)
+    if _has(q, "a vide", "vide") and _has(q, "vehicul", "voiture", "roule", "km", "kilometr"):
+        return D.emptiest_vehicles(user, qs)
+    if _has(q, "mieux positionne", "mieux place", "bien positionne") or (
+        _has(q, "retour") and _has(q, "quel vehicul", "meilleur vehicul", "vehicule pour")
+    ):
+        return D.best_vehicle_for_return(user, qs, origin)
+    if _has(q, "electri", "kwh", "recharge", "batterie") and _has(q, "consommation", "consomme", "combien", "energie"):
+        return D.electric_consumption(user, qs)
+    if _has(q, "compare", "comparer", "comparaison", "versus", " vs ") and _has(q, "thermique", "electri", "energetique", "energie"):
+        return D.compare_energy_costs(user, qs)
+    if _has(q, "mutualis") and _has(q, "filiale", "agence", "entite", "meilleur"):
+        return D.best_mutualisation_subsidiary(user, qs)
 
     # Ordre = priorité de désambiguïsation.
     if _has(q, "plus proche", "proche", "a cote", "pres de") and _has(q, "vehicul", "voiture", "engin"):

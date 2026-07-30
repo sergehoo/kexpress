@@ -156,9 +156,15 @@ class TripRoute(TimeStampedModel):
     # Géométrie routière (suivi des routes, façon Google Maps) : liste de [lat, lng].
     # Mise en cache après calcul via le moteur de routage (OSRM).
     geometry = models.JSONField("tracé routier", default=list, blank=True)
-    # Consommation estimée par le moteur Fuel Intelligence (litres).
+    # Consommation estimée par le moteur énergie (litres) — thermiques uniquement.
     estimated_fuel_l = models.DecimalField(
         "carburant estimé (L)", max_digits=7, decimal_places=1, null=True, blank=True
+    )
+    # Consommation estimée d'un véhicule ÉLECTRIQUE (kWh). Volontairement une colonne
+    # DISTINCTE de `estimated_fuel_l` : litres et kWh ne se mélangent pas (§16), et une
+    # colonne unique obligerait à deviner l'unité à la lecture.
+    estimated_energy_kwh = models.DecimalField(
+        "énergie estimée (kWh)", max_digits=8, decimal_places=2, null=True, blank=True
     )
     # --- Recalcul automatique sur déviation (#3C) ---
     # Itinéraire actuellement suivi, recalculé depuis la position courante vers la

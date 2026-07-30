@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, Marker, Polygon, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Circle, MapContainer, Marker, Polygon, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -182,7 +182,11 @@ export default function MapView({
   planned?: [number, number][];
   actual?: [number, number][];
   destination?: [number, number] | null;
-  zones?: { id: string; name: string; zone_type: string; polygon: [number, number][] }[];
+  /** Zones affichables : polygone dessiné OU centre + rayon (zone opérationnelle). */
+  zones?: {
+    id: string; name: string; zone_type: string; polygon: [number, number][];
+    center?: [number, number] | null; radius_m?: number | null;
+  }[];
   origin?: [number, number] | null;
   onMapClick?: (lat: number, lng: number) => void;
   recenterTo?: [number, number] | null;
@@ -237,19 +241,31 @@ export default function MapView({
         {origin && <Marker position={origin} icon={ORIGIN_ICON} />}
         {marker && <Marker position={marker} icon={REPLAY_ICON} />}
 
-        {/* Zones de géofencing */}
+        {/* Zones : géofences dessinées (polygone) ET zones opérationnelles (centre + rayon).
+            Une zone définie par un rayon n'a pas de polygone : sans ce second rendu, les
+            zones de dispatching semées restaient invisibles sur la carte. */}
         {zones?.map((z) => {
           const forbidden = z.zone_type === "forbidden";
-          const color = forbidden ? "#f43f5e" : "#10b981";
-          return z.polygon?.length >= 3 ? (
-            <Polygon
-              key={z.id}
-              positions={z.polygon}
-              pathOptions={{ color, weight: 2, dashArray: "6 6", fillColor: color, fillOpacity: 0.07 }}
-            >
-              <Tooltip sticky><span className="text-xs font-medium">{z.name}</span></Tooltip>
-            </Polygon>
-          ) : null;
+          const operational = z.zone_type === "operational";
+          const color = forbidden ? "#f43f5e" : operational ? "#8b5cf6" : "#10b981";
+          const style = {
+            color, weight: 2, dashArray: "6 6", fillColor: color, fillOpacity: 0.07,
+          };
+          if (z.polygon?.length >= 3) {
+            return (
+              <Polygon key={z.id} positions={z.polygon} pathOptions={style}>
+                <Tooltip sticky><span className="text-xs font-medium">{z.name}</span></Tooltip>
+              </Polygon>
+            );
+          }
+          if (z.center && z.radius_m) {
+            return (
+              <Circle key={z.id} center={z.center} radius={z.radius_m} pathOptions={style}>
+                <Tooltip sticky><span className="text-xs font-medium">{z.name}</span></Tooltip>
+              </Circle>
+            );
+          }
+          return null;
         })}
 
         {/* Itinéraire prévu — style Google Maps (casing + ligne bleue) */}

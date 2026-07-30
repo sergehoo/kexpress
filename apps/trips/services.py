@@ -75,6 +75,12 @@ def start_trip(trip: Trip, actor, start_mileage: int | None = None) -> Trip:
         title=f"Course démarrée — {trip.destination}",
         next_action="Suivi en temps réel ; retour attendu à l'heure prévue.",
     )
+    # La tournée dont cette course fait partie doit suivre l'avancement réel : sans quoi
+    # elle resterait « planifiée » à vie, son véhicule réputé engagé indéfiniment.
+    if trip.dispatch_group:
+        from apps.dispatch.services import sync_mission_for_trip
+
+        sync_mission_for_trip(trip, actor)
     audit.record(actor, AuditAction.UPDATE, trip,
                  changes={"action": "start_trip", "start_mileage": trip.start_mileage})
     return trip
@@ -138,6 +144,12 @@ def end_trip(trip: Trip, actor, end_mileage: int | None = None, fuel_consumed=No
         next_action="Clôture de la course par le gestionnaire.",
     )
     _check_fuel_anomaly(trip)
+    # La tournée dont cette course fait partie doit suivre l'avancement réel : sans quoi
+    # elle resterait « planifiée » à vie, son véhicule réputé engagé indéfiniment.
+    if trip.dispatch_group:
+        from apps.dispatch.services import sync_mission_for_trip
+
+        sync_mission_for_trip(trip, actor)
     audit.record(actor, AuditAction.UPDATE, trip,
                  changes={"action": "end_trip", "end_mileage": end_mileage,
                           "distance_km": str(trip.distance_km) if trip.distance_km else None})
@@ -159,6 +171,12 @@ def close_trip(trip: Trip, actor) -> Trip:
         title=f"Course clôturée — {trip.destination}",
         next_action="Aucune (dossier clos).",
     )
+    # La tournée dont cette course fait partie doit suivre l'avancement réel : sans quoi
+    # elle resterait « planifiée » à vie, son véhicule réputé engagé indéfiniment.
+    if trip.dispatch_group:
+        from apps.dispatch.services import sync_mission_for_trip
+
+        sync_mission_for_trip(trip, actor)
     audit.record(actor, AuditAction.UPDATE, trip, changes={"action": "close_trip"})
     return trip
 
@@ -211,11 +229,16 @@ def can_manage_trip(trip, user) -> bool:
 def trip_time_conflicts(trip, *, field):
     """Autres courses actives (non annulées) du même véhicule/chauffeur dont la fenêtre
     PRÉVUE chevauche celle de `trip`. `field` ∈ {"vehicle", "driver"}. Conflit PAR SEGMENT :
-    un aller 10h–12h et un retour 18h–20h sur le même véhicule ne se chevauchent pas."""
+    un aller 10h–12h et un retour 18h–20h sur le même véhicule ne se chevauchent pas.
+
+    Les courses d'une MÊME tournée (même `dispatch_group`) ne sont pas en conflit : le
+    covoiturage consiste précisément à servir plusieurs courses simultanées avec un seul
+    véhicule. Miroir exact de la contrainte d'exclusion en base.
+    """
     ref = getattr(trip, f"{field}_id")
     if not ref or trip.planned_departure_at is None or trip.planned_arrival_at is None:
         return Trip.objects.none()
-    return (
+    conflicts = (
         Trip.objects.filter(**{f"{field}_id": ref}, status__in=_ACTIVE_TRIP_STATUSES)
         .filter(
             planned_departure_at__lt=trip.planned_arrival_at,
@@ -223,16 +246,31 @@ def trip_time_conflicts(trip, *, field):
         )
         .exclude(pk=trip.pk)
     )
+    if trip.dispatch_group:
+        conflicts = conflicts.exclude(dispatch_group=trip.dispatch_group)
+    return conflicts
 
 
 @transaction.atomic
-def assign_vehicle_to_trip(trip, vehicle, actor) -> Trip:
-    """Affecte un véhicule à UNE course (aller ou retour), indépendamment de l'autre segment."""
+def assign_vehicle_to_trip(trip, vehicle, actor, *, allow_grouped: bool = False) -> Trip:
+    """Affecte un véhicule à UNE course (aller ou retour), indépendamment de l'autre segment.
+
+    `allow_grouped` est réservé à `apps.dispatch` : une course appartenant à une tournée ne
+    peut pas être réaffectée isolément, car la capacité d'une tournée s'évalue sur le profil
+    d'occupation de TOUTES ses courses. Réaffecter une seule course vers un véhicule plus
+    petit passerait le contrôle de capacité par course (chacune tient) tout en faisant
+    déborder le véhicule (leur somme simultanée ne tient pas).
+    """
     from apps.core.enums import VehicleStatus as VS
     from apps.reservations import workflow
 
     if trip.status not in _ASSIGNABLE_TRIP_STATUSES:
         raise WorkflowError("Cette course ne peut plus être (ré)affectée (déjà partie ou clôturée).")
+    if trip.dispatch_group and not allow_grouped:
+        raise WorkflowError(
+            "Cette course fait partie d'une tournée regroupée : modifiez l'affectation depuis "
+            "la mission, afin que la capacité soit vérifiée sur l'ensemble des passagers."
+        )
     vehicle = lock_row(vehicle)  # sérialise les affectations concurrentes de CE véhicule
     workflow.check_capacity(vehicle, trip.reservation.passengers)
     if vehicle.status in (VS.MAINTENANCE, VS.OUT_OF_SERVICE):
@@ -260,10 +298,19 @@ def assign_vehicle_to_trip(trip, vehicle, actor) -> Trip:
 
 
 @transaction.atomic
-def assign_driver_to_trip(trip, driver, actor) -> Trip:
-    """Affecte un chauffeur à UNE course (aller ou retour)."""
+def assign_driver_to_trip(trip, driver, actor, *, allow_grouped: bool = False) -> Trip:
+    """Affecte un chauffeur à UNE course (aller ou retour).
+
+    `allow_grouped` : réservé à `apps.dispatch` — une tournée a UN chauffeur pour toutes ses
+    courses, en changer une seule le contredirait (cf. `assign_vehicle_to_trip`).
+    """
     if trip.status not in _ASSIGNABLE_TRIP_STATUSES:
         raise WorkflowError("Cette course ne peut plus être (ré)affectée (déjà partie ou clôturée).")
+    if trip.dispatch_group and not allow_grouped:
+        raise WorkflowError(
+            "Cette course fait partie d'une tournée regroupée : modifiez le chauffeur depuis "
+            "la mission."
+        )
     driver = lock_row(driver)  # sérialise les affectations concurrentes de CE chauffeur
     if not getattr(driver, "is_available", True):
         raise WorkflowError("Ce chauffeur n'est pas disponible.")
@@ -293,6 +340,43 @@ def assign_driver_to_trip(trip, driver, actor) -> Trip:
 
 
 @transaction.atomic
+def release_assignment(trip, actor, *, strict: bool = True) -> Trip:
+    """Retire véhicule et chauffeur d'une course, qui repasse « en attente d'affectation ».
+
+    Distinct de l'annulation : la course reste à réaliser, elle n'a simplement plus de
+    ressources. Indispensable quand une course quitte une tournée regroupée — sans cela elle
+    conserverait le véhicule partagé tout en sortant du groupe, ce qui constitue précisément
+    un double-booking.
+
+    `strict=False` : ne lève pas si la course a démarré ou est annulée, et se contente de
+    libérer ce qui peut l'être. Réservé au DÉTACHEMENT d'une tournée : sinon une seule course
+    démarrée ou annulée suffirait à geler la mission à vie, plus aucun chemin ne permettant
+    de la dénouer ni de libérer son véhicule.
+    """
+    if trip.status not in _ASSIGNABLE_TRIP_STATUSES:
+        if strict:
+            raise WorkflowError(
+                "Cette course a déjà démarré : son affectation ne peut plus être retirée."
+            )
+        # Course démarrée : elle garde légitimement son véhicule. Rien à libérer.
+        if trip.status not in (TripStatus.CANCELLED,):
+            return trip
+    previous_vehicle = trip.vehicle
+    if not trip.vehicle_id and not trip.driver_id:
+        return trip
+
+    trip.vehicle = None
+    trip.driver = None
+    trip.save(update_fields=["vehicle", "driver", "updated_at"])
+    if previous_vehicle is not None:
+        _release_if_idle(previous_vehicle, actor)
+    _recompute_reservation_assignment(trip.reservation)
+    audit.record(actor, AuditAction.UPDATE, trip,
+                 changes={"action": "release_assignment", "leg": trip.leg})
+    return trip
+
+
+@transaction.atomic
 def cancel_trip(trip, actor) -> Trip:
     """Annule UNE course (segment). La réservation reste active tant qu'un segment non
     annulé subsiste ; si tous les segments sont annulés, la réservation passe ANNULÉE."""
@@ -303,6 +387,14 @@ def cancel_trip(trip, actor) -> Trip:
     old_vehicle = trip.vehicle
     trip.status = TripStatus.CANCELLED
     trip.save(update_fields=["status", "updated_at"])
+    # Une course annulée doit SORTIR de sa tournée : sinon le chauffeur irait chercher un
+    # passager qui a annulé, ses places resteraient comptées dans la capacité, et la course
+    # resterait épinglée par l'unicité « une course dans une seule mission active ».
+    # Import local : `apps.trips` ne dépend pas de `apps.dispatch` au niveau module.
+    if trip.dispatch_group:
+        from apps.dispatch.services import detach_cancelled_trip
+
+        detach_cancelled_trip(trip, actor)
     _release_if_idle(old_vehicle, actor)
 
     res = trip.reservation

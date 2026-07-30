@@ -28,14 +28,14 @@ from apps.vehicles.models import Vehicle
 @pytest.fixture
 def ctx(db):
     company = Company.objects.create(name="Kaydan")
-    sub = Subsidiary.objects.create(company=company, name="Plateau", code="PLT")
-    fleet = User.objects.create_user(email="fleet@k.ci", password="x",
+    sub = Subsidiary.objects.create(company=company, name="Concurrence", code="CNC")
+    fleet = User.objects.create_user(email="fleet-cnc@k.ci", password="x",
                                      role=RoleChoices.FLEET_MANAGER, subsidiary=sub)
-    req = User.objects.create_user(email="req@k.ci", password="x",
+    req = User.objects.create_user(email="req-cnc@k.ci", password="x",
                                    role=RoleChoices.REQUESTER, subsidiary=sub)
-    vehicle = Vehicle.objects.create(subsidiary=sub, registration="AA-1-BC", brand="Toyota",
+    vehicle = Vehicle.objects.create(subsidiary=sub, registration="CNC-1", brand="Toyota",
                                      model="Yaris", status="available", capacity=5)
-    duser = User.objects.create_user(email="ch@k.ci", password="x", role=RoleChoices.DRIVER,
+    duser = User.objects.create_user(email="ch-cnc@k.ci", password="x", role=RoleChoices.DRIVER,
                                      subsidiary=sub, first_name="Ali", last_name="Koné")
     return dict(sub=sub, fleet=fleet, req=req, vehicle=vehicle, driver=duser.driver_profile)
 
@@ -181,7 +181,7 @@ def test_parallel_assign_same_driver_one_wins(ctx):
     t1, t2 = _trip(ctx, needs_driver=True), _trip(ctx, needs_driver=True)
     driver_id, fleet_id = ctx["driver"].pk, ctx["fleet"].pk
     # Véhicules distincts, pour isoler le conflit CHAUFFEUR de celui du véhicule.
-    v2 = Vehicle.objects.create(subsidiary=ctx["sub"], registration="BB-2-CD", brand="Renault",
+    v2 = Vehicle.objects.create(subsidiary=ctx["sub"], registration="CNC-2", brand="Renault",
                                 model="Duster", status="available", capacity=5)
     Trip.objects.filter(pk=t1.pk).update(vehicle=ctx["vehicle"])
     Trip.objects.filter(pk=t2.pk).update(vehicle=v2)

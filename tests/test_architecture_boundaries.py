@@ -34,6 +34,16 @@ WRITERS = (
 # Couche LECTURE / assistant : recommande, n'applique jamais.
 READ_ONLY_PACKAGES = ("kbot", "analytics")
 
+# Modules qui PERSISTENT sans muter l'état métier (`dispatch.suggest` crée des suggestions).
+# Ils n'ont pas leur place dans la couche lecture : K-BOT doit calculer une proposition à la
+# volée avec le cœur pur, pas en enregistrer une au détour d'une question.
+PERSISTING_MODULES = ("apps.dispatch.suggest",)
+
+# Modules de PROPOSITION : ils calculent des suggestions et ne doivent RIEN appliquer.
+# C'est la preuve structurelle qu'aucune suggestion ne peut s'auto-exécuter (§9) : le
+# module qui propose est incapable, par construction, d'appeler celui qui décide.
+PROPOSERS = ("dispatch/grouping.py", "dispatch/suggest.py", "dispatch/rules.py")
+
 # Noyaux pédagogiquement purs : calculent, sans connaître l'exécution des courses.
 PURE_ENGINES = {
     "fuelintel/engine.py": ("apps.trips", "apps.reservations", "apps.dispatch"),
@@ -96,3 +106,72 @@ def test_writers_are_the_only_mutation_path():
     des phases à venir), sinon la règle protégerait un module fantôme."""
     existing = [w for w in WRITERS if (APPS_DIR / Path(*w.split(".")[1:])).with_suffix(".py").exists()]
     assert "apps.trips.services" in existing and "apps.reservations.services" in existing
+
+
+@pytest.mark.parametrize("module", PROPOSERS)
+def test_proposers_cannot_apply_anything(module):
+    """§9 — « qui propose ne peut pas appliquer », garanti par construction.
+
+    Le moteur de suggestion ne doit pouvoir importer aucun écrivain : c'est ce qui rend
+    impossible l'auto-exécution d'une proposition, plutôt que de compter sur la discipline
+    des futurs contributeurs.
+    """
+    path = APPS_DIR / module
+    assert path.exists(), f"{module} introuvable — mettre à jour PROPOSERS"
+    violations = [m for m in _imported_modules(path) if m in WRITERS]
+    assert not violations, (
+        f"{module} propose et ne doit rien appliquer, or il importe : {violations}"
+    )
+
+
+#: Seul point d'entrée autorisé à appliquer une décision : la couche HTTP, c'est-à-dire une
+#: requête émise par un utilisateur habilité.
+DECISION_ENTRY_POINTS = {"dispatch/views.py"}
+
+
+def test_only_a_human_request_can_apply_a_suggestion():
+    """§9 — une suggestion ne s'applique que par un geste humain.
+
+    `dispatch.decisions` ne doit être appelé que depuis la couche HTTP. Qu'un service, une
+    tâche planifiée, un moteur ou l'assistant s'y mette, et une proposition pourrait être
+    appliquée sans que personne ne l'ait décidée — ce que le besoin interdit explicitement.
+    """
+    callers = {
+        str(path.relative_to(APPS_DIR))
+        for path in _python_files("dispatch", "trips", "reservations", "kbot", "analytics")
+        if "apps.dispatch.decisions" in _imported_modules(path)
+    }
+    unexpected = callers - DECISION_ENTRY_POINTS
+    assert not unexpected, (
+        "seule la couche HTTP peut appliquer une décision, or ces modules l'appellent : "
+        f"{sorted(unexpected)}"
+    )
+
+
+def test_no_scheduled_task_applies_a_decision():
+    """ADVERSARIAL — un ordonnanceur qui appliquerait les suggestions les mieux notées
+    supprimerait de fait la validation humaine, sans qu'aucun test fonctionnel ne le voie."""
+    tasks = [path for path in _python_files("dispatch", "trips", "analytics", "fuelintel",
+                                            "notifications", "vehicles")
+             if path.name == "tasks.py"]
+    offenders = [
+        str(path.relative_to(APPS_DIR)) for path in tasks
+        if {"apps.dispatch.decisions", "apps.dispatch.services"} & _imported_modules(path)
+    ]
+    assert not offenders, f"tâches planifiées appliquant du dispatching : {offenders}"
+
+
+@pytest.mark.parametrize("package", READ_ONLY_PACKAGES)
+def test_read_layer_never_persists(package):
+    """Répondre à une question ne doit rien enregistrer.
+
+    K-BOT calcule les regroupements possibles avec le cœur PUR ; importer le module qui
+    persiste les suggestions lui donnerait un pouvoir d'écriture déguisé.
+    """
+    violations = [
+        f"{path.relative_to(APPS_DIR)} importe {module}"
+        for path in _python_files(package)
+        for module in _imported_modules(path)
+        if module in PERSISTING_MODULES
+    ]
+    assert not violations, "la couche lecture ne doit rien persister :\n" + "\n".join(violations)

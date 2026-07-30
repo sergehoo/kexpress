@@ -130,22 +130,39 @@ def _overlaps(qs, reservation):
     ).exclude(pk=reservation.pk)
 
 
+def _exclude_same_tour(qs, reservation):
+    """Retire les réservations dont les courses partagent la TOURNÉE de `reservation`.
+
+    Sans cela, toute course regroupée devenait non-replanifiable : le covoiturage fait
+    partager un véhicule à plusieurs réservations simultanées, que ce contrôle prenait pour
+    un conflit. Miroir, au niveau réservation, de l'exception de tournée appliquée aux
+    courses et à la contrainte d'exclusion en base.
+    """
+    groups = [
+        group for group in reservation.trips.values_list("dispatch_group", flat=True) if group
+    ]
+    if not groups:
+        return qs
+    return qs.exclude(trips__dispatch_group__in=groups)
+
+
 def vehicle_conflicts(vehicle, reservation):
-    """Réservations actives en conflit horaire sur ce véhicule."""
+    """Réservations actives en conflit horaire sur ce véhicule (hors même tournée)."""
     from apps.reservations.models import Reservation
 
     qs = Reservation.objects.filter(
         vehicle=vehicle, status__in=ACTIVE_RESERVATION_STATUSES
     )
-    return _overlaps(qs, reservation)
+    return _overlaps(_exclude_same_tour(qs, reservation), reservation)
 
 
 def driver_conflicts(driver, reservation):
-    """Réservations actives en conflit horaire sur ce chauffeur."""
+    """Réservations actives en conflit horaire sur ce chauffeur (hors même tournée)."""
     from apps.reservations.models import Reservation
 
-    qs = Reservation.objects.filter(
-        driver=driver, status__in=ACTIVE_RESERVATION_STATUSES
+    qs = _exclude_same_tour(
+        Reservation.objects.filter(driver=driver, status__in=ACTIVE_RESERVATION_STATUSES),
+        reservation,
     )
     return _overlaps(qs, reservation)
 

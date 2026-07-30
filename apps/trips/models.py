@@ -2,6 +2,7 @@
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import RangeBoundary, RangeOperators
 from django.db import models
+from django.db.models.functions import Coalesce
 
 from apps.core.db import TsTzRange
 from apps.core.enums import IncidentSeverity, TripLeg, TripStatus
@@ -17,12 +18,18 @@ _OCCUPYING_STATUSES = [
 
 def _no_overlap(field: str) -> ExclusionConstraint:
     """Interdit AU NIVEAU BASE deux courses actives du même véhicule (ou chauffeur) dont les
-    fenêtres prévues se chevauchent.
+    fenêtres prévues se chevauchent — SAUF si elles relèvent de la même tournée.
 
     Filet de sécurité contre le double-booking : la vérification applicative
     (`trip_time_conflicts`) est un check-then-write, donc vulnérable au write-skew sous
     READ COMMITTED — deux transactions concurrentes peuvent la passer toutes les deux.
     Cette contrainte rend la collision impossible même si un chemin de code oublie le verrou.
+
+    L'exception de tournée est indispensable : une mission regroupée fait justement servir
+    plusieurs courses simultanées par un seul véhicule. Le discriminant est
+    `COALESCE(dispatch_group, id)` — une course sans mission forme son propre groupe (son
+    identifiant), donc deux courses isolées restent bien en conflit, tandis que deux courses
+    de la même mission partagent leur groupe et sont autorisées.
     """
     return ExclusionConstraint(
         name=f"excl_trip_{field}_overlap",
@@ -32,6 +39,7 @@ def _no_overlap(field: str) -> ExclusionConstraint:
                 TsTzRange("planned_departure_at", "planned_arrival_at", RangeBoundary()),
                 RangeOperators.OVERLAPS,
             ),
+            (Coalesce("dispatch_group", "id"), RangeOperators.NOT_EQUAL),
         ],
         condition=models.Q(
             status__in=_OCCUPYING_STATUSES,
@@ -107,6 +115,14 @@ class Trip(TenantScopedModel):
     # planning, à la détection de conflit par segment et à la détection de retard.
     planned_departure_at = models.DateTimeField("départ prévu", null=True, blank=True)
     planned_arrival_at = models.DateTimeField("arrivée prévue", null=True, blank=True)
+    # Groupe de courses partageant LÉGITIMEMENT un véhicule au même moment : l'identifiant
+    # de la mission regroupée, ou NULL quand la course voyage seule. Sans ce discriminant,
+    # la contrainte anti-double-booking interdirait le covoiturage, qui consiste justement à
+    # faire servir plusieurs courses simultanées par un seul véhicule.
+    # Maintenu par `apps.dispatch.services` ; `apps.trips` n'en dépend pas.
+    dispatch_group = models.UUIDField(
+        "groupe de dispatching", null=True, blank=True, db_index=True
+    )
 
     # Exécution réelle
     actual_departure = models.DateTimeField("départ réel", null=True, blank=True)
@@ -133,6 +149,17 @@ class Trip(TenantScopedModel):
             # sur deux courses actives qui se chevauchent (garantie atomique, cf. _no_overlap).
             _no_overlap("vehicle"),
             _no_overlap("driver"),
+            # Une fenêtre inversée ferait trier une dépose AVANT sa prise en charge, rendant
+            # l'occupation négative et la capacité sous-comptée (10 personnes acceptées dans
+            # un véhicule de 8). Refusé en base, quel que soit le chemin d'écriture.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(planned_departure_at__isnull=True)
+                    | models.Q(planned_arrival_at__isnull=True)
+                    | models.Q(planned_departure_at__lte=models.F("planned_arrival_at"))
+                ),
+                name="ck_trip_planned_window_ordered",
+            ),
         ]
 
     def __str__(self):

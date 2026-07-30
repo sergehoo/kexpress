@@ -28,11 +28,16 @@ def recalibrate_fuel_model() -> dict:
     """
     from apps.fuelintel.engine import BASE_RATE_BY_FUEL
     from apps.fuelintel.models import FuelConsumptionProfile
+    from apps.fuelintel.units import LITER
     from apps.trips.models import Trip
 
+    # Les véhicules ÉLECTRIQUES sont exclus : leur consommation s'exprime en kWh et
+    # n'a rien à faire dans un profil en litres — les mélanger corromprait les profils
+    # agrégés (flotte, filiale, type). L'apprentissage électrique viendra avec le relevé
+    # des recharges réelles (section Électricité).
     trips = Trip.objects.filter(
         distance_km__isnull=False, fuel_consumed__isnull=False, distance_km__gt=0,
-    ).select_related("vehicle", "driver", "subsidiary")
+    ).exclude(vehicle__fuel_type="electric").select_related("vehicle", "driver", "subsidiary")
 
     # Agrégats par niveau : {(scope, ref): [km, litres, n, label, prior]}
     agg: dict[tuple, list] = defaultdict(lambda: [Decimal("0"), Decimal("0"), 0, "", None])
@@ -57,8 +62,10 @@ def recalibrate_fuel_model() -> dict:
     for (scope, ref), (km, liters, n, label, prior) in agg.items():
         prior = prior or Decimal("8.0")
         rate = ((liters + prior * PRIOR_KM / 100) / (km + PRIOR_KM) * 100).quantize(Decimal("0.01"))
+        # `unit` fait partie de la clé d'unicité : l'omettre exposerait à retrouver
+        # plusieurs lignes (thermique + électrique) pour un même (niveau, référence).
         FuelConsumptionProfile.objects.update_or_create(
-            scope=scope, ref=str(ref),
+            scope=scope, ref=str(ref), unit=LITER,
             defaults={"label": label[:255], "rate_l_per_100km": rate,
                       "samples": n, "total_km": km, "total_liters": liters},
         )

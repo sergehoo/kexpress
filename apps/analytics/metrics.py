@@ -146,6 +146,39 @@ def _mission_seconds(row: dict) -> float:
     return 0.0
 
 
+def mutualisation_stats(trips_qs, *, start_dt, end_dt) -> dict:
+    """Taux de mutualisation (§10) : part des courses réalisées au sein d'une tournée regroupée.
+
+    Une tournée d'UNE seule course n'est pas de la mutualisation : seuls comptent les
+    regroupements effectifs (au moins deux courses partageant le véhicule). Sans cette
+    nuance, créer une mission par course afficherait 100 % de mutualisation sans qu'aucun
+    kilomètre n'ait été partagé.
+    """
+    from django.db.models import Count
+
+    rows = trips_qs.filter(
+        actual_departure__gte=start_dt, actual_departure__lte=end_dt,
+    ).values("dispatch_group")
+    total = rows.count()
+    if not total:
+        return {"trips": 0, "grouped_trips": 0, "missions": 0, "rate": None,
+                "trips_per_mission": None}
+
+    grouped = (
+        rows.exclude(dispatch_group__isnull=True)
+        .values("dispatch_group").annotate(n=Count("id")).filter(n__gte=2)
+    )
+    groups = list(grouped)
+    grouped_trips = sum(row["n"] for row in groups)
+    return {
+        "trips": total,
+        "grouped_trips": grouped_trips,
+        "missions": len(groups),
+        "rate": ratio(grouped_trips, total),
+        "trips_per_mission": round(grouped_trips / len(groups), 2) if groups else None,
+    }
+
+
 def period_bounds(start_date, end_date):
     """Bornes datetime (avec fuseau) d'une période de dates.
 
@@ -233,6 +266,7 @@ def fleet_occupancy(user, params) -> dict:
     per_vehicle = metrics_by_vehicle(
         data["trips"], start_dt=start_dt, end_dt=end_dt, capacities=capacities,
     )
+    mutualisation = mutualisation_stats(data["trips"], start_dt=start_dt, end_dt=end_dt)
 
     results, total_km, loaded_km = [], 0.0, 0.0
     for vehicle in vehicles:
@@ -253,6 +287,7 @@ def fleet_occupancy(user, params) -> dict:
 
     results.sort(key=lambda r: (r["empty_rate"] is None, -(r["empty_rate"] or 0)))
     return {
+        "mutualisation": mutualisation,
         "period": label,
         "start": start_date.isoformat(),
         "end": end_date.isoformat(),
