@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       setMe(null);
       const code = ((err as AxiosError)?.response?.data as { code?: string } | undefined)?.code;
-      if (code === "device_verification_required") {
+      if (code === "device_verification_required" || code === "mfa_email_otp_required") {
         // Session SSO valable, appareil à vérifier : on reste « en chargement » pour que les
         // pages protégées ne renvoient pas vers /login pendant la redirection vers /auth/device.
         setPending("device");

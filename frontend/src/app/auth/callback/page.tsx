@@ -40,7 +40,10 @@ export default function AuthCallbackPage() {
         await api.get<Me>("/auth/me/");
       } catch (err) {
         const code = ((err as AxiosError)?.response?.data as { code?: string } | undefined)?.code;
-        if (code === "device_verification_required") { router.replace("/auth/device"); return; }
+        if (code === "device_verification_required" || code === "mfa_email_otp_required") {
+          router.replace("/auth/device");
+          return;
+        }
         if (code === "mfa_required") { router.replace("/login?reason=mfa"); return; }
         if (code === "account_not_activated") {
           tokens.clear();
