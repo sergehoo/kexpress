@@ -236,6 +236,11 @@ def check_mission_feasible(mission, *, extra_trip=None):
         )
 
     window = _window_for(specs) if specs else (mission.planned_departure_at, mission.planned_arrival_at)
+    from apps.carplan.selectors import pool_block_reason
+
+    blocked = pool_block_reason(mission.vehicle, *window)  # Car Plan : hors flotte sauf mise à disposition
+    if blocked:
+        raise WorkflowError(blocked)
     _check_resource_free(mission, window, field="vehicle")
     if mission.driver_id:
         _check_resource_free(mission, window, field="driver")

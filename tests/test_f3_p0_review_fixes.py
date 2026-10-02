@@ -291,13 +291,13 @@ def test_a_fully_closed_year_freezes_annual_lines(sub_a, fin_a, company_admin):
     budget = create_budget(actor=fin_a, year=2025, name="2025", subsidiary=sub_a)
     annual = add_line(budget, actor=fin_a, amount="1200", category="toll")
     approve(budget, actor=company_admin)
-    revise_line(annual, actor=fin_a, amount="1300", reason="Avant clôture")
+    revise_line(annual, actor=fin_a, amount="1100", reason="Avant clôture")  # baisse : au gestionnaire
     for month in range(1, 13):
         close_period(2025, month, company_admin)
     with pytest.raises(BudgetError, match="entièrement clos"):
-        revise_line(annual, actor=fin_a, amount="1400", reason="Après coup")
+        revise_line(annual, actor=fin_a, amount="1000", reason="Après coup")
     with pytest.raises(BudgetError, match="entièrement clos"):
-        add_line(budget, actor=fin_a, amount="10", category="parking", reason="Après coup")
+        add_line(budget, actor=company_admin, amount="10", category="parking", reason="Après coup")
 
 
 def test_an_archived_budget_never_changes(api, sub_a, fin_a, company_admin):
@@ -370,6 +370,11 @@ def test_a_subsidiary_with_data_is_never_deleted(api, company, company_admin):
     finance.refresh_from_db()
     assert finance.subsidiary_id == full.pk and not finance.is_group_finance
     assert api.delete(f"/api/subsidiaries/{empty.pk}/").status_code == 204
+    # Une filiale sans compte mais avec un parc : ses véhicules partiraient en cascade.
+    fleet_only = Subsidiary.objects.create(company=company, name="Parc seul", code="PSL")
+    vehicle = Vehicle.objects.create(subsidiary=fleet_only, registration="PSL-1", brand="Toyota", model="Hilux")
+    assert api.delete(f"/api/subsidiaries/{fleet_only.pk}/").status_code == 400
+    assert Vehicle.objects.filter(pk=vehicle.pk).exists()
 
 
 # =====================================================================================
@@ -398,21 +403,101 @@ def test_demote_with_password_is_refused_on_a_stronger_account(api, admin_a, fin
     assert fin_a.role == RoleChoices.FINANCE and not fin_a.check_password(STRONG)
 
 
-def test_promotion_beyond_the_ceiling_resets_credentials(api, admin_a, requester_a, mailoutbox,
-                                                         django_capture_on_commit_callbacks):
-    old_token = _bearer(requester_a)
+def test_nobody_grants_rights_they_do_not_hold(api, admin_a, company_admin, requester_a):
+    """Créer ou promouvoir un compte au-delà de son plafond : 403 (son adresse est choisie par
+    l'administrateur — l'invitation ne protégerait rien)."""
+    api.force_authenticate(admin_a)
+    assert api.patch(f"/api/employees/{requester_a.pk}/", {"role": "finance"}, format="json").status_code == 403
+    assert api.post("/api/employees/", {"email": "alias@evil.io", "first_name": "A", "last_name": "B",
+                                        "role": "finance"}, format="json").status_code == 403
+    api.force_authenticate(company_admin)  # pas de droit de paiement : pas de compte Finance non plus
+    assert api.patch(f"/api/employees/{requester_a.pk}/", {"role": "finance"}, format="json").status_code == 403
+    assert User.objects.get(pk=requester_a.pk).role == RoleChoices.REQUESTER
+    assert not User.objects.filter(email="alias@evil.io").exists()
+
+
+def test_promotion_of_an_account_whose_password_an_admin_chose_resets_credentials(
+        api, admin_a, requester_a, mailoutbox, django_capture_on_commit_callbacks):
+    root = User.objects.create_user("root-rvf@test.io", "Racine-Solide-91", role=RoleChoices.SUPER_ADMIN)
     api.force_authenticate(admin_a)
     assert api.post(f"/api/employees/{requester_a.pk}/set-password/", {"password": STRONG},
                     format="json").status_code == 200
+    User.objects.filter(pk=requester_a.pk).update(sessions_revoked_at=None)
+    old_token = _bearer(requester_a)  # session ouverte avec le mot de passe connu de admin_a
+    api.force_authenticate(root)
     with django_capture_on_commit_callbacks(execute=True):
         response = api.patch(f"/api/employees/{requester_a.pk}/", {"role": "finance"}, format="json")
     assert response.status_code == 200, response.content
     user = User.objects.get(pk=requester_a.pk)
     assert user.role == RoleChoices.FINANCE
     assert not user.has_usable_password() and not user.check_password(STRONG)
+    assert user.password_admin_set_at is None
     assert [m.to for m in mailoutbox][-1] == [user.email]
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {old_token}")
+    assert client.get("/api/auth/me/").status_code == 401
+
+
+def test_a_promotion_keeps_a_password_the_holder_chose(api, requester_a):
+    root = User.objects.create_user("root2-rvf@test.io", "Racine-Solide-91", role=RoleChoices.SUPER_ADMIN)
+    requester_a.set_password(STRONG)
+    requester_a.save()
+    api.force_authenticate(root)
+    assert api.patch(f"/api/employees/{requester_a.pk}/", {"role": "finance"}, format="json").status_code == 200
+    assert User.objects.get(pk=requester_a.pk).check_password(STRONG)
+
+
+def test_admin_routes_never_change_ones_own_password_or_activation(api, admin_a):
+    api.force_authenticate(admin_a)
+    for method, url, body in (("post", f"/api/employees/{admin_a.pk}/set-password/", {"password": STRONG}),
+                              ("post", f"/api/employees/{admin_a.pk}/reset-password/", {}),
+                              ("patch", f"/api/employees/{admin_a.pk}/", {"password": STRONG}),
+                              ("patch", f"/api/employees/{admin_a.pk}/", {"is_active": False})):
+        assert getattr(api, method)(url, body, format="json").status_code == 403, (method, url, body)
+    admin_a.refresh_from_db()
+    assert admin_a.is_active and not admin_a.check_password(STRONG)
+
+
+def test_blocked_account_keeps_its_nominative_rights_in_the_ceiling(api, admin_a, fleet_a):
+    group = Group.objects.create(name="payeurs-rvf")
+    group.permissions.add(Permission.objects.get(content_type__app_label="finance", codename=perms.PAY_EXPENSE))
+    fleet_a.groups.add(group)
+    api.force_authenticate(admin_a)
+    assert api.post(f"/api/employees/{fleet_a.pk}/block/").status_code == 200
+    assert api.post(f"/api/employees/{fleet_a.pk}/set-password/", {"password": STRONG},
+                    format="json").status_code == 403
+
+
+def test_a_staff_account_is_above_a_subsidiary_admin(api, admin_a, fleet_a):
+    fleet_a.is_staff = True
+    fleet_a.save()
+    api.force_authenticate(admin_a)
+    assert api.post(f"/api/employees/{fleet_a.pk}/set-password/", {"password": STRONG},
+                    format="json").status_code == 403
+
+
+def test_every_deactivation_path_revokes_sessions(api, admin_a, fleet_a, requester_a):
+    for target, method, url, body in ((fleet_a, "patch", f"/api/employees/{fleet_a.pk}/", {"is_active": False}),
+                                      (requester_a, "delete", f"/api/employees/{requester_a.pk}/", None)):
+        User.objects.filter(pk=target.pk).update(sessions_revoked_at=None)
+        token = _bearer(target)
+        api.force_authenticate(admin_a)
+        response = api.patch(url, body, format="json") if method == "patch" else api.delete(url)
+        assert response.status_code in (200, 204), response.content
+        User.objects.filter(pk=target.pk).update(is_active=True)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+        assert client.get("/api/auth/me/").status_code == 401, method
+
+
+def test_password_changed_outside_the_api_revokes_sessions(fleet_a):
+    User.objects.filter(pk=fleet_a.pk).update(sessions_revoked_at=None)
+    token = _bearer(fleet_a)
+    user = User.objects.get(pk=fleet_a.pk)
+    user.set_password("Change-Hors-API-77")  # admin Django, manage.py changepassword, shell
+    user.save()
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
     assert client.get("/api/auth/me/").status_code == 401
 
 
@@ -456,6 +541,7 @@ def test_password_set_by_admin_revokes_tokens(admin_a, fleet_a):
 def test_own_password_change_keeps_this_session_and_cuts_the_others(requester_a):
     requester_a.set_password(STRONG)
     requester_a.save()
+    User.objects.filter(pk=requester_a.pk).update(sessions_revoked_at=None)  # préparation du test
     other_device = _bearer(requester_a)
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {_bearer(requester_a)}")
@@ -475,15 +561,17 @@ def test_blocking_revokes_tokens_links_and_websocket(api, admin_a, fleet_a):
 
     fleet_a.set_unusable_password()
     fleet_a.save()
+    User.objects.filter(pk=fleet_a.pk).update(sessions_revoked_at=None)  # préparation du test
+    fleet_a.refresh_from_db()
     link = invitation_link(fleet_a)
     uid, token = re.search(r"uid=([^&]+)&token=([^&\s]+)", link).groups()
     access = _bearer(fleet_a)
-    assert _get_user.func(access).pk == fleet_a.pk  # contrôle positif
+    assert _get_user.func(access, {}).pk == fleet_a.pk  # contrôle positif
     api.force_authenticate(admin_a)
     assert api.post(f"/api/employees/{fleet_a.pk}/block/").status_code == 200
     assert api.post(f"/api/employees/{fleet_a.pk}/unblock/").status_code == 200
     assert APIClient().get("/api/auth/password-setup/", {"uid": uid, "token": token}).status_code == 400
-    assert not getattr(_get_user.func(access), "pk", None)
+    assert not getattr(_get_user.func(access, {}), "pk", None)
 
 
 def test_a_new_invitation_voids_the_previous_links(api, admin_a, fleet_a, mailoutbox):

@@ -81,9 +81,10 @@ def reference_capacity(user) -> int:
     from apps.core.enums import VehicleStatus
     from apps.vehicles.models import Vehicle
 
+    from apps.carplan.selectors import pool_vehicles
+
     best = (
-        Vehicle.objects.for_user(user)
-        .filter(status=VehicleStatus.AVAILABLE)
+        pool_vehicles(Vehicle.objects.for_user(user).filter(status=VehicleStatus.AVAILABLE))
         .order_by("-capacity")
         .values_list("capacity", flat=True)
         .first()

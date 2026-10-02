@@ -74,6 +74,10 @@ LOCAL_APPS = [
     "apps.dispatch",
     # Finance & coûts : barème kilométrique historisé, instantanés financiers des courses.
     "apps.finance",
+    # Car Plan : véhicules de fonction et de service attribués (sur les véhicules existants).
+    "apps.carplan",
+    # Kaydan Shield : référentiel RH (employés, filiales) — source de vérité RH.
+    "apps.shield",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -186,6 +190,7 @@ ENERGY_ALLOCATION_RULE = env("ENERGY_ALLOCATION_RULE", default="passenger_distan
 # chauffeur) ne puisse pas être contourné par un groupe accordé via ModelBackend.
 AUTHENTICATION_BACKENDS = [
     "apps.finance.permissions.RoleFinancePermissionBackend",
+    "apps.carplan.permissions.RoleCarPlanPermissionBackend",
     "django.contrib.auth.backends.ModelBackend",
 ]
 # Barèmes kilométriques par filiale / type de véhicule. Désactivés tant qu'ils ne sont pas
@@ -259,8 +264,13 @@ REST_FRAMEWORK = {
         "kbot": env("KBOT_THROTTLE_RATE", default="30/min"),
         # Définition du mot de passe depuis une invitation (route publique) : anti-force brute.
         "password_setup": env("PASSWORD_SETUP_THROTTLE_RATE", default="20/hour"),
-        # Connexion locale par mot de passe : anti-devinette en ligne.
-        "login": env("LOGIN_THROTTLE_RATE", default="10/min"),
+        # Connexion locale par mot de passe : anti-devinette en ligne — par adresse (large : un
+        # bureau entier peut sortir par la même IP) et par compte visé.
+        "login": env("LOGIN_THROTTLE_RATE", default="30/min"),
+        "login_email": env("LOGIN_EMAIL_THROTTLE_RATE", default="10/min"),
+        # Activation (email → OTP) et vérification d'OTP : routes publiques, anti-énumération.
+        "activation": env("ACTIVATION_THROTTLE_RATE", default="10/hour"),
+        "otp_verify": env("OTP_VERIFY_THROTTLE_RATE", default="20/hour"),
     },
     # Adresse du client pour la limitation de débit : `REMOTE_ADDR` par défaut (0) — l'en-tête
     # X-Forwarded-For, que le client écrit lui-même, n'est lu que derrière un proxy déclaré.
@@ -286,6 +296,8 @@ SPECTACULAR_SETTINGS = {
 
 # --- CORS -----------------------------------------------------------------
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
+# Cookie HttpOnly de rafraîchissement : le navigateur l'envoie aux seules origines autorisées.
+CORS_ALLOW_CREDENTIALS = True
 
 # --- Web Push (VAPID) ------------------------------------------------------
 VAPID_PUBLIC_KEY = env("VAPID_PUBLIC_KEY", default="")
@@ -351,6 +363,48 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@kaydan-express.c
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
 INVITATION_TIMEOUT_HOURS = env.int("INVITATION_TIMEOUT_HOURS", default=72)
 PASSWORD_RESET_TIMEOUT = INVITATION_TIMEOUT_HOURS * 3600
+
+# --- Kaydan Shield (référentiel RH : employés, filiales) -----------------------------
+# Source de vérité RH. Compte de SERVICE Shield en lecture seule (employés, filiales,
+# départements) ; authentification JWT serveur-à-serveur (`/api/v1/auth/login/`).
+SHIELD_ENABLED = env.bool("SHIELD_ENABLED", default=False)
+SHIELD_BASE_URL = env("SHIELD_BASE_URL", default="https://api.kaydanshield.com").rstrip("/")
+SHIELD_USERNAME = env("SHIELD_USERNAME", default="")
+SHIELD_PASSWORD = env("SHIELD_PASSWORD", default="")
+#: Nom du champ identifiant attendu par `/api/v1/auth/login/` (non documenté dans le schéma).
+SHIELD_LOGIN_ID_FIELD = env("SHIELD_LOGIN_ID_FIELD", default="email")
+#: Tenant Shield à synchroniser (filtre `tenant`), vide = celui du compte de service.
+SHIELD_TENANT_ID = env("SHIELD_TENANT_ID", default="")
+SHIELD_TIMEOUT_SECONDS = env.int("SHIELD_TIMEOUT_SECONDS", default=20)
+SHIELD_PAGE_SIZE = env.int("SHIELD_PAGE_SIZE", default=200)
+SHIELD_VERIFY_TLS = env.bool("SHIELD_VERIFY_TLS", default=True)
+#: Statuts RH qui ouvrent un accès K-Express (active, on_leave, suspended, terminated).
+SHIELD_ELIGIBLE_STATUSES = env.list("SHIELD_ELIGIBLE_STATUSES", default=["active"])
+#: Au-delà, les données RH sont jugées périmées : aucune NOUVELLE activation (Shield absent
+#: ne doit jamais ouvrir de compte non vérifié).
+SHIELD_MAX_STALENESS_HOURS = env.int("SHIELD_MAX_STALENESS_HOURS", default=26)
+
+# --- Activation des comptes, OTP par email, appareils reconnus, sessions -----------------
+AUTH_OTP_TTL_SECONDS = env.int("AUTH_OTP_TTL_SECONDS", default=600)
+AUTH_OTP_MAX_ATTEMPTS = env.int("AUTH_OTP_MAX_ATTEMPTS", default=5)
+AUTH_OTP_RESEND_COOLDOWN_SECONDS = env.int("AUTH_OTP_RESEND_COOLDOWN_SECONDS", default=60)
+#: Vérification par OTP d'un appareil INCONNU après le mot de passe.
+AUTH_DEVICE_VERIFICATION = env.bool("AUTH_DEVICE_VERIFICATION", default=True)
+AUTH_DEVICE_TRUST_DAYS = env.int("AUTH_DEVICE_TRUST_DAYS", default=30)
+#: Rôles à MFA RENFORCÉE : OTP (ou MFA SSO) à chaque connexion, appareil reconnu ou non.
+AUTH_MFA_ROLES = env.list("AUTH_MFA_ROLES", default=["super_admin", "company_admin", "subsidiary_admin",
+                                                     "finance", "auditor"])
+#: Durées maximales de session : sans « Rester connecté » / avec (jamais de session permanente).
+AUTH_SESSION_HOURS = env.int("AUTH_SESSION_HOURS", default=12)
+AUTH_REMEMBER_ME_DAYS = env.int("AUTH_REMEMBER_ME_DAYS", default=14)
+AUTH_REFRESH_COOKIE = env("AUTH_REFRESH_COOKIE", default="kx_refresh")
+AUTH_DEVICE_COOKIE = env("AUTH_DEVICE_COOKIE", default="kx_device")
+AUTH_COOKIE_SECURE = env.bool("AUTH_COOKIE_SECURE", default=not DEBUG)
+AUTH_COOKIE_SAMESITE = env("AUTH_COOKIE_SAMESITE", default="Lax")
+AUTH_COOKIE_DOMAIN = env("AUTH_COOKIE_DOMAIN", default=None)
+#: Mode SSO : preuve de MFA attendue dans le jeton Keycloak pour les rôles à MFA renforcée.
+OIDC_MFA_AMR_VALUES = env.list("OIDC_MFA_AMR_VALUES", default=["otp", "mfa", "webauthn"])
+OIDC_MFA_ACR_VALUES = env.list("OIDC_MFA_ACR_VALUES", default=["gold", "mfa", "2"])
 
 # Seuils de rappel révision en %% de l'intervalle du véhicule (admin/env)
 REVISION_ALERT_PCTS = env("REVISION_ALERT_PCTS", default="20,10,5")

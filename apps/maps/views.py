@@ -205,8 +205,11 @@ class NearbyVehiclesView(APIView):
 
         from apps.maps.proximity import rank_by_eta
 
+        from apps.carplan.selectors import pool_vehicles
+
+        # Un véhicule Car Plan n'est ni proposé ni localisé ici (flotte mutualisée seule).
         vehicles = (
-            scoped(request.user)["vehicles"]
+            pool_vehicles(scoped(request.user)["vehicles"])
             .filter(status="available", last_location__isnull=False)
             .select_related("subsidiary", "last_location")
         )

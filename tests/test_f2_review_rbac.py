@@ -305,10 +305,14 @@ def test_c1_creating_a_stronger_account_gives_no_known_password(api, sub_a, admi
     """Revue F2 — C1, durci par P0 (F3) : un compte naît SANS mot de passe utilisable, pour
     tous les créateurs (super admin compris) ; choisir un mot de passe à la création est
     refusé et rien n'est créé. Le titulaire reçoit seul son lien d'invitation : la réponse
-    ne le contient pas."""
-    for actor, email, role in ((company_admin, "fin-ca-rev@test.io", RoleChoices.FINANCE),
-                               (admin_a, "fin-sa-rev@test.io", RoleChoices.FINANCE),
-                               (admin_a, "fleet-new-rev@test.io", RoleChoices.FLEET_MANAGER),
+    ne le contient pas. Revue F3 + P0 : on ne CRÉE pas un compte plus puissant que soi (son
+    adresse est choisie par le créateur) — un compte Finance (qui paie) revient au super
+    administrateur ; l'admin entreprise et l'admin de filiale reçoivent 403, rien n'est créé."""
+    for actor, email in ((company_admin, "fin-ca-rev@test.io"), (admin_a, "fin-sa-rev@test.io")):
+        response = _new_user(api, actor, email, RoleChoices.FINANCE, subsidiary=sub_a)
+        assert response.status_code == 403, response.content
+        assert not User.objects.filter(email=email).exists()
+    for actor, email, role in ((admin_a, "fleet-new-rev@test.io", RoleChoices.FLEET_MANAGER),
                                (super_admin, "fin-sup-rev@test.io", RoleChoices.FINANCE)):
         mailoutbox.clear()
         with django_capture_on_commit_callbacks(execute=True):  # l'invitation part après commit
@@ -336,6 +340,7 @@ _ADMIN_MODELS = {
     "maintenance": "maintenancerecord",
     "vehicles": "vehicle",
     "fuelintel": "fuelprice",
+    "carplan": "carplanassignment",
 }
 
 

@@ -29,33 +29,56 @@ export const API_BASE = normalizeApiBase(
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8009/api",
 );
 
-const ACCESS_KEY = "kx_access";
-const REFRESH_KEY = "kx_refresh";
+/**
+ * Jetons de session — sécurité :
+ * - le jeton d'ACCÈS (courte durée) vit en MÉMOIRE uniquement (variable du module) : jamais
+ *   dans localStorage/sessionStorage, donc hors de portée d'un script injecté qui lirait le
+ *   stockage, et perdu à la fermeture de l'onglet ;
+ * - le jeton de RAFRAÎCHISSEMENT n'est jamais lisible par JavaScript : cookie HttpOnly posé par
+ *   l'API (`/api/auth/refresh/` le lit) ; au chargement, la session est restaurée par lui ;
+ * - le service worker reçoit une copie du seul jeton d'accès (IndexedDB) pour vider les files
+ *   hors ligne (Background Sync) ; elle est effacée à la déconnexion.
+ * Les anciennes clés `kx_access` / `kx_refresh` (localStorage) sont purgées une fois.
+ */
+let accessToken: string | null = null;
+
+const LEGACY_KEYS = ["kx_access", "kx_refresh"];
+if (typeof window !== "undefined") {
+  try {
+    LEGACY_KEYS.forEach((k) => window.localStorage.removeItem(k));
+  } catch {
+    /* stockage indisponible : rien à purger */
+  }
+}
 
 export const tokens = {
   get access() {
-    return typeof window === "undefined" ? null : localStorage.getItem(ACCESS_KEY);
+    return accessToken;
   },
-  get refresh() {
-    return typeof window === "undefined" ? null : localStorage.getItem(REFRESH_KEY);
-  },
-  set(access: string, refresh?: string) {
-    localStorage.setItem(ACCESS_KEY, access);
-    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
-    // Miroir vers IndexedDB pour le service worker (Background Sync authentifié).
+  /** Le second argument est ignoré (compatibilité) : le rafraîchissement est un cookie HttpOnly. */
+  set(access: string, _refresh?: string) {
+    void _refresh;
+    accessToken = access;
     void saveSyncMeta(access, API_BASE);
   },
   clear() {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    accessToken = null;
     void saveSyncMeta(null, API_BASE);
   },
 };
 
 /** Émis quand la session expire et que le refresh échoue. */
 export const SESSION_EXPIRED_EVENT = "kx:session-expired";
+/** Mode SSO : l'API exige la vérification de cet appareil (code par email). */
+export const DEVICE_VERIFICATION_EVENT = "kx:device-verification-required";
+/** Mode SSO : le rôle exige une authentification renforcée (MFA Keycloak). */
+export const MFA_REQUIRED_EVENT = "kx:mfa-required";
 
-export const api = axios.create({ baseURL: API_BASE });
+/** En-tête anti-CSRF exigé par les routes authentifiées par cookie (refresh, logout). */
+const XHR_HEADER = { "X-Requested-With": "XMLHttpRequest" };
+
+// `withCredentials` : cookies HttpOnly (rafraîchissement, appareil reconnu) envoyés à l'API.
+export const api = axios.create({ baseURL: API_BASE, withCredentials: true, headers: XHR_HEADER });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const t = tokens.access;
@@ -65,25 +88,50 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 let refreshing: Promise<string | null> | null = null;
 
+/** Rafraîchissement par le cookie HttpOnly (session locale) ; null si aucune session. */
+async function cookieRefresh(): Promise<string | null> {
+  try {
+    const { data } = await axios.post<{ access: string }>(`${API_BASE}/auth/refresh/`, {}, {
+      withCredentials: true,
+      headers: XHR_HEADER,
+    });
+    if (data?.access) {
+      tokens.set(data.access);
+      return data.access;
+    }
+  } catch {
+    /* pas de session (cookie absent, expiré ou révoqué) */
+  }
+  return null;
+}
+
 async function refreshAccess(): Promise<string | null> {
-  // SSO Keycloak : renouvellement silencieux (refresh token géré par oidc-client-ts).
+  // SSO Keycloak : renouvellement silencieux (oidc-client-ts, jetons en mémoire).
   if (OIDC_ENABLED) {
     const t = await oidcSilentRenew();
     if (t) {
       tokens.set(t);
       return t;
     }
-    // pas de session OIDC → on tente le repli SimpleJWT (accès de secours).
+    // pas de session OIDC → repli sur la session locale (accès de secours).
   }
-  const refresh = tokens.refresh;
-  if (!refresh) return null;
+  return cookieRefresh();
+}
+
+/** Restaure la session au démarrage (le jeton d'accès n'a pas survécu au rechargement). */
+export async function restoreSession(): Promise<string | null> {
+  if (tokens.access) return tokens.access;
+  refreshing = refreshing ?? cookieRefresh();
   try {
-    const { data } = await axios.post(`${API_BASE}/auth/refresh/`, { refresh });
-    tokens.set(data.access, data.refresh);
-    return data.access as string;
-  } catch {
-    return null;
+    return await refreshing;
+  } finally {
+    refreshing = null;
   }
+}
+
+function errorCode(error: AxiosError): string | undefined {
+  const data = error.response?.data as { code?: unknown } | undefined;
+  return typeof data?.code === "string" ? data.code : undefined;
 }
 
 api.interceptors.response.use(
@@ -91,7 +139,24 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const original = error.config as InternalAxiosRequestConfig & { _retried?: boolean };
     const status = error.response?.status;
-    const isAuthCall = original?.url?.includes("/auth/");
+    const code = errorCode(error);
+    // Mode SSO : jeton valide mais appareil à vérifier / MFA exigée — un rafraîchissement n'y
+    // changerait rien, l'interface prend le relais.
+    if (status === 401 && code === "device_verification_required") {
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(DEVICE_VERIFICATION_EVENT));
+      return Promise.reject(error);
+    }
+    if (status === 401 && code === "mfa_required") {
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(MFA_REQUIRED_EVENT));
+      return Promise.reject(error);
+    }
+    if (status === 401 && code === "account_not_activated") return Promise.reject(error);
+    // Appels qui ÉTABLISSENT la session (connexion, OTP, rafraîchissement, activation,
+    // invitation, déconnexion) : jamais rejoués. `/auth/me/` et `/auth/change-password/`, eux,
+    // profitent du rafraîchissement.
+    const isAuthCall = /\/auth\/(token|refresh|verify|password-setup|activation|logout|device)\b/.test(
+      original?.url ?? "",
+    );
 
     if (status === 401 && original && !original._retried && !isAuthCall) {
       original._retried = true;
@@ -111,10 +176,142 @@ api.interceptors.response.use(
   },
 );
 
-export async function login(email: string, password: string) {
-  const { data } = await axios.post(`${API_BASE}/auth/token/`, { email, password });
-  tokens.set(data.access, data.refresh);
+// --- Connexion locale : mot de passe puis, si demandé, code reçu par email -----------------------
+
+export interface OtpChallenge {
+  otp_required: true;
+  challenge: string;
+  detail: string;
+  email_hint: string;
+  /** Rôle à MFA renforcée : un code sera demandé à chaque connexion. */
+  mfa: boolean;
+  expires_in: number;
+}
+
+export interface SessionOpened {
+  access: string;
+  session_expires_at: number;
+  detail?: string;
+}
+
+export type LoginStep = ({ kind: "session" } & SessionOpened) | ({ kind: "otp" } & OtpChallenge);
+
+export async function login(email: string, password: string, rememberMe = false): Promise<LoginStep> {
+  const { data, status } = await api.post<SessionOpened | OtpChallenge>("/auth/token/", {
+    email,
+    password,
+    remember_me: rememberMe,
+  });
+  if (status === 202 && (data as OtpChallenge).otp_required) {
+    return { kind: "otp", ...(data as OtpChallenge) };
+  }
+  tokens.set((data as SessionOpened).access);
+  return { kind: "session", ...(data as SessionOpened) };
+}
+
+export async function verifyLoginOtp(challenge: string, code: string, trustDevice: boolean): Promise<SessionOpened> {
+  const { data } = await api.post<SessionOpened>("/auth/token/otp/", {
+    challenge,
+    code,
+    trust_device: trustDevice,
+  });
+  tokens.set(data.access);
   return data;
+}
+
+export async function resendLoginOtp(challenge: string): Promise<void> {
+  await api.post("/auth/token/otp/resend/", { challenge });
+}
+
+/** Déconnexion côté serveur (cookies effacés) ; `all` : tous les appareils. */
+export async function serverLogout(all = false): Promise<void> {
+  try {
+    await api.post("/auth/logout/", { all });
+  } catch {
+    /* déjà déconnecté côté serveur */
+  } finally {
+    tokens.clear();
+  }
+}
+
+// --- Activation (première connexion) ------------------------------------------------------------
+
+export async function activationStart(email: string): Promise<string> {
+  const { data } = await api.post<{ detail: string }>("/auth/activation/start/", { email });
+  return data.detail;
+}
+
+export async function activationVerify(email: string, code: string): Promise<string> {
+  const { data } = await api.post<{ ticket: string }>("/auth/activation/verify/", { email, code });
+  return data.ticket;
+}
+
+export type ActivationResult =
+  | { sso: true; login_hint: string; detail: string }
+  | ({ sso?: false } & SessionOpened);
+
+export async function activationComplete(ticket: string, password: string, rememberMe: boolean): Promise<ActivationResult> {
+  const { data } = await api.post<ActivationResult>("/auth/activation/complete/", {
+    ticket,
+    password,
+    remember_me: rememberMe,
+  });
+  if (!("sso" in data && data.sso) && "access" in data) tokens.set(data.access);
+  return data;
+}
+
+// --- Appareils reconnus -----------------------------------------------------------------------
+
+export interface KnownDevice {
+  id: string;
+  label: string;
+  ip_first: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+  expires_at: string | null;
+  trusted: boolean;
+  current: boolean;
+}
+
+export async function listDevices(): Promise<KnownDevice[]> {
+  const { data } = await api.get<{ results: KnownDevice[] }>("/auth/devices/");
+  return data.results;
+}
+
+export async function revokeDevice(id: string): Promise<void> {
+  await api.delete(`/auth/devices/${id}/`);
+}
+
+export async function revokeAllDevices(): Promise<void> {
+  try {
+    await api.post("/auth/devices/revoke-all/");
+  } finally {
+    tokens.clear();
+  }
+}
+
+// --- Vérification de l'appareil (mode SSO) --------------------------------------------------------
+
+export interface DeviceStatus {
+  verification_required: boolean;
+  verified: boolean;
+  trusted: boolean;
+  mfa_role: boolean;
+  email_hint: string;
+}
+
+export async function deviceStatus(): Promise<DeviceStatus> {
+  const { data } = await api.get<DeviceStatus>("/auth/device/status/");
+  return data;
+}
+
+export async function deviceChallenge(): Promise<{ detail: string; email_hint: string }> {
+  const { data } = await api.post<{ detail: string; email_hint: string }>("/auth/device/challenge/");
+  return data;
+}
+
+export async function deviceVerify(code: string, trustDevice: boolean): Promise<void> {
+  await api.post("/auth/device/verify/", { code, trust_device: trustDevice });
 }
 
 /** Extrait un message d'erreur lisible d'une réponse DRF. */

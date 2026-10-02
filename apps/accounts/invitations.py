@@ -106,6 +106,7 @@ def set_password_from_invitation(uid: str, token: str, password: str):
 
     user.set_password(password)
     revoke_sessions(user, save=False)
-    user.save(update_fields=["password", "sessions_revoked_at"])  # le jeton est consommé
+    user.password_admin_set_at = None  # choisi par le titulaire
+    user.save(update_fields=["password", "sessions_revoked_at", "password_admin_set_at"])  # le jeton est consommé
     audit.record(user, AuditAction.UPDATE, user, changes={"action": "password_from_invitation"})
     return user

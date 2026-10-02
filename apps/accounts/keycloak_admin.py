@@ -44,7 +44,27 @@ MANAGED_REALM_ROLES = set(ROLE_MAP.values())
 
 
 class KeycloakAdminError(Exception):
-    """Échec d'une opération d'administration Keycloak (réseau, HTTP, configuration)."""
+    """Échec d'une opération d'administration Keycloak (réseau, HTTP, configuration).
+
+    `status` : code HTTP renvoyé par Keycloak quand il y en a un (None : réseau, config)."""
+
+    def __init__(self, message: str = "", *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
+class KeycloakConflict(KeycloakAdminError):
+    """Un compte Keycloak porte déjà cet identifiant/email SANS être lié à ce compte K-Express :
+    rapprochement manuel par un administrateur (jamais d'adoption automatique par email)."""
+
+
+class KeycloakPasswordRejected(KeycloakAdminError):
+    """Mot de passe refusé par la politique de mots de passe du realm Keycloak."""
+
+
+class KeycloakAccountDisabled(KeycloakAdminError):
+    """Compte Keycloak désactivé (administrateur, verrou anti-force brute permanent) : aucune
+    opération d'activation ne doit le réactiver."""
 
 
 def enabled() -> bool:
@@ -116,7 +136,7 @@ def _api(method: str, path: str, body=None, params: dict | None = None, _retry: 
         # internes) ; le message d'exception renvoyé au client reste générique.
         body_txt = e.read().decode("utf-8", "ignore")[:500] if hasattr(e, "read") else ""
         logger.warning("Keycloak %s %s → HTTP %s : %s", method, path, e.code, body_txt)
-        raise KeycloakAdminError(f"Keycloak {method} {path} → HTTP {e.code}") from e
+        raise KeycloakAdminError(f"Keycloak {method} {path} → HTTP {e.code}", status=e.code) from e
     except Exception as e:
         raise KeycloakAdminError(f"Keycloak {method} {path} échec : {e}") from e
 
@@ -281,3 +301,71 @@ def sync_user(user) -> dict:
 
     return {"status": "ok", "kc_id": kc_id, "created": created,
             "detail": "Compte créé" if created else "Compte mis à jour"}
+
+
+# --- Activation des comptes / sessions (cf. apps.accounts.activation) ------------------------
+
+def get_user(kc_id: str) -> dict | None:
+    """Compte Keycloak désigné par son identifiant (None s'il n'existe plus)."""
+    try:
+        _s, data, _h = _api("GET", f"/users/{urllib.parse.quote(kc_id)}")
+    except KeycloakAdminError as exc:
+        if exc.status == 404:
+            return None
+        raise
+    return data if isinstance(data, dict) and data.get("id") else None
+
+
+def create_user_strict(user, *, email_verified: bool = False) -> str:
+    """Crée le compte Keycloak de `user` et renvoie son identifiant.
+
+    Contrairement à `create_user`, un conflit (username/email déjà présents dans le realm)
+    n'est JAMAIS résolu en adoptant le compte existant trouvé par email : il lève
+    `KeycloakConflict` (rapprochement manuel)."""
+    rep = _create_representation(user)
+    rep["emailVerified"] = bool(email_verified)
+    try:
+        status, _data, headers = _api("POST", "/users", body=rep)
+    except KeycloakAdminError as exc:
+        if exc.status == 409:
+            raise KeycloakConflict("Compte Keycloak déjà existant pour cet identifiant.", status=409) from exc
+        raise
+    location = headers.get("Location") or headers.get("location") or ""
+    kc_id = location.rstrip("/").rsplit("/", 1)[-1] if status == 201 else ""
+    if not kc_id:
+        raise KeycloakAdminError("Création Keycloak : identifiant absent de la réponse.")
+    return kc_id
+
+
+def confirm_email(kc_id: str) -> None:
+    """Email prouvé par OTP : `emailVerified`, actions « vérifier l'email » et « mettre à jour le
+    mot de passe » levées (le titulaire vient de choisir le sien). Le champ `enabled` n'est
+    JAMAIS modifié : un compte désactivé dans Keycloak lève `KeycloakAccountDisabled`."""
+    _s, current, _h = _api("GET", f"/users/{urllib.parse.quote(kc_id)}")
+    current = current if isinstance(current, dict) else {}
+    if current.get("enabled") is False:
+        raise KeycloakAccountDisabled("Compte Keycloak désactivé.")
+    actions = [a for a in (current.get("requiredActions") or []) if a not in ("VERIFY_EMAIL", "UPDATE_PASSWORD")]
+    body = {k: v for k, v in current.items() if k != "enabled"}
+    _api("PUT", f"/users/{urllib.parse.quote(kc_id)}",
+         body={**body, "emailVerified": True, "requiredActions": actions})
+
+
+def set_password(kc_id: str, password: str) -> None:
+    """Définit le mot de passe SSO choisi par le titulaire (définitif : `temporary=false`).
+
+    Un refus de la politique de mots de passe du realm lève `KeycloakPasswordRejected` ; son
+    détail reste journalisé côté backend (jamais renvoyé tel quel au client). Le mot de passe
+    n'est jamais journalisé."""
+    try:
+        _api("PUT", f"/users/{urllib.parse.quote(kc_id)}/reset-password",
+             body={"type": "password", "value": password, "temporary": False})
+    except KeycloakAdminError as exc:
+        if exc.status == 400:
+            raise KeycloakPasswordRejected("Mot de passe refusé par la politique Keycloak.", status=400) from exc
+        raise
+
+
+def logout_all_sessions(kc_id: str) -> None:
+    """Ferme toutes les sessions Keycloak du compte (compromission, « déconnecter partout »)."""
+    _api("POST", f"/users/{urllib.parse.quote(kc_id)}/logout")

@@ -35,6 +35,8 @@ def _audit(actor, target, action, **changes):
 
 #: Plafond d'un montant prévu (`BudgetLine.amount` : 14 chiffres dont 2 décimales).
 MAX_AMOUNT = Decimal("999999999999.99")
+#: Taux d'une ligne prévue à 0 mais consommée (« dépassement total », au-delà de tout seuil).
+OVERRUN_RATE = Decimal("999999999999.99")
 
 
 def _amount(value) -> Decimal:
@@ -61,6 +63,18 @@ def _lock_year(year) -> None:
     if connection.vendor == "postgresql":
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)", [7303, int(year)])
+
+
+def _check_raise_allowed(actor):
+    """Un budget APPROUVÉ ne grossit que par une décision de niveau groupe : ajouter une ligne
+    ou relever un montant engage le groupe autant qu'une approbation (sinon l'auteur
+    ferait approuver une enveloppe symbolique, puis la relèverait seul). Une BAISSE motivée
+    reste à la main du gestionnaire du budget."""
+    from apps.finance import permissions as perms
+
+    if not perms.can(actor, perms.APPROVE_BUDGET):
+        raise BudgetError("Budget approuvé : une hausse ou une ligne nouvelle relève du niveau groupe "
+                          "(administrateur groupe ou Finance groupe), qui approuve les budgets.")
 
 
 def _year_closed(year) -> bool:
@@ -106,6 +120,16 @@ def _approved_overlap(budget):
             if _overlaps(_line_axes(line), _line_axes(other)):
                 return line, other
     return None
+
+
+def _describe(other_line, actor) -> str:
+    """Ligne d'un AUTRE budget, nommée seulement si l'acteur voit ce budget (un budget de groupe
+    reste invisible aux filiales, jusque dans un message d'erreur)."""
+    from apps.finance.budget_read import visible_budgets
+
+    if visible_budgets(actor).filter(pk=other_line.budget_id).exists():
+        return f"la ligne « {other_line} » du budget approuvé « {other_line.budget.name} »"
+    return "une ligne d'un budget approuvé que vous ne voyez pas (niveau groupe)"
 
 
 def _group_readers():
@@ -188,6 +212,8 @@ def add_line(budget, *, actor, amount, month=None, subsidiary_id=None, cost_cent
         raise BudgetError("Mois clos : on ne budgète pas le passé publié.")
     if budget.status == Budget.APPROVED and not month and _year_closed(budget.year):
         raise BudgetError("Exercice entièrement clos : on n'y ajoute plus de ligne annuelle.")
+    if budget.status == Budget.APPROVED:
+        _check_raise_allowed(actor)
     amount = _amount(amount)
     _check_axes(budget, month=month, subsidiary_id=subsidiary_id, cost_center_id=cost_center_id, category=category)
     if budget.status == Budget.APPROVED:
@@ -198,8 +224,8 @@ def add_line(budget, *, actor, amount, month=None, subsidiary_id=None, cost_cent
         for other in BudgetLine.objects.filter(budget__year=budget.year, budget__status=Budget.APPROVED) \
                 .exclude(budget=budget).select_related("budget"):
             if _overlaps(candidate, _line_axes(other)):
-                raise BudgetError(f"Cette ligne recouvre la ligne « {other} » du budget approuvé "
-                                  f"« {other.budget.name} » : le prévu serait compté deux fois.")
+                raise BudgetError(f"Cette ligne recouvre {_describe(other, actor)} : le prévu serait "
+                                  f"compté deux fois.")
     line = BudgetLine.objects.create(budget=budget, month=month, subsidiary_id=subsidiary_id,
                                      cost_center_id=cost_center_id, category=category or "",
                                      amount=amount, label=(label or "")[:160], alert_thresholds=alert_thresholds)
@@ -229,6 +255,8 @@ def revise_line(line, *, actor, amount, reason=""):
         raise BudgetError("Mois clos : sa ligne budgétaire ne se révise plus.")
     if approved and not line.month and _year_closed(budget.year):
         raise BudgetError("Exercice entièrement clos : sa ligne annuelle ne se révise plus.")
+    if approved and amount > line.amount:
+        _check_raise_allowed(actor)
     previous = line.amount
     line.amount = amount
     line.save(update_fields=["amount"])
@@ -276,9 +304,8 @@ def approve(budget, *, actor):
     clash = _approved_overlap(budget)
     if clash:
         line, other = clash
-        raise BudgetError(f"La ligne « {line} » recouvre la ligne « {other} » du budget approuvé "
-                          f"« {other.budget.name} » : le prévu serait compté deux fois. Archivez "
-                          f"l'ancienne version ou précisez les axes.")
+        raise BudgetError(f"La ligne « {line} » recouvre {_describe(other, actor)} : le prévu serait "
+                          f"compté deux fois. Archivez l'ancienne version ou précisez les axes.")
     budget.status, budget.approved_by, budget.approved_at = Budget.APPROVED, actor, timezone.now()
     budget.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
     _audit(actor, budget, "approve")
@@ -335,6 +362,7 @@ def _check_budget_alerts(budget, cache) -> int:
     from apps.finance.budget_read import cells_for_year, line_figures, thresholds_for
     from apps.finance.models import BudgetAlert, BudgetLine
     from apps.notifications.services import notify_many
+    from apps.notifications.visibility import budget_link
 
     created = 0
     if budget.year not in cache:
@@ -342,13 +370,17 @@ def _check_budget_alerts(budget, cache) -> int:
     cells = cache[budget.year]
     for line in BudgetLine.objects.filter(budget=budget).select_related("budget", "cost_center"):
         figures = line_figures(line, cells)
-        if figures["rate"] is None:
-            continue
+        rate = figures["rate"]
+        if rate is None:
+            # Prévu nul (ligne révisée à 0 pour la retirer) mais consommée : dépassement total.
+            if figures["realised"] + figures["engaged"] <= 0:
+                continue
+            rate = OVERRUN_RATE
         already = set(line.alerts.values_list("threshold", flat=True))
         for threshold in thresholds_for(line):
-            if figures["rate"] < threshold or threshold in already:
+            if rate < threshold or threshold in already:
                 continue
-            BudgetAlert.objects.create(line=line, threshold=threshold, rate=figures["rate"],
+            BudgetAlert.objects.create(line=line, threshold=threshold, rate=rate,
                                        consumed=figures["realised"] + figures["engaged"],
                                        planned=figures["planned"])
             created += 1
@@ -356,10 +388,11 @@ def _check_budget_alerts(budget, cache) -> int:
                 alert_recipients(budget, line), NotificationType.BUDGET_ALERT,
                 title=f"Budget « {budget.name} » : {threshold} % atteint",
                 message=(f"{line.label or line.category or 'Toutes catégories'}"
-                         f"{f' — mois {line.month:02d}' if line.month else ''} : {figures['rate']} % consommé "
+                         f"{f' — mois {line.month:02d}' if line.month else ''} : "
+                         f"{'prévu nul, consommé' if rate == OVERRUN_RATE else f'{rate} % consommé'} "
                          f"(engagé + réalisé {figures['realised'] + figures['engaged']} XOF sur "
                          f"{figures['planned']} XOF prévus)."),
-                link="/finance",
+                link=budget_link(budget.pk),
             )
     return created
 

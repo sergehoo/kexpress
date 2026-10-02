@@ -63,4 +63,21 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=20),
         "kwargs": {"days_back": 2},
     },
+    # Kaydan Shield (référentiel RH) : employés modifiés toutes les 15 min (tri -updated_at +
+    # borne, faute de filtre « modifié depuis » ou de webhook côté Shield)…
+    "shield-incremental-sync": {
+        "task": "apps.shield.tasks.shield_incremental_sync",
+        "schedule": crontab(minute="*/15"),
+    },
+    # … et réconciliation complète nocturne (fiches absentes de Shield, fraîcheur < 26 h).
+    "shield-full-reconcile": {
+        "task": "apps.shield.tasks.shield_full_reconcile",
+        "schedule": crontab(hour=1, minute=40),
+    },
+    # Car Plan : échéances, retards de restitution, quotas, relevés, remises, validations
+    # (anti-doublon par l'historique de l'attribution) — 2× / jour.
+    "check-car-plan": {
+        "task": "apps.carplan.tasks.check_car_plan",
+        "schedule": crontab(hour="7,15", minute=10),
+    },
 }

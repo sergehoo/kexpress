@@ -13,7 +13,7 @@ export const EDITABLE: ExpenseStatus[] = ["draft", "submitted", "to_validate"];
 
 /** Sources qui PORTENT le coût : la dépense n'en est qu'une pièce (D2). */
 const SOURCE_PIECES = ["fuel_log", "electric_charge", "maintenance", "insurance", "inspection",
-  "revision", "vehicle_charge"];
+  "revision", "vehicle_charge", "lease"];
 
 export function ExpenseStatusBadge({ status, className }: { status: ExpenseStatus; className?: string }) {
   return (

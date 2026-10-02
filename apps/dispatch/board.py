@@ -164,7 +164,11 @@ def _available_vehicles(user, params):
     from apps.core.enums import VehicleStatus
     from apps.vehicles.models import Vehicle
 
-    qs = Vehicle.objects.for_user(user).filter(status=VehicleStatus.AVAILABLE)
+    from apps.carplan.selectors import pool_vehicles
+
+    # Car Plan : véhicules de fonction / service attribués absents du tableau, sauf mise à
+    # disposition couvrant la fenêtre affichée.
+    qs = pool_vehicles(Vehicle.objects.for_user(user).filter(status=VehicleStatus.AVAILABLE), *_window(params))
     subsidiary = (params.get("subsidiary") or "").strip()
     if subsidiary:
         qs = qs.filter(subsidiary_id=subsidiary)

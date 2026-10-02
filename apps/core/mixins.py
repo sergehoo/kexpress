@@ -137,6 +137,15 @@ class TenantScopedViewSetMixin:
         if instance.subsidiary_id != user.subsidiary_id:
             raise PermissionDenied("Cet enregistrement est géré par sa filiale de rattachement.")
 
+    def deny_auditor(self):
+        """L'auditeur LIT (D7) : aucune écriture, quelle que soit la vue ou la filiale."""
+        from rest_framework.exceptions import PermissionDenied
+
+        from apps.finance.permissions import is_auditor
+
+        if is_auditor(self.request.user):
+            raise PermissionDenied("Profil auditeur : lecture seule.")
+
     def tenant_save_kwargs(self, serializer, *, default_subsidiary_id=None) -> dict:
         """Garde d'écriture + valeurs déduites du compte, à passer à `serializer.save()`.
 
@@ -145,6 +154,7 @@ class TenantScopedViewSetMixin:
         """
         from rest_framework.exceptions import PermissionDenied, ValidationError
 
+        self.deny_auditor()
         user = self.request.user
         model = serializer.Meta.model
         creating = serializer.instance is None
@@ -181,6 +191,7 @@ class TenantScopedViewSetMixin:
     def perform_destroy(self, instance):
         from apps.finance.locks import assert_unlocked
 
+        self.deny_auditor()
         self.check_owned(instance)
         assert_unlocked(instance)  # coût figé / mois clos : 409, base intacte
         instance.delete()

@@ -186,6 +186,33 @@ services:
       OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-requester}
       LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-True}
 
+      # Invitations (P0) : adresse PUBLIQUE du frontend (lien des emails d'invitation). Sans elle,
+      # en production, une invitation est refusée (INVITATION_DELIVERY_CHECK) : aucun compte
+      # n'est créé sans moyen de définir son mot de passe.
+      FRONTEND_URL: ${FRONTEND_URL:-}
+      INVITATION_DELIVERY_CHECK: ${INVITATION_DELIVERY_CHECK:-True}
+      INVITATION_TIMEOUT_HOURS: ${INVITATION_TIMEOUT_HOURS:-72}
+      # Limitation de débit : 1 proxy de confiance (Traefik) devant le backend — l'adresse du
+      # client est la dernière entrée de X-Forwarded-For ; cache partagé Redis (production.py).
+      DRF_NUM_PROXIES: ${DRF_NUM_PROXIES:-1}
+      LOGIN_THROTTLE_RATE: ${LOGIN_THROTTLE_RATE:-30/min}
+      LOGIN_EMAIL_THROTTLE_RATE: ${LOGIN_EMAIL_THROTTLE_RATE:-10/min}
+
+      # Activation OTP, appareils reconnus, sessions (cf. docs/AUTHENTIFICATION.md). Cookies
+      # HttpOnly ; aucun jeton longue durée dans le stockage JavaScript.
+      AUTH_OTP_TTL_SECONDS: ${AUTH_OTP_TTL_SECONDS:-600}
+      AUTH_OTP_MAX_ATTEMPTS: ${AUTH_OTP_MAX_ATTEMPTS:-5}
+      AUTH_OTP_RESEND_COOLDOWN_SECONDS: ${AUTH_OTP_RESEND_COOLDOWN_SECONDS:-60}
+      AUTH_DEVICE_VERIFICATION: ${AUTH_DEVICE_VERIFICATION:-True}
+      AUTH_DEVICE_TRUST_DAYS: ${AUTH_DEVICE_TRUST_DAYS:-30}
+      AUTH_SESSION_HOURS: ${AUTH_SESSION_HOURS:-12}
+      AUTH_REMEMBER_ME_DAYS: ${AUTH_REMEMBER_ME_DAYS:-14}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-True}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-Lax}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
+      OIDC_MFA_AMR_VALUES: ${OIDC_MFA_AMR_VALUES:-otp,mfa,webauthn}
+      OIDC_MFA_ACR_VALUES: ${OIDC_MFA_ACR_VALUES:-gold,mfa,2}
+
       # Keycloak Admin API — provisioning des comptes depuis K-Express (client
       # confidentiel à service account ; secret jamais exposé au frontend).
       KEYCLOAK_SERVER_URL: ${KEYCLOAK_SERVER_URL:-}
@@ -194,6 +221,21 @@ services:
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
       KEYCLOAK_WEB_CLIENT_ID: ${KEYCLOAK_WEB_CLIENT_ID:-kexpress-web}
       KEYCLOAK_ACTION_REDIRECT_URI: ${KEYCLOAK_ACTION_REDIRECT_URI:-}
+
+      # Kaydan Shield (référentiel RH) — compte de SERVICE en lecture seule, sans MFA
+      # (cf. docs/SHIELD.md). Valeurs numériques / booléennes : jamais vides (sinon échec
+      # de démarrage) ; liste des statuts : jamais vide (sinon plus personne n'est éligible).
+      SHIELD_ENABLED: ${SHIELD_ENABLED:-False}
+      SHIELD_BASE_URL: ${SHIELD_BASE_URL:-https://api.kaydanshield.com}
+      SHIELD_USERNAME: ${SHIELD_USERNAME:-}
+      SHIELD_PASSWORD: ${SHIELD_PASSWORD:-}
+      SHIELD_LOGIN_ID_FIELD: ${SHIELD_LOGIN_ID_FIELD:-email}
+      SHIELD_TENANT_ID: ${SHIELD_TENANT_ID:-}
+      SHIELD_TIMEOUT_SECONDS: ${SHIELD_TIMEOUT_SECONDS:-20}
+      SHIELD_PAGE_SIZE: ${SHIELD_PAGE_SIZE:-200}
+      SHIELD_VERIFY_TLS: ${SHIELD_VERIFY_TLS:-True}
+      SHIELD_ELIGIBLE_STATUSES: ${SHIELD_ELIGIBLE_STATUSES:-active}
+      SHIELD_MAX_STALENESS_HOURS: ${SHIELD_MAX_STALENESS_HOURS:-26}
 
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
@@ -350,7 +392,15 @@ services:
         NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE requis}
         NEXT_PUBLIC_OIDC_AUTHORITY: ${NEXT_PUBLIC_OIDC_AUTHORITY:-}
         NEXT_PUBLIC_OIDC_CLIENT_ID: ${NEXT_PUBLIC_OIDC_CLIENT_ID:-kexpress-web}
+        NEXT_PUBLIC_OIDC_MFA_ACR: ${NEXT_PUBLIC_OIDC_MFA_ACR:-}
         NEXT_PUBLIC_LOCAL_LOGIN: ${NEXT_PUBLIC_LOCAL_LOGIN:-true}
+        # Fonds de carte : clé CARTO (navigateur, restreinte par domaine) et satellite optionnel.
+        NEXT_PUBLIC_CARTO_API_KEY: ${NEXT_PUBLIC_CARTO_API_KEY:-}
+        NEXT_PUBLIC_MAP_SATELLITE_URL: ${NEXT_PUBLIC_MAP_SATELLITE_URL:-}
+        NEXT_PUBLIC_MAP_SATELLITE_ATTRIBUTION: ${NEXT_PUBLIC_MAP_SATELLITE_ATTRIBUTION:-}
+        NEXT_PUBLIC_MAP_SATELLITE_MAX_ZOOM: ${NEXT_PUBLIC_MAP_SATELLITE_MAX_ZOOM:-}
+        NEXT_PUBLIC_MAP_VEHICLE_URL: ${NEXT_PUBLIC_MAP_VEHICLE_URL:-}
+        NEXT_PUBLIC_MAP_VEHICLE_ATTRIBUTION: ${NEXT_PUBLIC_MAP_VEHICLE_ATTRIBUTION:-}
     container_name: kexpress-frontend
     restart: unless-stopped
     # Pas de dépendance au backend : le frontend sert des pages statiques et appelle l'API

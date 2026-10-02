@@ -584,6 +584,9 @@ def _position_rows(vehicles, now=None) -> list[dict]:
         for t in Trip.objects.filter(vehicle__in=vehicles, status="in_progress")
         .select_related("driver", "reservation", "route")
     }
+    from apps.carplan.selectors import carplan_holders
+
+    holders = carplan_holders([v.id for v in vehicles], now)
     rows = []
     for v in vehicles:
         loc = locations.get(v.id)
@@ -614,6 +617,9 @@ def _position_rows(vehicles, now=None) -> list[dict]:
             "_trip_driver_user": (
                 str(trip.driver.user_id) if (trip and trip.driver and trip.driver.user_id) else None
             ),
+            # Car Plan : véhicule DÉTENU par un bénéficiaire, hors course mutualisée → position
+            # privée (un véhicule de fonction sans détenteur reste visible de l'encadrement).
+            "_carplan_holder": (holders.get(v.id) or None) if trip is None else None,
         })
     return rows
 
@@ -645,13 +651,36 @@ def redact_positions(rows, user) -> list[dict]:
     Appelé à l'ENVOI — REST comme WebSocket — car le diffuseur calcule une seule charge
     pour tous les abonnés.
     """
+    grants, used = None, {}
     out = []
     for row in rows:
         clean = {k: v for k, v in row.items() if not k.startswith("_")}
         if not _sees_trip_details(user, row):
             clean.update(dict.fromkeys(TRIP_DETAIL_FIELDS))
+        holder = row.get("_carplan_holder")
+        if holder is not None and holder != str(user.pk):
+            # Véhicule attribué hors course : position privée, sauf exception accordée et tracée
+            # (`apps.carplan.gps`) — aucun rôle, pas même super administrateur, n'en dispense.
+            if grants is None:
+                from apps.carplan.gps import active_grants
+
+                grants = active_grants(user)
+            grant = grants.get(row["id"])
+            if grant is None:
+                clean.update(dict.fromkeys(POSITION_FIELDS))
+                clean["position_private"] = True
+            else:
+                used[grant.pk] = grant
         out.append(clean)
+    if used:
+        from apps.carplan.gps import trace_use
+
+        trace_use(user, used.values())
     return out
+
+
+#: Champs de localisation d'un véhicule.
+POSITION_FIELDS = ("latitude", "longitude", "speed_kmh", "heading", "recorded_at")
 
 
 def compute_positions(user, subsidiary_id=None) -> list[dict]:

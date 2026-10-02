@@ -311,6 +311,12 @@ def reschedule(reservation, departure_time, estimated_return, actor, return_time
     # sur la NOUVELLE fenêtre (les helpers excluent la réservation elle-même).
     workflow.check_duration_coherence(reservation)
     if reservation.vehicle_id:
+        from apps.carplan.selectors import pool_block_reason
+
+        lock_row(reservation.vehicle)  # même verrou que les gestes Car Plan sur ce véhicule
+        blocked = pool_block_reason(reservation.vehicle, departure_time, estimated_return)
+        if blocked:
+            raise WorkflowError(blocked)
         conflict = workflow.vehicle_conflicts(reservation.vehicle, reservation).first()
         if conflict:
             raise WorkflowError(
@@ -363,6 +369,7 @@ def _on_approved(reservation, actor):
     )
 
 
+@transaction.atomic
 def _ensure_trips(reservation):
     """Crée la/les course(s) liée(s) si absentes, selon le type de trajet.
 
@@ -382,9 +389,18 @@ def _ensure_trips(reservation):
     if reservation.trip_type == TripType.ROUND_TRIP and (reservation.origin or "").strip():
         specs.append((TripLeg.RETURN, reservation.origin))
 
+    from apps.carplan.selectors import pool_block_reason
+
     trips = []
     for leg, destination in specs:
         dep, arr = _leg_times(reservation, leg)
+        # Dernier rempart Car Plan : un véhicule pré-saisi mais devenu indisponible pour la
+        # flotte mutualisée sur ce segment n'y est pas reporté (course à affecter).
+        vehicle = reservation.vehicle
+        if vehicle is not None:
+            lock_row(vehicle)
+            if pool_block_reason(vehicle, dep, arr):
+                vehicle = None
         # get_or_create sur (réservation, segment) : idempotent et tolérant aux courses
         # concurrentes (cf. contrainte d'unicité Trip.uniq_trip_reservation_leg).
         trip, created = Trip.objects.get_or_create(
@@ -393,7 +409,7 @@ def _ensure_trips(reservation):
             defaults=dict(
                 subsidiary=reservation.subsidiary,
                 requester=reservation.requester,
-                vehicle=reservation.vehicle,
+                vehicle=vehicle,
                 driver=reservation.driver,
                 destination=destination,
                 status=TripStatus.SCHEDULED,
@@ -410,6 +426,9 @@ def _ensure_trips(reservation):
                 if getattr(trip, attr) != val:
                     setattr(trip, attr, val)
                     fields.append(attr)
+            if trip.vehicle_id and trip.status == TripStatus.SCHEDULED and pool_block_reason(trip.vehicle, dep, arr):
+                trip.vehicle = None
+                fields.append("vehicle")
             if fields:
                 trip.save(update_fields=[*fields, "updated_at"])
         # Chaque segment a SA date prévue, donc potentiellement son propre barème : un

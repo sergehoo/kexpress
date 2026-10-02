@@ -2,6 +2,7 @@ import logging
 import secrets
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -38,34 +39,59 @@ def _invite_best_effort(user, actor) -> None:
         logger.warning("Invitation non envoyée à %s : à renvoyer depuis la fiche.", user.email, exc_info=True)
 
 
-def _finance_writes_of_role(role, subsidiary_id) -> set[str]:
-    """Permissions financières d'ÉCRITURE que confère un rôle (à filiale donnée)."""
-    from types import SimpleNamespace
+def _write_matrices():
+    """Permissions d'ÉCRITURE soumises au plafond anti-escalade, qualifiées par application :
+    `finance.*` (valider, payer…) et `carplan.*` (attribuer, valider une attribution…)."""
+    from apps.carplan import permissions as carplan
+    from apps.finance import permissions as finance
 
-    from apps.finance.permissions import WRITE_CODENAMES, role_grants
+    return (("finance", finance.WRITE_CODENAMES, finance.role_grants),
+            ("carplan", carplan.WRITE_CODENAMES, carplan.role_grants))
+
+
+def _finance_writes_of_role(role, subsidiary_id) -> set[str]:
+    """Écritures (finance.*, carplan.*) que confère un rôle (à filiale donnée)."""
+    from types import SimpleNamespace
 
     probe = SimpleNamespace(role=role, subsidiary_id=subsidiary_id, is_superuser=False,
                             is_active=True, is_authenticated=True)
-    return {c for c in WRITE_CODENAMES if role_grants(probe, c)}
+    return {f"{app}.{c}" for app, codes, grants in _write_matrices() for c in codes if grants(probe, c)}
 
 
 def _finance_writes_of(user) -> set[str]:
-    from apps.finance.permissions import WRITE_CODENAMES, can
+    return {f"{app}.{c}" for app, codes, _ in _write_matrices() for c in codes
+            if user and user.is_authenticated and user.has_perm(f"{app}.{c}")}
 
-    return {c for c in WRITE_CODENAMES if can(user, c)}
+
+def _nominative_permissions(user, app_labels):
+    """Permissions accordées NOMINATIVEMENT (groupes Django, permissions directes), lues en base
+    — y compris pour un compte BLOQUÉ (le backend Django n'en rend aucune à un compte inactif :
+    bloquer, fixer le mot de passe puis débloquer ne doit pas les faire disparaître du plafond)."""
+    from django.contrib.auth.models import Permission
+    from django.db.models import Q
+
+    if not getattr(user, "pk", None):
+        return Permission.objects.none()
+    return Permission.objects.filter(Q(user=user) | Q(group__user=user),
+                                     content_type__app_label__in=app_labels).distinct()
 
 
 def _nominative_finance_writes(user) -> set[str]:
-    """Écritures financières accordées NOMINATIVEMENT (groupes Django, permissions directes) :
-    elles restent attachées au compte quel que soit son rôle."""
-    from django.contrib.auth.backends import ModelBackend
+    """Écritures (finance.*, carplan.*) accordées nominativement : elles suivent le compte quel
+    que soit son rôle."""
+    out = set()
+    for app, codes, _ in _write_matrices():
+        out |= {f"{app}.{c}" for c in _nominative_permissions(user, [app]).filter(codename__in=codes)
+                .values_list("codename", flat=True)}
+    return out
 
-    from apps.finance.permissions import WRITE_CODENAMES
 
-    if not getattr(user, "pk", None):
-        return set()
-    granted = ModelBackend().get_all_permissions(user)
-    return {c for c in WRITE_CODENAMES if f"finance.{c}" in granted}
+def _administers_accounts(user) -> bool:
+    """Compte qui ADMINISTRE des comptes hors du circuit de l'API : accès à l'admin Django
+    (`is_staff`, `is_superuser`) ou permissions nominatives sur les comptes et les groupes
+    (il pourrait s'y donner n'importe quel droit)."""
+    return bool(user.is_superuser or user.is_staff
+                or _nominative_permissions(user, ["accounts", "auth"]).exists())
 
 
 _CURRENT = object()
@@ -143,10 +169,24 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     def _exceeds_ceiling(self, target, role=_CURRENT, subsidiary_id=_CURRENT) -> bool:
         """Le compte (dans son état actuel, ou avec le rôle / la filiale qu'on lui donne)
-        a-t-il des droits financiers d'écriture que l'administrateur n'a pas ?"""
+        a-t-il des droits que l'administrateur n'a pas — écritures financières (rôle et
+        permissions nominatives), ou administration des comptes (admin Django) ?"""
         if self._is_super_admin():
             return False
+        if target.pk and _administers_accounts(target):
+            return True
         return not _target_writes(target, role, subsidiary_id) <= _finance_writes_of(self.request.user)
+
+    def _check_grant_ceiling(self, role, subsidiary_id):
+        """On n'ATTRIBUE pas des droits financiers qu'on n'a pas soi-même : créer ou promouvoir
+        un compte au-delà de son plafond revient à un super administrateur. (L'adresse email du
+        compte est choisie par l'administrateur : l'invitation qui y part ne protège rien.)"""
+        if self._is_super_admin():
+            return
+        if not _finance_writes_of_role(role, subsidiary_id) <= _finance_writes_of(self.request.user):
+            raise PermissionDenied(
+                "Ce rôle détient des droits financiers que vous n'avez pas (validation, paiement…) : "
+                "sa création ou son attribution revient à un super administrateur.")
 
     def _check_password_ceiling(self, target, role=_CURRENT, subsidiary_id=_CURRENT, *,
                                 what="son mot de passe"):
@@ -201,6 +241,20 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             # lui-même depuis son invitation (séparation des responsabilités).
             raise ValidationError({"password": "Le mot de passe est défini par l'utilisateur depuis son "
                                                "invitation : laissez ce champ vide."})
+        effective_sub = sub if (u.has_company_scope or not u.subsidiary_id) else u.subsidiary
+        self._check_grant_ceiling(serializer.validated_data.get("role", RoleChoices.REQUESTER),
+                                  getattr(effective_sub, "pk", None))
+        from django.conf import settings as django_settings
+
+        if (getattr(django_settings, "INVITATION_DELIVERY_CHECK", False)
+                and not getattr(django_settings, "OIDC_ENABLED", False)):
+            from apps.accounts.invitations import delivery_problems
+
+            problems = delivery_problems()
+            if problems:
+                # Un compte sans mot de passe ni invitation serait inutilisable — ou pousserait à
+                # lui fixer un mot de passe connu de l'administrateur.
+                raise ValidationError({"detail": "Invitation impossible à acheminer : " + " ".join(problems)})
         # Un admin de filiale ne crée QUE dans SA filiale (refuse une autre filiale
         # explicitement fournie ; isolation non garantie par le seul scoping de lecture).
         if not u.has_company_scope and u.subsidiary_id:
@@ -212,8 +266,6 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         audit.record(u, AuditAction.CREATE, user, changes={"action": "create_user", "role": user.role})
         # Invitation au SEUL titulaire (lien à usage unique). Avec le SSO, Keycloak s'en charge
         # (email d'activation) après la synchronisation.
-        from django.conf import settings as django_settings
-
         if not getattr(django_settings, "OIDC_ENABLED", False):
             transaction.on_commit(lambda: _invite_best_effort(user, u))
         # Provisioning Keycloak (création + rôles) après commit, en asynchrone.
@@ -224,31 +276,33 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_can_manage(serializer.instance)
         data = serializer.validated_data
         target = serializer.instance
-        if target.pk == self.request.user.pk and any(
-            field in data and data[field] != getattr(target, field) for field in PRIVILEGE_FIELDS
+        u = self.request.user
+        if target.pk == u.pk and any(
+            field in data and data[field] != getattr(target, field) for field in (*PRIVILEGE_FIELDS, "is_active")
         ):
-            raise PermissionDenied("Vous ne pouvez pas modifier vos propres droits (rôle, filiale).")
+            raise PermissionDenied("Vous ne pouvez pas modifier vos propres droits (rôle, filiale, activation).")
+        password_given = bool(data.get("password"))
+        if password_given and target.pk == u.pk:
+            raise PermissionDenied("Votre propre mot de passe se change depuis votre profil (mot de passe actuel requis).")
         new_role_value = data.get("role", target.role)
         new_sub_id = getattr(data.get("subsidiary", target.subsidiary), "pk", None)
-        if data.get("password"):
+        if password_given:
             self._check_password_ceiling(target, new_role_value, new_sub_id)
         if "email" in data and (data["email"] or "").lower() != (target.email or "").lower():
             # L'adresse reçoit les invitations : la changer, c'est pouvoir prendre le compte.
             self._check_password_ceiling(target, new_role_value, new_sub_id, what="son adresse email")
-        # Promotion au-delà de ses propres droits : un mot de passe connu (fixé avant par cet
-        # admin) ou une session ouverte ne doivent pas en profiter → mot de passe inutilisable,
-        # sessions coupées, nouvelle invitation au titulaire.
-        promoted_beyond = (("role" in data or "subsidiary" in data)
-                           and not self._exceeds_ceiling(target)
-                           and self._exceeds_ceiling(target, new_role_value, new_sub_id))
+        changing_rights = ("role" in data and data["role"] != target.role) or (
+            "subsidiary" in data and getattr(data["subsidiary"], "pk", None) != target.subsidiary_id)
+        if changing_rights:
+            # On n'attribue pas des droits qu'on n'a pas (super administrateur excepté).
+            self._check_grant_ceiling(new_role_value, new_sub_id)
+        grows = changing_rights and bool(_target_writes(target, new_role_value, new_sub_id) - _target_writes(target))
         new_role = serializer.validated_data.get("role")
         if new_role and new_role != serializer.instance.role:
             self._check_role_assignable(new_role)
-        u = self.request.user
         # Un admin de filiale ne peut ni déplacer un utilisateur vers une autre filiale, ni lui
         # RETIRER sa filiale : sans filiale, un financier devient financier groupe.
         if not (u.is_superuser or u.has_company_scope):
-            data = serializer.validated_data
             if "subsidiary" in data and (
                 data["subsidiary"] is None or str(data["subsidiary"].id) != str(u.subsidiary_id)
             ):
@@ -257,23 +311,24 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             subsidiary = data.get("subsidiary", serializer.instance.subsidiary)
             if self._is_group_level(role, subsidiary):
                 raise PermissionDenied("Vous ne pouvez pas attribuer un rôle à périmètre entreprise.")
-        user = serializer.save()
-        from apps.accounts.sessions import revoke_sessions
-
+        admin_chosen_before = target.password_admin_set_at is not None
+        user = serializer.save()  # mot de passe changé / compte désactivé → sessions révoquées (signal)
         changes = {"action": "update_user", "role": user.role}
-        if data.get("password"):
-            revoke_sessions(user)
+        if password_given:
+            type(user).objects.filter(pk=user.pk).update(password_admin_set_at=timezone.now())
             changes["password_set"] = True
-        if promoted_beyond:
+        elif grows and admin_chosen_before:
+            # Promotion d'un compte dont un administrateur a CHOISI le mot de passe : celui-ci
+            # n'hérite pas des nouveaux droits → mot de passe inutilisable, sessions coupées,
+            # nouvelle invitation au titulaire.
             user.set_unusable_password()
-            user.save(update_fields=["password"])
-            revoke_sessions(user)
+            user.password_admin_set_at = None
+            user.save(update_fields=["password", "password_admin_set_at"])
             changes["credentials_reset"] = True
             from django.conf import settings as django_settings
 
             if not getattr(django_settings, "OIDC_ENABLED", False):
-                actor = self.request.user
-                transaction.on_commit(lambda: _invite_best_effort(user, actor))
+                transaction.on_commit(lambda: _invite_best_effort(user, u))
         audit.record(self.request.user, AuditAction.UPDATE, user, changes=changes)
         # Propage nom/prénom/email/rôle/filiale/téléphone/statut vers Keycloak.
         transaction.on_commit(lambda: schedule_user_sync(user.id))
@@ -332,11 +387,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         if user.pk == request.user.pk:
             raise ValidationError("Vous ne pouvez pas bloquer votre propre compte.")
         user.is_active = active
-        user.save(update_fields=["is_active"])
-        if not active:
-            from apps.accounts.sessions import revoke_sessions
-
-            revoke_sessions(user)  # sessions coupées, liens d'invitation caducs
+        user.save(update_fields=["is_active"])  # blocage → sessions et liens révoqués (signal)
         audit.record(request.user, AuditAction.UPDATE, user,
                      changes={"action": "unblock_user" if active else "block_user"})
         # Reflète l'état actif/inactif dans Keycloak (enabled).
@@ -359,15 +410,15 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_admin()
         user = self.get_object()
         self._check_can_manage(user)
+        if user.pk == request.user.pk:
+            raise PermissionDenied("Votre propre mot de passe se change depuis votre profil (mot de passe actuel requis).")
         self._check_password_ceiling(user)
         ser = SetPasswordSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         check_password_strength(ser.validated_data["password"], user, field="password")
-        from apps.accounts.sessions import revoke_sessions
-
         user.set_password(ser.validated_data["password"])
-        revoke_sessions(user, save=False)
-        user.save(update_fields=["password", "sessions_revoked_at"])
+        user.password_admin_set_at = timezone.now()
+        user.save(update_fields=["password", "password_admin_set_at"])  # sessions révoquées (signal)
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "set_password"})
         return Response({"detail": "Mot de passe mis à jour."})
 
@@ -391,13 +442,13 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_admin()
         user = self.get_object()
         self._check_can_manage(user)
+        if user.pk == request.user.pk:
+            raise PermissionDenied("Votre propre mot de passe se change depuis votre profil (mot de passe actuel requis).")
         self._check_password_ceiling(user)
-        from apps.accounts.sessions import revoke_sessions
-
         temp = secrets.token_urlsafe(12)
         user.set_password(temp)
-        revoke_sessions(user, save=False)
-        user.save(update_fields=["password", "sessions_revoked_at"])
+        user.password_admin_set_at = timezone.now()
+        user.save(update_fields=["password", "password_admin_set_at"])  # sessions révoquées (signal)
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "reset_password"})
         return Response({"detail": "Mot de passe réinitialisé.", "temporary_password": temp})
 

@@ -206,6 +206,9 @@ class ExpenseSource(models.TextChoices):
     INSPECTION = "inspection", "Visite technique"
     REVISION = "revision", "Révision"
     VEHICLE_CHARGE = "vehicle_charge", "Charge véhicule"
+    #: Facture de loyer d'un véhicule en leasing / location : le coût est porté par le contrat
+    #: (`VehicleAcquisition`, proratisé) ; la facture n'en est que la pièce (et son paiement).
+    LEASE = "lease", "Loyer de leasing / location"
     #: Référence externe (n° de facture…) : la dépense reste comptée, elle n'a pas de double.
     OTHER = "other", "Autre référence"
     #: Dépense antérieure à D2 d'une catégorie qui recouvre une table dédiée : à reprendre,
@@ -266,6 +269,9 @@ class NotificationType(models.TextChoices):
     MAINTENANCE_DONE = "maintenance_done", "Maintenance terminée"
     VEHICLE_IMMOBILIZED = "vehicle_immobilized", "Véhicule immobilisé"
     VEHICLE_BACK = "vehicle_back", "Véhicule remis en service"
+    # Car Plan — étapes d'une attribution, échéances, quotas, demandes et incidents du
+    # bénéficiaire (jamais un montant : le bénéficiaire ne voit aucun coût interne).
+    CARPLAN = "carplan", "Car Plan"
     OTHER = "other", "Autre"
 
 

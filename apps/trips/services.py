@@ -311,6 +311,11 @@ def assign_vehicle_to_trip(trip, vehicle, actor, *, allow_grouped: bool = False)
     workflow.check_capacity(vehicle, trip.reservation.passengers)
     if vehicle.status in (VS.MAINTENANCE, VS.OUT_OF_SERVICE):
         raise WorkflowError(f"Véhicule indisponible (état : {vehicle.get_status_display()}).")
+    from apps.carplan.selectors import pool_block_reason
+
+    blocked = pool_block_reason(vehicle, trip.planned_departure_at, trip.planned_arrival_at)
+    if blocked:
+        raise WorkflowError(blocked)
 
     old_vehicle = trip.vehicle
     trip.vehicle = vehicle  # pour la vérif de conflit sur la fenêtre de CETTE course
@@ -454,12 +459,14 @@ def suggest_vehicles_for_trip(trip, limit=5):
     if route and route.origin_lat is not None and route.origin_lng is not None:
         origin = (float(route.origin_lat), float(route.origin_lng))
 
+    from apps.carplan.selectors import pool_vehicles
+
     passengers = trip.reservation.passengers if trip.reservation_id else 1
     candidates = []
-    for v in (
-        Vehicle.objects.filter(status=VehicleStatus.AVAILABLE, capacity__gte=passengers)
-        .select_related("subsidiary")[:50]
-    ):
+    # Car Plan : véhicules de fonction / service attribués exclus, sauf mise à disposition.
+    pool = pool_vehicles(Vehicle.objects.filter(status=VehicleStatus.AVAILABLE, capacity__gte=passengers),
+                         trip.planned_departure_at, trip.planned_arrival_at)
+    for v in pool.select_related("subsidiary")[:50]:
         loc = getattr(v, "last_location", None)
         candidates.append({
             "id": str(v.id),

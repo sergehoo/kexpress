@@ -99,6 +99,7 @@ SOURCE_MODELS = {
     "inspection": "vehicles.TechnicalInspection",
     "revision": "vehicles.VehicleRevision",
     "vehicle_charge": "finance.VehicleCharge",
+    "lease": "finance.VehicleAcquisition",
 }
 
 

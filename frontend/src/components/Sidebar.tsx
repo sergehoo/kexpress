@@ -27,6 +27,9 @@ import {
   Wrench,
   X,
   Coins,
+  KeyRound,
+  CarFront,
+  IdCard,
 } from "lucide-react";
 
 import { useAuth } from "@/lib/auth";
@@ -48,6 +51,7 @@ const GROUPS: Group[] = [
   {
     title: "Exploitation",
     items: [
+      { href: "/my-vehicle", label: "Mon véhicule", icon: CarFront },
       { href: "/driver", label: "Mes missions", icon: Navigation },
       { href: "/reservations", label: "Réservations", icon: CalendarCheck },
       { href: "/dispatching", label: "Dispatching", icon: Route },
@@ -60,6 +64,7 @@ const GROUPS: Group[] = [
     title: "Flotte",
     items: [
       { href: "/vehicles", label: "Véhicules", icon: Car },
+      { href: "/car-plan", label: "Car Plan", icon: KeyRound },
       { href: "/drivers", label: "Chauffeurs", icon: UserRound },
       { href: "/maintenance", label: "Maintenance", icon: Wrench },
     ],
@@ -78,6 +83,7 @@ const GROUPS: Group[] = [
     items: [
       { href: "/subsidiaries", label: "Filiales", icon: Building2 },
       { href: "/employees", label: "Employés", icon: Users },
+      { href: "/hr-sync", label: "Synchronisation RH", icon: IdCard },
       { href: "/incidents", label: "Incidents", icon: AlertTriangle },
       { href: "/alerts", label: "Alertes", icon: Bell },
     ],

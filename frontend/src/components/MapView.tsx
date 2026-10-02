@@ -5,27 +5,150 @@ import { Circle, MapContainer, Marker, Polygon, Polyline, TileLayer, Tooltip, us
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+import {
+  BASE_LAYER_KEYS, BASE_LAYERS, CARTO_CHECK_TIMEOUT_MS, CARTO_CONFIGURED, DEFAULT_CENTER, DEFAULT_ZOOM, MAP_ENV,
+  MAP_MAX_ZOOM, VEHICLE_BASE_LAYERS,
+  checkCartoKey, keyFingerprint, shouldFallback, usableSources,
+  type BaseLayer, type BaseLayerKey, type CartoKeyStatus,
+} from "@/lib/mapConfig";
 import type { VehiclePosition } from "@/lib/types";
 
-// Fonds de carte disponibles (Plan / Sombre / Satellite)
-const BASE_LAYERS = {
-  plan: {
-    label: "Plan",
-    url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    attribution: "&copy; OpenStreetMap, &copy; CARTO",
-  },
-  dark: {
-    label: "Sombre",
-    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    attribution: "&copy; OpenStreetMap, &copy; CARTO",
-  },
-  satellite: {
-    label: "Satellite",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    attribution: "&copy; Esri, Maxar, Earthstar Geographics",
-  },
-} as const;
-type LayerKey = keyof typeof BASE_LAYERS;
+/** Statut de la clé CARTO, vérifié UNE fois par session (toutes cartes confondues) : une clé
+ *  refusée renvoie des tuiles filigranées en HTTP 200 — seul ce contrôle permet de les éviter.
+ *  Passé le délai d'attente, la carte s'affiche (statut « unknown ») ; le verdict arrivé ensuite
+ *  est quand même retenu et diffusé aux cartes ouvertes. */
+let cartoCheck: Promise<CartoKeyStatus> | null = null;
+const cartoListeners = new Set<(status: CartoKeyStatus) => void>();
+const CARTO_CHECK_STORAGE = "kx-carto-key";
+let cartoMissingWarned = false;
+
+function cachedCartoStatus(): CartoKeyStatus | null {
+  try {
+    const fingerprint = keyFingerprint(MAP_ENV.cartoApiKey ?? "");
+    const cached = sessionStorage.getItem(CARTO_CHECK_STORAGE);
+    if (cached?.startsWith(`${fingerprint}:`)) return cached.slice(fingerprint.length + 1) as CartoKeyStatus;
+  } catch {
+    /* stockage indisponible (navigation privée) : on vérifie à chaque chargement */
+  }
+  return null;
+}
+
+function startCartoCheck(): Promise<CartoKeyStatus> {
+  const key = MAP_ENV.cartoApiKey ?? "";
+  const fingerprint = keyFingerprint(key);
+  const verdict = checkCartoKey(key).then((status) => {
+    if (status === "rejected") {
+      console.warn("Clé CARTO refusée (tuiles « API KEY REQUIRED ») : fonds de secours utilisés. "
+        + "Vérifiez la clé et ses domaines autorisés dans le tableau de bord CARTO.");
+    }
+    try {
+      if (status !== "unknown") sessionStorage.setItem(CARTO_CHECK_STORAGE, `${fingerprint}:${status}`);
+    } catch {
+      /* idem */
+    }
+    if (status === "unknown") cartoCheck = null; // vérification à refaire au prochain montage
+    cartoListeners.forEach((listener) => listener(status));
+    return status;
+  });
+  const timeout = new Promise<CartoKeyStatus>((resolve) => setTimeout(() => resolve("unknown"), CARTO_CHECK_TIMEOUT_MS));
+  return Promise.race([verdict, timeout]);
+}
+
+function useCartoStatus(enabled: boolean): CartoKeyStatus {
+  const [status, setStatus] = useState<CartoKeyStatus>(() =>
+    (CARTO_CONFIGURED && enabled ? cachedCartoStatus() ?? "pending" : "unknown"));
+  useEffect(() => {
+    if (!enabled) return; // vue en véhicule : CARTO n'y figure pas, rien à vérifier
+    if (!CARTO_CONFIGURED) {
+      if (!cartoMissingWarned) {
+        cartoMissingWarned = true;
+        console.warn("Clé CARTO non configurée (NEXT_PUBLIC_CARTO_API_KEY) : fonds Plan et Sombre de secours.");
+      }
+      return;
+    }
+    let alive = true;
+    const listener = (result: CartoKeyStatus) => { if (alive) setStatus(result); };
+    cartoListeners.add(listener);
+    if (status === "pending") {
+      cartoCheck ??= startCartoCheck();
+      cartoCheck.then(listener);
+    }
+    return () => { alive = false; cartoListeners.delete(listener); };
+  }, [status, enabled]);
+  return status;
+}
+
+/** Délai avant de retenter le fournisseur préféré après une bascule de secours. */
+const RETRY_PREFERRED_MS = 5 * 60_000;
+
+/** Fond de carte résilient : affiche le premier fournisseur de la chaîne du fond choisi et
+ *  bascule sur le suivant si ses tuiles échouent en série (cf. `shouldFallback`). Une coupure
+ *  RÉSEAU (hors ligne) n'est pas une panne du fournisseur ; après une bascule, le fournisseur
+ *  préféré est retenté au retour du réseau et toutes les 5 minutes. Monté avec `key` : changer
+ *  de fond repart du fournisseur préféré. Ses props ne dépendent QUE du fond choisi : une mise
+ *  à jour des positions GPS ne recharge aucune tuile. */
+function BaseTiles({ layers, layer, carto, onProvider }: {
+  layers: Record<BaseLayerKey, BaseLayer>; layer: BaseLayerKey; carto: CartoKeyStatus;
+  onProvider: (fallback: string | null) => void;
+}) {
+  const sources = useMemo(() => usableSources(layers[layer], carto), [layers, layer, carto]);
+  const [index, setIndex] = useState(0);
+  // Fournisseur courant, lu par les gestionnaires : une tuile tardive d'un fournisseur déjà
+  // abandonné (requête partie avant la bascule) ne compte pas contre le suivant.
+  const current = useRef(0);
+
+  const source = sources[Math.min(index, sources.length - 1)];
+  // Bandeau « secours » dès que le fond servi n'est pas le fournisseur prévu (panne, clé refusée).
+  const preferred = layers[layer].sources[0];
+  useEffect(() => {
+    onProvider(source && preferred && source.id !== preferred.id ? source.provider : null);
+  }, [source, preferred, onProvider]);
+
+  // Retour au fournisseur préféré : au retour du réseau, puis toutes les 5 minutes.
+  useEffect(() => {
+    if (index === 0) return;
+    const retry = () => { current.current = 0; setIndex(0); };
+    const timer = window.setTimeout(retry, RETRY_PREFERRED_MS);
+    window.addEventListener("online", retry);
+    return () => { window.clearTimeout(timer); window.removeEventListener("online", retry); };
+  }, [index]);
+
+  // Compteurs PROPRES à chaque fournisseur (recréés à chaque bascule).
+  const handlers = useMemo(() => {
+    const mine = index;
+    const counts = { errors: 0, loads: 0 };
+    return {
+      tileload: () => {
+        if (current.current === mine) counts.loads += 1;
+      },
+      tileerror: () => {
+        if (current.current !== mine) return;
+        if (typeof navigator !== "undefined" && navigator.onLine === false) return; // hors ligne
+        counts.errors += 1;
+        if (shouldFallback(counts.errors, counts.loads) && mine + 1 < sources.length) {
+          current.current = mine + 1;
+          // Jamais l'URL dans la console : elle porte la clé du fournisseur.
+          console.warn(`Fond de carte « ${sources[mine].provider} » indisponible : bascule vers « ${sources[mine + 1].provider} ».`);
+          setIndex(mine + 1);
+        }
+      },
+    };
+  }, [index, sources]);
+
+  if (!source) return null;
+  return (
+    <TileLayer
+      key={`${layer}:${source.id}`}
+      url={source.url}
+      attribution={source.attribution}
+      subdomains={source.subdomains ?? "abc"}
+      maxNativeZoom={source.maxNativeZoom}
+      maxZoom={MAP_MAX_ZOOM}
+      referrerPolicy={source.referrerPolicy}
+      eventHandlers={handlers}
+    />
+  );
+}
 
 const STATUS_COLOR: Record<string, string> = {
   available: "#10b981",
@@ -175,6 +298,7 @@ export default function MapView({
   recenterTo,
   fitTo,
   marker,
+  inVehicle = false,
 }: {
   positions: VehiclePosition[];
   selectedId?: string | null;
@@ -194,6 +318,9 @@ export default function MapView({
   fitTo?: [number, number][];
   /** Marqueur ponctuel mobile (ex. position courante en relecture d'itinéraire). */
   marker?: [number, number] | null;
+  /** Vue EN VÉHICULE (chauffeur, guidage en course) : fonds sans CARTO, dont les conditions
+   *  interdisent la navigation en temps réel et l'affichage sur un véhicule en mouvement. */
+  inVehicle?: boolean;
 }) {
   const located = useMemo(
     () => positions.filter((p) => p.latitude && p.longitude),
@@ -201,10 +328,11 @@ export default function MapView({
   );
   const center: [number, number] = located.length
     ? [Number(located[0].latitude), Number(located[0].longitude)]
-    : [5.345, -4.024];
+    : DEFAULT_CENTER;
 
-  const [layer, setLayer] = useState<LayerKey>("plan");
-  const base = BASE_LAYERS[layer];
+  const [layer, setLayer] = useState<BaseLayerKey>("plan");
+  const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
+  const carto = useCartoStatus(!inVehicle);
 
   return (
     <>
@@ -218,7 +346,7 @@ export default function MapView({
           Mobile : en haut à droite (le panneau de commande occupe le bas, le zoom Leaflet le haut-gauche).
           Desktop : en bas à gauche (le panneau est en haut à droite → coin libre). */}
       <div className="absolute right-3 top-3 z-[600] flex overflow-hidden rounded-lg border border-line bg-surface/95 shadow-lg backdrop-blur lg:bottom-6 lg:left-3 lg:right-auto lg:top-auto">
-        {(Object.keys(BASE_LAYERS) as LayerKey[]).map((k) => (
+        {BASE_LAYER_KEYS.map((k) => (
           <button
             key={k}
             onClick={() => setLayer(k)}
@@ -232,8 +360,17 @@ export default function MapView({
         ))}
       </div>
 
-      <MapContainer center={center} zoom={12} className="h-full w-full" style={{ background: "#0a1120" }}>
-        <TileLayer key={layer} attribution={base.attribution} url={base.url} />
+      {fallbackProvider && (
+        <div className="pointer-events-none absolute bottom-6 right-3 z-[600] rounded-md bg-amber-500/90 px-2 py-1 text-[10px] font-medium text-white shadow">
+          Fond de secours : {fallbackProvider}
+        </div>
+      )}
+
+      <MapContainer center={center} zoom={DEFAULT_ZOOM} maxZoom={MAP_MAX_ZOOM} className="h-full w-full"
+                    style={{ background: "#0a1120" }}>
+        <BaseTiles key={`${inVehicle ? "vehicle" : "office"}:${layer}:${carto}`}
+                   layers={inVehicle ? VEHICLE_BASE_LAYERS : BASE_LAYERS} layer={layer} carto={carto}
+                   onProvider={setFallbackProvider} />
         <FitBounds positions={located} fallback={fitTo} />
         <FocusOnSelect positions={located} selectedId={selectedId} />
         {onMapClick && <ClickHandler onMapClick={onMapClick} />}

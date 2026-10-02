@@ -21,7 +21,28 @@ def trip_group(trip_id) -> str:
     return f"trip_{trip_id}"
 
 
-class FleetConsumer(AsyncJsonWebsocketConsumer):
+def user_group(user_id) -> str:
+    """Groupe propre à un compte : une révocation de ses sessions y ferme ses sockets ouverts."""
+    return f"user_{user_id}"
+
+
+class _RevocableMixin:
+    """Un socket ouvert ne survit pas au blocage du compte ni à la révocation de ses sessions
+    (`apps.accounts.sessions.revoke_sessions` diffuse `session.revoked` au groupe du compte)."""
+
+    async def _join_user_group(self):
+        self._user_group = user_group(self.user.pk)
+        await self.channel_layer.group_add(self._user_group, self.channel_name)
+
+    async def _leave_user_group(self):
+        if getattr(self, "_user_group", None):
+            await self.channel_layer.group_discard(self._user_group, self.channel_name)
+
+    async def session_revoked(self, event):
+        await self.close(code=4401)
+
+
+class FleetConsumer(_RevocableMixin, AsyncJsonWebsocketConsumer):
     """Positions de la flotte en temps réel via le groupe Redis `fleet_positions`.
 
     Filtrage optionnel par filiale (?subsidiary=) appliqué localement sur le flux diffusé.
@@ -37,12 +58,14 @@ class FleetConsumer(AsyncJsonWebsocketConsumer):
         self.subsidiary_id = (query.get("subsidiary") or [None])[0] or None
 
         await self.channel_layer.group_add(FLEET_GROUP, self.channel_name)
+        await self._join_user_group()
         await self.accept()
         # État initial immédiat (une lecture), sans attendre le prochain tick diffusé.
         await self.send_json({"type": "positions", "results": await self._initial()})
 
     async def disconnect(self, code):
         await self.channel_layer.group_discard(FLEET_GROUP, self.channel_name)
+        await self._leave_user_group()
 
     @database_sync_to_async
     def _initial(self):
@@ -60,7 +83,7 @@ class FleetConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "positions", "results": rows})
 
 
-class TripTrackingConsumer(AsyncJsonWebsocketConsumer):
+class TripTrackingConsumer(_RevocableMixin, AsyncJsonWebsocketConsumer):
     """Suivi temps réel d'une course via le groupe Redis `trip_<id>`."""
 
     async def connect(self):
@@ -76,6 +99,7 @@ class TripTrackingConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4404)
             return
         await self.channel_layer.group_add(trip_group(self.trip_id), self.channel_name)
+        await self._join_user_group()
         await self.accept()
         await self.send_json({"type": "tracking", **payload})
 
@@ -83,6 +107,7 @@ class TripTrackingConsumer(AsyncJsonWebsocketConsumer):
         trip_id = getattr(self, "trip_id", None)
         if trip_id is not None:
             await self.channel_layer.group_discard(trip_group(trip_id), self.channel_name)
+        await self._leave_user_group()
 
     @database_sync_to_async
     def _payload(self):

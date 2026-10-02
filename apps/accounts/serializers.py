@@ -85,12 +85,29 @@ class MeSerializer(UserSerializer):
     # Permissions `finance.*` effectives : le frontend n'affiche que ce que l'API servira.
     # L'API reste la seule barrière — ce champ ne sert qu'à ne pas afficher d'écran vide.
     finance_permissions = serializers.SerializerMethodField()
+    # Permissions `carplan.*` (gestion) et accès « Mon véhicule » : ce dernier ne dépend QUE d'une
+    # attribution valide (calculée ici, côté serveur), jamais du rôle.
+    carplan_permissions = serializers.SerializerMethodField()
+    car_plan = serializers.SerializerMethodField()
 
     class Meta(UserSerializer.Meta):
-        fields = [*UserSerializer.Meta.fields, "finance_permissions"]
+        fields = [*UserSerializer.Meta.fields, "finance_permissions", "carplan_permissions", "car_plan"]
         read_only_fields = fields
 
     def get_finance_permissions(self, obj) -> list[str]:
         from apps.finance.permissions import granted
 
         return granted(obj)
+
+    def get_carplan_permissions(self, obj) -> list[str]:
+        from apps.carplan.permissions import granted
+
+        return granted(obj)
+
+    def get_car_plan(self, obj) -> dict:
+        from apps.carplan.selectors import self_service_assignment
+
+        assignment = self_service_assignment(obj)
+        return {"has_vehicle": assignment is not None,
+                "assignment": str(assignment.pk) if assignment else None,
+                "status": assignment.status if assignment else None}

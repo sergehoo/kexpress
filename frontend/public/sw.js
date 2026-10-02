@@ -1,6 +1,7 @@
 /* Service worker Kaydan Express — cache app shell + données API (offline partiel)
    + Background Sync (vidange des files réservations/GPS, même onglet fermé). */
-const VERSION = "kx-v5";
+// v6 : purge des tuiles de fonds de carte tiers mises en cache par la v5 (cf. ci-dessous).
+const VERSION = "kx-v6";
 const SHELL_CACHE = `${VERSION}-shell`;
 const API_CACHE = `${VERSION}-api`;
 const OFFLINE_URL = "/offline";
@@ -70,15 +71,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Statiques Next : cache d'abord.
-  if (/\/_next\/static\//.test(request.url) || /\.(png|svg|ico|woff2?)$/.test(request.url)) {
+  // Statiques de l'APPLICATION (même origine) : cache d'abord. Jamais les ressources d'un
+  // autre domaine — tuiles de fonds de carte (CARTO, OpenStreetMap, Esri) : leur fournisseur
+  // fixe la durée de cache (CARTO interdit plus de 30 jours sur l'appareil), et une erreur
+  // passagère ne doit pas être rejouée indéfiniment.
+  const sameOrigin = new URL(request.url).origin === self.location.origin;
+  if (sameOrigin && (/\/_next\/static\//.test(request.url) || /\.(png|svg|ico|woff2?)$/.test(request.url))) {
     event.respondWith(
       caches.match(request).then(
         (cached) =>
           cached ||
           fetch(request).then((response) => {
-            const copy = response.clone();
-            caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy));
+            if (response.ok) {
+              const copy = response.clone();
+              caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy));
+            }
             return response;
           }),
       ),

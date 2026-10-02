@@ -36,6 +36,8 @@ urlpatterns = [
     path("api/", include("apps.maps.urls")),
     path("api/", include("apps.kbot.urls")),
     path("api/", include("apps.finance.urls")),
+    path("api/", include("apps.carplan.urls")),
+    path("api/", include("apps.shield.urls")),
     path("api/", include("apps.core.urls")),
     # OpenAPI / Swagger
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

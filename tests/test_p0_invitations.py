@@ -113,6 +113,19 @@ def _login(email, password):
     return _client().post("/api/auth/token/", {"email": email, "password": password}, format="json")
 
 
+def _login_with_otp(email, password):
+    """Connexion complète : mot de passe (202 + code par email sur un appareil inconnu ou pour un
+    rôle à MFA renforcée — cf. tests/test_auth_login.py), puis code → session (200 + access)."""
+    from django.core import mail
+
+    first = _login(email, password)
+    if first.status_code != 202:
+        return first
+    code = re.search(r"\b(\d{6})\b", mail.outbox[-1].body).group(1)
+    return _client().post("/api/auth/token/otp/", {"challenge": first.json()["challenge"], "code": code},
+                          format="json")
+
+
 def _aged_token(user, hours):
     """Jeton d'invitation émis il y a `hours` heures (horodatage passé, signature valide)."""
     gen = invitation_tokens
@@ -172,13 +185,16 @@ def test_former_default_password_is_absent_from_application_code():
 
 def test_no_api_created_account_opens_with_former_default(company_admin, sub_a, django_capture_on_commit_callbacks):
     """Aucun compte créé par l'API (tous rôles) ne s'ouvre avec l'ancien mot de passe par
-    défaut ; et le fournir explicitement à la création est refusé, rien n'est créé."""
+    défaut ; et le fournir explicitement à la création est refusé, rien n'est créé. (Un compte
+    Finance, qui paie, est créé par un super administrateur : plafond des droits attribués.)"""
     c = _client(company_admin)
+    root = _client(User.objects.create_user("root-p0@test.io", "Racine-Solide-91", role=RoleChoices.SUPER_ADMIN))
     emails = []
     for i, (role, sub) in enumerate([(RoleChoices.REQUESTER, sub_a), (RoleChoices.FLEET_MANAGER, sub_a),
                                      (RoleChoices.FINANCE, sub_a), (RoleChoices.DRIVER, sub_a)]):
         email = f"api{i}@test.io"
-        r = _create(c, _payload(email, role, subsidiary=str(sub.pk)), django_capture_on_commit_callbacks)
+        creator = root if role == RoleChoices.FINANCE else c
+        r = _create(creator, _payload(email, role, subsidiary=str(sub.pk)), django_capture_on_commit_callbacks)
         assert r.status_code == 201, r.content
         emails.append(email)
     for email in emails:
@@ -324,7 +340,7 @@ def test_full_invitation_flow_then_login(company_admin, mailoutbox, django_captu
     assert p.status_code == 200, p.content
     user = User.objects.get(email="flux@test.io")
     assert user.has_usable_password() and user.check_password(STRONG)
-    tok = _login("flux@test.io", STRONG)
+    tok = _login_with_otp("flux@test.io", STRONG)
     assert tok.status_code == 200 and tok.json().get("access")
     assert AuditLog.objects.filter(actor=user, target_id=str(user.pk),
                                    changes__action="password_from_invitation").count() == 1
@@ -665,7 +681,7 @@ def test_seed_demo_with_demo_password_uses_operator_choice(monkeypatch):
         assert user.check_password(STRONG), user.email
         assert not user.check_password(FORMER_DEFAULT)
     assert "setup-password" not in output
-    assert _login("admin@kaydan.test", STRONG).status_code == 200
+    assert _login_with_otp("admin@kaydan.test", STRONG).status_code == 200
 
 
 # --- 7. Migration de révocation ---------------------------------------------------------

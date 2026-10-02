@@ -305,10 +305,14 @@ def detect_idle_vehicles(data, limits) -> list[dict]:
 
     from apps.core.enums import VehicleStatus
 
+    from apps.carplan.selectors import pool_vehicles
+
     cutoff = timezone.now() - timedelta(days=limits["idle_days"])
     rows = []
+    # Un véhicule Car Plan (fonction / service attribué) n'attend pas de course : il n'est pas
+    # « immobilisé » parce que la flotte mutualisée ne l'utilise pas.
     candidates = (
-        data["owned_vehicles"].filter(status=VehicleStatus.AVAILABLE)
+        pool_vehicles(data["owned_vehicles"]).filter(status=VehicleStatus.AVAILABLE)
         .annotate(last_trip=Max("trips__actual_departure"))
         .filter(last_trip__lt=cutoff)
         .order_by("last_trip")[: limits["max_rows_per_detector"]]

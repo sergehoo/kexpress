@@ -589,8 +589,9 @@ def test_6_revisions_are_historised_reasoned_and_closed_months_stay_untouched(
         sub_a, finance_a, group_finance, company_admin):
     """Invariant 6 : création → révision « initial » ; brouillon → révisions « draft »
     libres ; approbation par un autre que l'auteur ; approuvé → motif obligatoire (rien
-    d'écrit sans lui), révision « revision » ; mois clos : la ligne mensuelle ne se révise
-    plus et aucune ligne de ce mois ne s'ajoute ; suppression de ligne en brouillon
+    d'écrit sans lui), révision « revision » ; une BAISSE reste au gestionnaire du budget, une
+    HAUSSE ou une ligne nouvelle relève du niveau groupe ; mois clos : la ligne mensuelle ne
+    se révise plus et aucune ligne de ce mois ne s'ajoute ; suppression de ligne en brouillon
     seulement ; l'historique ne se modifie ni ne se supprime."""
     budget = create_budget(actor=finance_a, year=2025, name="Abidjan 2025", subsidiary=sub_a)
     march = add_line(budget, actor=finance_a, amount="1000", month=3, category="toll")
@@ -628,13 +629,20 @@ def test_6_revisions_are_historised_reasoned_and_closed_months_stay_untouched(
             revise_line(yearly, actor=finance_a, amount="13000", reason=reason)
     yearly.refresh_from_db()
     assert yearly.amount == D("12000.00") and len(history(yearly)) == 1
-    revise_line(yearly, actor=finance_a, amount="13000", reason="Hausse des tarifs de stationnement")
-    assert history(yearly)[-1] == ("revision", D("12000.00"), D("13000.00"),
-                                   "Hausse des tarifs de stationnement", finance_a.pk)
+    # Hausse : niveau groupe seulement (sinon l'enveloppe approuvée ne voudrait rien dire).
+    with pytest.raises(BudgetError, match="niveau groupe"):
+        revise_line(yearly, actor=finance_a, amount="13000", reason="Hausse des tarifs de stationnement")
+    revise_line(yearly, actor=finance_a, amount="11000", reason="Moins de stationnements payants")
+    revise_line(yearly, actor=group_finance, amount="13000", reason="Hausse des tarifs de stationnement")
+    assert history(yearly)[-2:] == [
+        ("revision", D("12000.00"), D("11000.00"), "Moins de stationnements payants", finance_a.pk),
+        ("revision", D("11000.00"), D("13000.00"), "Hausse des tarifs de stationnement", group_finance.pk)]
     with pytest.raises(BudgetError, match="motivée"):
-        add_line(budget, actor=finance_a, amount="300", month=4, category="toll")
-    april = add_line(budget, actor=finance_a, amount="300", month=4, category="toll", reason="Nouveau trajet")
-    assert history(april) == [("revision", None, D("300.00"), "Nouveau trajet", finance_a.pk)]
+        add_line(budget, actor=group_finance, amount="300", month=4, category="toll")
+    with pytest.raises(BudgetError, match="niveau groupe"):
+        add_line(budget, actor=finance_a, amount="300", month=4, category="toll", reason="Nouveau trajet")
+    april = add_line(budget, actor=group_finance, amount="300", month=4, category="toll", reason="Nouveau trajet")
+    assert history(april) == [("revision", None, D("300.00"), "Nouveau trajet", group_finance.pk)]
 
     with pytest.raises(BudgetError, match="brouillon|révisez"):
         remove_line(yearly, actor=finance_a)
@@ -645,11 +653,11 @@ def test_6_revisions_are_historised_reasoned_and_closed_months_stay_untouched(
     with pytest.raises(BudgetError, match="Mois clos"):
         revise_line(march, actor=finance_a, amount="2000", reason="Rattrapage de mars")
     with pytest.raises(BudgetError, match="Mois clos"):
-        add_line(budget, actor=finance_a, amount="100", month=3, category="washing", reason="Oubli")
+        add_line(budget, actor=group_finance, amount="100", month=3, category="washing", reason="Oubli")
     march.refresh_from_db()
     assert march.amount == D("1500.00")
     assert (BudgetLine.objects.count(), BudgetRevision.objects.count()) == (lines_before, revisions_before)
-    add_line(budget, actor=finance_a, amount="100", month=5, category="washing", reason="Lavages de mai")
+    add_line(budget, actor=group_finance, amount="100", month=5, category="washing", reason="Lavages de mai")
 
     # Budget approuvé : son historique ne se réécrit ni ne s'efface, sa ligne non plus.
     revision = march.revisions.get(kind="draft")

@@ -1,0 +1,265 @@
+"use client";
+
+import { forwardRef, useEffect, useState } from "react";
+import { AlertTriangle, ImageOff, X } from "lucide-react";
+
+import { StatusBadge } from "@/components/StatusBadge";
+import { Spinner } from "@/components/ui";
+import { api, openSecureFile } from "@/lib/api";
+import {
+  ASSIGNMENT_STATUS_LABEL, ASSIGNMENT_STATUS_TONE, type AssignmentStatus, type Gauge, type Tone,
+} from "@/lib/carplan";
+import { cn, formatNumber } from "@/lib/utils";
+
+// --- Badges ---------------------------------------------------------------------------------
+
+/** Code de `StatusBadge` portant chaque teinte (réutilisation de sa palette). */
+const TONE_CODE: Record<Tone, string> = {
+  green: "approved", blue: "submitted", amber: "pending_manager", red: "rejected", slate: "closed",
+  violet: "reserved", cyan: "returned",
+};
+
+export function ToneBadge({ tone, label, className }: { tone: Tone; label: string; className?: string }) {
+  return <StatusBadge code={TONE_CODE[tone]} label={label} className={cn("whitespace-nowrap", className)} />;
+}
+
+export function AssignmentStatusBadge({ status, label }: { status: AssignmentStatus | string; label?: string }) {
+  return (
+    <ToneBadge tone={ASSIGNMENT_STATUS_TONE[status] ?? "slate"}
+               label={label ?? ASSIGNMENT_STATUS_LABEL[status as AssignmentStatus] ?? status} />
+  );
+}
+
+// --- Bandeaux -------------------------------------------------------------------------------
+
+export function Notice({ tone = "info", children, className }: {
+  tone?: "info" | "warning" | "danger" | "success"; children: React.ReactNode; className?: string;
+}) {
+  const tones = {
+    info: "border-sky-500/30 bg-sky-500/5 text-sky-800 dark:text-sky-300",
+    warning: "border-amber-500/30 bg-amber-500/5 text-amber-800 dark:text-amber-300",
+    danger: "border-rose-500/30 bg-rose-500/5 text-rose-700 dark:text-rose-300",
+    success: "border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300",
+  };
+  return (
+    <div className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-xs", tones[tone], className)}>
+      {(tone === "warning" || tone === "danger") && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+export type Flash = { tone: "success" | "danger" | "info" | "warning"; text: string } | null;
+
+// --- Formulaires ------------------------------------------------------------------------------
+
+export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  ({ className, rows = 3, ...props }, ref) => (
+    <textarea
+      ref={ref}
+      rows={rows}
+      className={cn(
+        "w-full rounded-lg border border-line bg-surface p-3 text-sm text-ink outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20",
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
+Textarea.displayName = "Textarea";
+
+export function FormError({ message }: { message?: string | null }) {
+  if (!message) return null;
+  return <p className="rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">{message}</p>;
+}
+
+// --- Mise en forme ----------------------------------------------------------------------------
+
+/** Date « AAAA-MM-JJ » lue comme date LOCALE (jamais décalée d'un jour par le fuseau). */
+export function formatDay(value?: string | null): string {
+  if (!value) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+export function formatDateTime(value?: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Mois « AAAA-MM » ou « AAAA-MM-JJ » → « octobre 2026 ». */
+export function formatMonth(value?: string | null): string {
+  if (!value) return "—";
+  const m = /^(\d{4})-(\d{2})/.exec(value);
+  if (!m) return value;
+  return new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+}
+
+/** Montant décimal (texte) ; `null` = non valorisé — jamais affiché comme 0. */
+export function money(value?: string | number | null, currency = "XOF"): string {
+  if (value === null || value === undefined || value === "") return "non valorisé";
+  return `${formatNumber(value)} ${currency}`;
+}
+
+export function km(value?: number | string | null): string {
+  return formatNumber(value, "km");
+}
+
+export function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Valeur d'un `<input type="datetime-local">` pour « maintenant ». */
+export function nowLocalInput(offsetMinutes = 0): string {
+  const d = new Date(Date.now() + offsetMinutes * 60_000);
+  d.setSeconds(0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** `datetime-local` (heure locale) → ISO 8601 avec fuseau. */
+export function localInputToISO(value: string): string {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toISOString();
+}
+
+export function intOrNull(value: string): number | null {
+  if (value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+export function decimalOrNull(value: string): string | null {
+  const v = value.trim().replace(",", ".");
+  return v === "" ? null : v;
+}
+
+// --- Présentation -----------------------------------------------------------------------------
+
+export function InfoRow({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn("min-w-0", className)}>
+      <dt className="text-[11px] font-medium uppercase tracking-wide text-faint">{label}</dt>
+      <dd className="mt-0.5 break-words text-sm text-ink">{children}</dd>
+    </div>
+  );
+}
+
+export function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">{children}</h4>
+      {action}
+    </div>
+  );
+}
+
+/** Jauge de consommation contre un quota (quantités seulement). */
+export function GaugeBar({ label, gauge, unit }: { label: string; gauge: Gauge | null | undefined; unit: string }) {
+  if (!gauge) return null;
+  const pct = gauge.pct ?? null;
+  const width = pct === null ? 0 : Math.min(100, Math.max(0, pct));
+  const tone = gauge.exceeded ? "bg-rose-500" : pct !== null && pct >= 90 ? "bg-amber-500" : "bg-emerald-500";
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2 text-xs">
+        <span className="font-medium text-ink">{label}</span>
+        <span className={cn("tabular-nums", gauge.exceeded ? "font-semibold text-rose-600" : "text-muted")}>
+          {formatNumber(gauge.used)}{gauge.quota !== null ? ` / ${formatNumber(gauge.quota)}` : ""} {unit}
+          {pct !== null && ` · ${formatNumber(pct)} %`}
+        </span>
+      </div>
+      <div className="mt-1 h-2 overflow-hidden rounded-full bg-surface2"
+           role="progressbar" aria-label={label} aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
+        {pct !== null
+          ? <div className={cn("h-full rounded-full transition-all", tone)} style={{ width: `${width}%` }} />
+          : <div className="h-full w-full bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,var(--color-line)_4px,var(--color-line)_8px)]" />}
+      </div>
+      {gauge.quota === null && <p className="mt-0.5 text-[10px] text-faint">Aucun quota fixé</p>}
+      {gauge.exceeded && <p className="mt-0.5 text-[10px] font-medium text-rose-600">Quota dépassé</p>}
+    </div>
+  );
+}
+
+// --- Panneau latéral ---------------------------------------------------------------------------
+
+/** Panneau latéral plein écran sur mobile, à droite sur grand écran. Sous les `Modal`
+ *  (z-[1200]) pour que les dialogues d'action passent au-dessus. */
+export function Drawer({ open, onClose, title, subtitle, children }: {
+  open: boolean; onClose: () => void; title: React.ReactNode; subtitle?: React.ReactNode; children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[1100] flex justify-end bg-slate-900/40" onClick={onClose}>
+      <aside
+        role="dialog"
+        aria-modal="true"
+        className="flex h-full w-full max-w-4xl flex-col bg-canvas shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-line bg-surface px-5 py-4">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-ink">{title}</div>
+            {subtitle && <div className="mt-0.5 text-xs text-muted">{subtitle}</div>}
+          </div>
+          <button onClick={onClose} className="rounded-md p-1.5 text-faint hover:bg-surface2" aria-label="Fermer">
+            <X className="h-5 w-5" />
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
+// --- Images protégées ---------------------------------------------------------------------------
+
+/** Vignette d'un fichier protégé (URL signée + session) : récupérée par l'API, affichée en URL
+ *  objet ; un clic l'ouvre en grand. Jamais d'URL publique. */
+export function SecureImage({ url, alt, className }: { url: string | null; alt: string; className?: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setFailed(false);
+    setSrc(null);
+    api.get<Blob>(url, { responseType: "blob" })
+      .then(({ data }) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(data);
+        setSrc(objectUrl);
+      })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url]);
+
+  const box = cn("flex items-center justify-center overflow-hidden rounded-lg border border-line bg-surface2", className);
+  if (!url || failed) {
+    return <div className={box} title="Image indisponible"><ImageOff className="h-5 w-5 text-faint" /></div>;
+  }
+  if (!src) return <div className={box}><Spinner className="h-4 w-4" /></div>;
+  return (
+    <button type="button" className={box} onClick={() => { void openSecureFile(url).catch(() => undefined); }}
+            title="Ouvrir en grand">
+      {/* eslint-disable-next-line @next/next/no-img-element -- URL objet locale, pas d'optimisation possible */}
+      <img src={src} alt={alt} className="h-full w-full object-cover" />
+    </button>
+  );
+}

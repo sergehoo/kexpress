@@ -5,7 +5,7 @@ développement n'est utilisée ici : SECRET_KEY et ALLOWED_HOSTS sont obligatoir
 Conçu pour tourner derrière un reverse proxy terminant TLS (Traefik / Dokploy).
 """
 from .base import *  # noqa: F401,F403
-from .base import NOTIFY_EMAIL_ENABLED, env
+from .base import env
 
 # --- Sécurité de base -----------------------------------------------------
 DEBUG = False
@@ -54,17 +54,16 @@ DATABASES["default"]["CONN_MAX_AGE"] = env.int("CONN_MAX_AGE", default=60)  # no
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True  # noqa: F405
 
 # --- Email ----------------------------------------------------------------
-# Si les notifications email sont activées, on bascule sur SMTP (sinon console).
-if NOTIFY_EMAIL_ENABLED:
-    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-    EMAIL_HOST = env("EMAIL_HOST", default="")
-    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
-    EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
-    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
-    EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
-    EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
-else:
-    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+# Toujours SMTP en production : les codes d'activation et d'appareil partent par email et ne
+# doivent jamais finir dans les journaux (backend console). `NOTIFY_EMAIL_ENABLED` ne règle
+# que les notifications métier ; `check --deploy` (accounts.E010) signale un SMTP absent.
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 
 # --- Cache partagé (P0) ---------------------------------------------------
 # Les limites de débit (connexion, définition du mot de passe) comptent dans le cache : en

@@ -16,6 +16,10 @@ dépense ou un ajustement de MISSION est réparti entre les filiales des courses
 selon les lignes `CostAllocation` (Σ = montant au centime) — provisoirement par la même clé
 passager-km tant que la dépense n'est qu'engagée.
 
+Car Plan : le coût d'un véhicule DÉTENU par une attribution (énergie hors course, maintenance,
+assurance, charges fixes, loyers) est imputé à la filiale et au centre de coût de l'attribution
+sur ses jours de détention — même somme, autre axe (`apps.carplan.imputation`).
+
 Le barème kilométrique (valorisation interne) n'entre JAMAIS ici : un budget se mesure au
 coût réel. Le réalisé et le décaissé d'un mois CLOS se lisent dans `BudgetActual` (figés à la
 clôture) ; l'ENGAGÉ est toujours relu en direct (état du circuit : il retombe quand l'élément
@@ -41,7 +45,7 @@ ADJUSTMENT_CATEGORY = {"fuel": "energy", "energy": "energy", "maintenance": "mai
 #: où son coût est réalisé, quelle que soit la catégorie saisie sur la pièce).
 SOURCE_CATEGORY = {"fuel_log": "energy", "electric_charge": "energy", "maintenance": "maintenance",
                    "revision": "maintenance", "insurance": "insurance", "inspection": "fixed_charges",
-                   "vehicle_charge": "fixed_charges"}
+                   "vehicle_charge": "fixed_charges", "lease": "fixed_charges"}
 
 
 def _s(value):
@@ -134,8 +138,12 @@ def _expense_lines(expense):
 # --- Cellules d'un mois ----------------------------------------------------------------
 
 
-def live_cells(year: int, month: int) -> Cells:
-    """Engagé / réalisé / décaissé d'un mois, calculés sur les données (mois ouvert)."""
+def live_cells(year: int, month: int, *, accrued: bool = True) -> Cells:
+    """Engagé / réalisé / décaissé d'un mois, calculés sur les données (mois ouvert).
+
+    `accrued=False` (mois À VENIR) : sans les charges courues au jour (assurance, charges
+    fixes, visites, loyers proratisés) — rien ne s'use dans le futur ; une dépense validée, un
+    plein ou une maintenance DATÉS dans ce mois y comptent, eux, normalement."""
     from django.utils.timezone import make_aware
 
     from apps.core.enums import ExpenseSource, ExpenseStatus
@@ -184,41 +192,62 @@ def live_cells(year: int, month: int) -> Cells:
         _split(cells, adj.amount, lines, (adj.subsidiary_id, adj.cost_center_id),
                budget_category(adj.category), measure)
 
+    # Car Plan : un coût rattaché à un véhicule DÉTENU par une attribution est imputé à la
+    # filiale et au centre de coût de l'attribution, sur les seuls jours de détention.
+    from apps.carplan.imputation import Tenures, spread
+
+    tenures = Tenures(first, last)
+
+    def vehicle_axis(vehicle_id, day, owner_subsidiary_id):
+        return (tenures.axis(vehicle_id, day) if tenures else None) or (owner_subsidiary_id, None)
+
     # Énergie (pleins + recharges), centre de coût de la course quand il y en a une.
-    energy = list(FuelLog.objects.filter(date__gte=first, date__lte=last).values_list("subsidiary_id", "trip_id", "amount"))
-    energy += list(ElectricCharge.objects.filter(date__gte=first, date__lte=last)
-                   .values_list("subsidiary_id", "trip_id", "amount"))
-    axes = _trip_axes({trip_id for _, trip_id, _ in energy if trip_id})
-    for subsidiary_id, trip_id, amount in energy:
-        cells.add(subsidiary_id, axes.get(str(trip_id), (None, None))[1] if trip_id else None, "energy",
-                  "realised", amount)
+    fields = ("subsidiary_id", "trip_id", "amount", "vehicle_id", "date")
+    energy = list(FuelLog.objects.filter(date__gte=first, date__lte=last).values_list(*fields))
+    energy += list(ElectricCharge.objects.filter(date__gte=first, date__lte=last).values_list(*fields))
+    axes = _trip_axes({trip_id for _, trip_id, _, _, _ in energy if trip_id})
+    for subsidiary_id, trip_id, amount, vehicle_id, day in energy:
+        if trip_id:
+            cells.add(subsidiary_id, axes.get(str(trip_id), (None, None))[1], "energy", "realised", amount)
+        else:
+            cells.add(*vehicle_axis(vehicle_id, day, subsidiary_id), "energy", "realised", amount)
 
     # Maintenance : terminée → réalisé ; planifiée ou en cours chiffrée → engagé.
     from apps.finance.trip_cost import _maintenance_amount
 
     for record in MaintenanceRecord.objects.filter(status="completed", performed_date__gte=first,
                                                    performed_date__lte=last):
-        cells.add(record.subsidiary_id, None, "maintenance", "realised", _maintenance_amount(record))
+        cells.add(*vehicle_axis(record.vehicle_id, record.performed_date, record.subsidiary_id), "maintenance",
+                  "realised", _maintenance_amount(record))
     for record in MaintenanceRecord.objects.filter(status__in=("planned", "in_progress"), scheduled_date__gte=first,
                                                    scheduled_date__lte=last):
-        cells.add(record.subsidiary_id, None, "maintenance", "engaged", _maintenance_amount(record))
+        cells.add(*vehicle_axis(record.vehicle_id, record.scheduled_date, record.subsidiary_id), "maintenance",
+                  "engaged", _maintenance_amount(record))
     for revision in VehicleRevision.objects.filter(cost__isnull=False, date__gte=first, date__lte=last) \
             .select_related("vehicle"):
-        cells.add(revision.vehicle.subsidiary_id, None, "maintenance", "realised", revision.cost)
+        cells.add(*vehicle_axis(revision.vehicle_id, revision.date, revision.vehicle.subsidiary_id), "maintenance",
+                  "realised", revision.cost)
 
+    if not accrued:
+        return cells
     # Assurance et charges fixes, proratisées au jour (filiale propriétaire du véhicule).
+    def accrue(vehicle, category, amount, start, end):
+        spread(cells, tenures, vehicle.pk, (vehicle.subsidiary_id, None), category, "realised", amount,
+               max(start, first), min(end, last))
+
     for policy in InsurancePolicy.objects.filter(cost__isnull=False, start_date__isnull=False,
                                                  start_date__lte=last, expiry_date__gte=first).select_related("vehicle"):
-        cells.add(policy.vehicle.subsidiary_id, None, "insurance", "realised",
-                  prorate(policy.cost, policy.start_date, policy.expiry_date, year, month))
+        accrue(policy.vehicle, "insurance", prorate(policy.cost, policy.start_date, policy.expiry_date, year, month),
+               policy.start_date, policy.expiry_date)
     for charge in VehicleCharge.objects.filter(period_start__lte=last, period_end__gte=first).select_related("vehicle"):
-        cells.add(charge.vehicle.subsidiary_id, None, "fixed_charges", "realised",
-                  prorate(charge.amount, charge.period_start, charge.period_end, year, month))
+        accrue(charge.vehicle, "fixed_charges",
+               prorate(charge.amount, charge.period_start, charge.period_end, year, month),
+               charge.period_start, charge.period_end)
     for inspection in TechnicalInspection.objects.filter(cost__isnull=False, last_date__isnull=False,
                                                          last_date__lte=last, next_date__gt=first).select_related("vehicle"):
         end_day = max(inspection.last_date, inspection.next_date - timedelta(days=1))
-        cells.add(inspection.vehicle.subsidiary_id, None, "fixed_charges", "realised",
-                  prorate(inspection.cost, inspection.last_date, end_day, year, month))
+        accrue(inspection.vehicle, "fixed_charges", prorate(inspection.cost, inspection.last_date, end_day, year, month),
+               inspection.last_date, end_day)
     # Loyers de leasing / location : charge d'exploitation réelle, proratisée comme en F1.
     from apps.finance.costing import add_months, overlap_days
     from apps.finance.models import VehicleAcquisition
@@ -230,26 +259,45 @@ def live_cells(year: int, month: int) -> Cells:
                if lease.depreciation_months else last)
         days = overlap_days(lease.acquisition_date, end, first, last)
         if days:
-            cells.add(lease.vehicle.subsidiary_id, None, "fixed_charges", "realised",
-                      money(Decimal(lease.monthly_payment) * days / ((last - first).days + 1)))
+            accrue(lease.vehicle, "fixed_charges",
+                   money(Decimal(lease.monthly_payment) * days / ((last - first).days + 1)), lease.acquisition_date, end)
     return cells
 
 
-def month_cells(year: int, month: int, *, engaged_only: bool = False) -> dict:
+def _freeze_unfrozen(year: int, month: int):
+    """Mois clos JAMAIS figé (clos avant F3) : figé à sa première lecture, une fois pour toutes —
+    une assurance ou un loyer saisi après coup ne réécrit plus son réalisé."""
+    from django.db import transaction
+
+    from apps.finance.budget import freeze_period
+    from apps.finance.models import FinancialPeriod
+
+    with transaction.atomic():
+        period = FinancialPeriod.objects.select_for_update().filter(
+            year=year, month=month, status=FinancialPeriod.CLOSED).first()
+        if period is None or period.budget_frozen_at is not None:
+            return period
+        freeze_period(period)
+        period.budget_frozen_at = timezone.now()
+        period.save(update_fields=["budget_frozen_at"])
+        return period
+
+
+def month_cells(year: int, month: int, *, future: bool = False) -> dict:
     """Cellules d'un mois. Clés (filiale, centre, catégorie).
 
-    Mois clos et figé : réalisé et décaissé FIGÉS (`BudgetActual`), engagé relu en direct.
-    Mois clos avant F3 (jamais figé) : calculé sur ses pièces, verrouillées. Mois ouvert :
-    en direct. `engaged_only` (mois à venir) : seulement l'engagé.
+    Mois clos : réalisé et décaissé FIGÉS (`BudgetActual`), engagé relu en direct (un mois
+    clos avant F3 est figé à sa première lecture). Mois ouvert : en direct. Mois à venir
+    (`future`) : en direct, sans les charges courues au jour.
     """
     from apps.finance.models import BudgetActual, FinancialPeriod
 
-    live = dict(live_cells(year, month).items())
-    if engaged_only:
-        return {key: {"engaged": v["engaged"], "realised": ZERO, "disbursed": ZERO}
-                for key, v in live.items() if v["engaged"]}
-    period = FinancialPeriod.objects.filter(year=year, month=month, status=FinancialPeriod.CLOSED,
-                                            budget_frozen_at__isnull=False).first()
+    live = dict(live_cells(year, month, accrued=not future).items())
+    if future:
+        return live
+    period = FinancialPeriod.objects.filter(year=year, month=month, status=FinancialPeriod.CLOSED).first()
+    if period is not None and period.budget_frozen_at is None:
+        period = _freeze_unfrozen(year, month)
     if period is None:
         return live
     cells = {(str(a.subsidiary_id), str(a.cost_center_id) if a.cost_center_id else None, a.category):
@@ -300,7 +348,10 @@ def line_figures(line, cells_by_month: dict, only_month=None) -> dict:
         planned = (planned / 12).quantize(Decimal("0.01"))
     consumed = totals["realised"] + totals["engaged"]
     rate = (consumed / planned * 100).quantize(Decimal("0.01")) if planned else None
-    reached = [t for t in thresholds_for(line) if rate is not None and rate >= t]
+    thresholds = thresholds_for(line)
+    reached = [t for t in thresholds if rate is not None and rate >= t]
+    if rate is None and consumed > 0 and thresholds:
+        reached = thresholds  # prévu nul mais consommé : dépassement total
     return {
         "planned": money(planned), "engaged": money(totals["engaged"]), "realised": money(totals["realised"]),
         "disbursed": money(totals["disbursed"]), "available": money(planned - consumed),
@@ -335,13 +386,14 @@ def _cross_budget_overlap(lines) -> bool:
 
 
 def cells_for_year(year: int) -> dict:
-    """Les 12 mois de l'exercice : passés et en cours complets, à venir en engagé seulement."""
+    """Les 12 mois de l'exercice : passés et en cours complets ; à venir sans charges courues
+    (engagements, et dépenses validées DATÉES dans ces mois)."""
     today = timezone.localdate()
 
     def future(month):
         return (year, month) > (today.year, today.month)
 
-    return {month: month_cells(year, month, engaged_only=future(month)) for month in range(1, 13)}
+    return {month: month_cells(year, month, future=future(month)) for month in range(1, 13)}
 
 
 def visible_budgets(user):

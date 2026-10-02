@@ -10,7 +10,20 @@ l'envoie en `Authorization: Bearer <token>`. Ici on VALIDE ce jeton :
     `azp == OIDC_CLIENT_ID` (ou, à défaut d'azp, `OIDC_CLIENT_ID ∈ aud`), et on
     REFUSE si aucune contrainte n'est configurable (fail-closed).
 Puis on provisionne/synchronise l'utilisateur local SANS jamais écraser le rôle,
-la filiale, ni un `keycloak_sub` déjà attribué (anti-prise de contrôle).
+la filiale, ni un `keycloak_sub` déjà attribué (anti-prise de contrôle). L'email ne fait foi
+que CERTIFIÉ par Keycloak (`email_verified`) : liaison d'un compte existant par email et mise à
+jour de `user.email` l'exigent, et Shield actif, l'adresse reste celle du référentiel RH (jamais
+réécrite depuis Keycloak) — les codes de vérification partent toujours à l'adresse épinglée.
+
+Contrôles d'accès ajoutés (cf. docs/AUTHENTIFICATION.md) :
+  - jeton dont l'authentification (`auth_time`, à défaut `iat`) précède la dernière révocation
+    du compte (`sessions_revoked_at` : « déconnecter partout », blocage…) → 401 `token_revoked` ;
+  - rôles à MFA renforcée (`AUTH_MFA_ROLES`) : preuve de MFA exigée dans le jeton (`amr` ∩
+    `OIDC_MFA_AMR_VALUES` ou `acr` ∈ `OIDC_MFA_ACR_VALUES`), sinon 401 `mfa_required` ;
+  - `AUTH_DEVICE_VERIFICATION` : hors routes de vérification, l'appareil doit avoir été vérifié
+    par OTP (cookie HttpOnly, `apps.accounts.devices`), sinon 401 `device_verification_required` ;
+  - Shield actif : un compte INCONNU n'est plus créé à la volée — seul un employé éligible
+    (`lookup_eligible`) dont Keycloak certifie l'email (`email_verified`) est provisionné.
 """
 from __future__ import annotations
 
@@ -111,18 +124,27 @@ def get_or_provision_user(claims: dict):
     if not sub:
         raise exceptions.AuthenticationFailed("Jeton sans identifiant (sub).")
     email = (claims.get("email") or "").strip().lower()
+    email_verified = claims.get("email_verified") is True
     given = (claims.get("given_name") or "").strip()
     family = (claims.get("family_name") or "").strip()
 
     user = User.objects.filter(keycloak_sub=sub).first()
     if user is None and email:
-        # Lier un compte local pré-existant (ex. admin seedé) à ce sub Keycloak —
-        # mais JAMAIS un compte déjà rattaché à un AUTRE sub (anti-prise de contrôle).
+        # Lier un compte local pré-existant (ex. admin seedé) à ce sub Keycloak — seulement si
+        # Keycloak CERTIFIE l'email (sinon n'importe qui créant un compte K-access à l'adresse
+        # d'un collègue hériterait de son compte), et JAMAIS un compte déjà rattaché à un AUTRE
+        # sub (anti-prise de contrôle).
         candidate = User.objects.filter(email__iexact=email).first()
         if candidate is not None:
             if candidate.keycloak_sub and candidate.keycloak_sub != sub:
                 raise exceptions.AuthenticationFailed("Email déjà lié à un autre compte K-access.")
+            if not email_verified:
+                raise exceptions.AuthenticationFailed(
+                    "Adresse email non vérifiée par K-access : liaison au compte K-Express refusée.")
             user = candidate
+
+    if user is None and getattr(settings, "SHIELD_ENABLED", False):
+        return _provision_from_shield(claims, sub, email)
 
     if user is None:
         user = User(
@@ -138,11 +160,9 @@ def get_or_provision_user(claims: dict):
             with transaction.atomic():
                 user.save()
         except IntegrityError:
-            # Course (deux 1ères requêtes simultanées) → on relit.
-            user = (
-                User.objects.filter(keycloak_sub=sub).first()
-                or User.objects.filter(email__iexact=email).first()
-            )
+            # Course (deux 1ères requêtes simultanées) → on relit PAR SUB uniquement : jamais le
+            # compte qui porterait déjà cet email (ce serait une prise de contrôle).
+            user = User.objects.filter(keycloak_sub=sub).first()
             if user is None:
                 raise exceptions.AuthenticationFailed("Échec de provisioning.")
             return _ensure_active(user)
@@ -154,7 +174,11 @@ def get_or_provision_user(claims: dict):
     if not user.keycloak_sub:
         user.keycloak_sub = sub
         changed.append("keycloak_sub")
-    if email and user.email.lower() != email:
+    if (email and user.email.lower() != email and email_verified
+            and not getattr(settings, "SHIELD_ENABLED", False)
+            and not User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists()):
+        # Email épinglé : mis à jour seulement s'il est certifié par Keycloak et que Shield
+        # (référentiel RH) n'en est pas la source ; jamais l'adresse d'un autre compte.
         user.email = email
         changed.append("email")
     if given and user.first_name != given:
@@ -174,13 +198,108 @@ def _ensure_active(user):
     return user
 
 
+NOT_ACTIVATED = {"detail": "Compte K-Express non activé : activez votre compte depuis la page d'activation.",
+                 "code": "account_not_activated"}
+
+
+def _provision_from_shield(claims: dict, sub: str, email: str):
+    """Shield actif : premier passage SSO d'un compte inconnu → seulement un employé ÉLIGIBLE,
+    dont l'email est certifié par Keycloak (sinon un utilisateur qui changerait son email
+    Keycloak pourrait se faire passer pour un employé)."""
+    from apps.accounts import activation
+
+    if not email or claims.get("email_verified") is not True:
+        raise exceptions.AuthenticationFailed(NOT_ACTIVATED)
+    employee = activation.lookup_eligible(email)
+    if employee is None:
+        raise exceptions.AuthenticationFailed(NOT_ACTIVATED)
+    try:
+        user = activation.provision_user(employee)
+    except Exception:
+        raise exceptions.AuthenticationFailed(NOT_ACTIVATED)
+    if user.keycloak_sub and user.keycloak_sub != sub:
+        raise exceptions.AuthenticationFailed("Email déjà lié à un autre compte K-access.")
+    if not user.keycloak_sub:
+        try:
+            with transaction.atomic():
+                User.objects.filter(pk=user.pk).update(keycloak_sub=sub)
+        except IntegrityError:
+            raise exceptions.AuthenticationFailed("Échec de provisioning.")
+        user.keycloak_sub = sub
+    return _ensure_active(user)
+
+
+MFA_REQUIRED = {"detail": "Votre compte exige une authentification renforcée (MFA) : reconnectez-vous avec "
+                          "votre second facteur.", "code": "mfa_required"}
+DEVICE_VERIFICATION_REQUIRED = {"detail": "Vérification de cet appareil requise : saisissez le code reçu par email.",
+                                "code": "device_verification_required"}
+
+
+def has_mfa_proof(claims: dict) -> bool:
+    amr = claims.get("amr") or []
+    if isinstance(amr, str):
+        amr = [amr]
+    amr_ok = {str(v) for v in amr} & {str(v) for v in getattr(settings, "OIDC_MFA_AMR_VALUES", [])}
+    acr = claims.get("acr")
+    acr_ok = acr is not None and str(acr) in {str(v) for v in getattr(settings, "OIDC_MFA_ACR_VALUES", [])}
+    return bool(amr_ok or acr_ok)
+
+
+def _check_session_rules(user, claims: dict) -> None:
+    from apps.accounts.devices import requires_mfa
+    from apps.accounts.sessions import REVOKED_MESSAGE, issued_before_revocation
+
+    # `auth_time` : instant de l'AUTHENTIFICATION (inchangé par les renouvellements) — une
+    # session Keycloak ouverte avant la révocation ne repart pas d'elle-même.
+    reference = claims.get("auth_time") or claims.get("iat")
+    if issued_before_revocation(user, reference):
+        raise exceptions.AuthenticationFailed({"detail": REVOKED_MESSAGE, "code": "token_revoked"})
+    if requires_mfa(user) and not has_mfa_proof(claims):
+        raise exceptions.AuthenticationFailed(MFA_REQUIRED)
+
+
+def _mark_activated(user) -> None:
+    """Première connexion SSO réussie : le compte est activé (plus d'activation à refaire)."""
+    if getattr(user, "activated_at", None) is None:
+        from django.utils import timezone
+
+        user.activated_at = timezone.now()
+        User.objects.filter(pk=user.pk, activated_at__isnull=True).update(activated_at=user.activated_at)
+
+
 def authenticate_keycloak_token(token: str):
-    """Valide un jeton et renvoie l'utilisateur (utilisé aussi par le WebSocket)."""
-    return get_or_provision_user(decode_keycloak_token(token))
+    """Valide un jeton et renvoie l'utilisateur (utilisé aussi par le WebSocket) : signature,
+    émetteur, audience, révocation du compte, MFA des rôles sensibles."""
+    claims = decode_keycloak_token(token)
+    user = get_or_provision_user(claims)
+    _check_session_rules(user, claims)
+    _mark_activated(user)
+    return user
+
+
+def _issued_by_keycloak(token: str) -> bool:
+    """Lecture NON vérifiée de l'émetteur, pour aiguiller seulement : un jeton qui se dit émis
+    par le realm est ensuite entièrement vérifié (signature RS256, iss, aud…) ; les autres
+    (jetons locaux HS256, sans `iss`) sont laissés à `RevocableJWTAuthentication`."""
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.InvalidTokenError:
+        return True  # illisible : la vérification complète le refusera
+    return claims.get("iss") == settings.OIDC_ISSUER or "user_id" not in claims
+
+
+#: Routes accessibles sans appareil vérifié (pour pouvoir le vérifier, ou se déconnecter).
+DEVICE_EXEMPT_PREFIXES = ("/api/auth/device/", "/api/auth/logout/")
+
+
+def _device_exempt(request) -> bool:
+    path = getattr(request, "path", "") or ""
+    return path.startswith(DEVICE_EXEMPT_PREFIXES)
 
 
 class KeycloakAuthentication(authentication.BaseAuthentication):
-    """Authentifie les requêtes DRF via un jeton d'accès Keycloak (Bearer)."""
+    """Authentifie les requêtes DRF via un jeton d'accès Keycloak (Bearer), puis exige un
+    appareil vérifié par OTP (`AUTH_DEVICE_VERIFICATION`) hors routes de vérification."""
 
     def authenticate(self, request):
         if not settings.OIDC_ENABLED:
@@ -189,7 +308,17 @@ class KeycloakAuthentication(authentication.BaseAuthentication):
         if not header or header[0].lower() != b"bearer" or len(header) != 2:
             return None
         token = header[1].decode("utf-8", "ignore")
-        return (authenticate_keycloak_token(token), token)
+        if not _issued_by_keycloak(token):
+            # Jeton local (SimpleJWT) : authentificateur suivant, qui ne l'accepte en mode SSO
+            # que pour l'accès de secours des super-administrateurs (`local_credentials_allowed`).
+            return None
+        user = authenticate_keycloak_token(token)
+        if getattr(settings, "AUTH_DEVICE_VERIFICATION", True) and not _device_exempt(request):
+            from apps.accounts import devices
+
+            if not devices.request_has_verified_device(request, user):
+                raise exceptions.AuthenticationFailed(DEVICE_VERIFICATION_REQUIRED)
+        return (user, token)
 
     def authenticate_header(self, request):
         return 'Bearer realm="kexpress"'

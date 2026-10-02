@@ -34,11 +34,13 @@ import { Modal } from "@/components/Modal";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { StatChips } from "@/components/StatChips";
 import { TripPricingSettings } from "@/components/TripPricingSettings";
+import { CarPlanSettings } from "@/components/carplan/CarPlanSettings";
 import { CostCentersSettings } from "@/components/finance/CostCentersSettings";
 import { ExpenseSettings } from "@/components/finance/ExpenseSettings";
+import { DevicesPanel } from "@/components/account/DevicesPanel";
 import { useEmployees, useSubsidiaries } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
-import { canFinance } from "@/lib/rbac";
+import { canCarPlan, canFinance } from "@/lib/rbac";
 import { useTheme } from "@/lib/theme";
 import { subscribePush } from "@/lib/push";
 import { api, apiError, tokens } from "@/lib/api";
@@ -65,11 +67,13 @@ export default function SettingsPage() {
   // Le barème se CONSULTE avec `view_trip_cost` et se MODIFIE avec `manage_trip_pricing` ;
   // l'API applique la même règle, cet onglet ne fait que s'y conformer.
   const seesFinance = canFinance(me, "view_trip_cost");
-  const [tab, setTab] = useState<"account" | "users" | "finance">("account");
+  const seesCarPlan = canCarPlan(me, "view_carplan");
+  const [tab, setTab] = useState<"account" | "users" | "finance" | "carplan">("account");
   const tabs = [
     ["account", User, "Mon compte"] as const,
     ...(isAdmin ? [["users", Users, "Utilisateurs"] as const] : []),
     ...(seesFinance ? [["finance", Wallet, "Finance & Coûts"] as const] : []),
+    ...(seesCarPlan ? [["carplan", KeyRound, "Car Plan"] as const] : []),
   ];
 
   return (
@@ -95,6 +99,7 @@ export default function SettingsPage() {
         : tab === "finance" && seesFinance ? (
           <div className="space-y-5"><TripPricingSettings /><CostCentersSettings /><ExpenseSettings /></div>
         )
+        : tab === "carplan" && seesCarPlan ? <CarPlanSettings />
         : <AccountPanel />}
     </div>
   );
@@ -348,6 +353,7 @@ function AccountPanel() {
           <Row label="Isolation des données" value="Par filiale" />
         </CardBody>
       </Card>
+      <DevicesPanel />
     </div>
   );
 }
@@ -434,7 +440,8 @@ function UsersPanel() {
 
   function submitUser(values: Record<string, unknown>) {
     setError("");
-    if (values.subsidiary === "") values.subsidiary = null;
+    // Le formulaire omet un champ vidé : « — (périmètre entreprise) » doit bien retirer la filiale.
+    if (values.subsidiary === "" || (modal?.type === "edit" && !("subsidiary" in values))) values.subsidiary = null;
     if (!values.password) delete values.password;
     const onError = (e: unknown) => setError(apiError(e));
     if (modal?.type === "edit") {
@@ -550,9 +557,12 @@ function UsersPanel() {
                               onClick={() => run(`Invitation envoyée à ${u.email}.`, u.id, () => api.post(`/employees/${u.id}/invite/`, {}))}>
                               <Mail className="h-4 w-4" />
                             </IconBtn>
-                            <IconBtn title="Définir / réinitialiser le mot de passe (local)" onClick={() => { setError(""); setModal({ type: "set-password", row: u }); }}>
-                              <KeyRound className="h-4 w-4" />
-                            </IconBtn>
+                            {/* Son propre mot de passe se change depuis le profil (mot de passe actuel requis). */}
+                            {!self && (
+                              <IconBtn title="Définir / réinitialiser le mot de passe (local)" onClick={() => { setError(""); setModal({ type: "set-password", row: u }); }}>
+                                <KeyRound className="h-4 w-4" />
+                              </IconBtn>
+                            )}
                             {/* --- Actions K-access --- */}
                             <IconBtn title="Synchroniser avec K-access" disabled={busyId === u.id}
                               onClick={() => run("Synchronisé avec K-access.", u.id, () => api.post(`/employees/${u.id}/keycloak-sync/`, {}))}>

@@ -103,6 +103,16 @@ class ReservationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"estimated_return": "Le retour estimé (fin de mission) doit être postérieur au départ du retour."}
                 )
+        # Car Plan : un véhicule de fonction / service attribué ne sert pas une réservation de la
+        # flotte mutualisée (sauf mise à disposition), même saisi directement dans la demande.
+        # Revérifié aussi quand seuls les horaires changent (le véhicule garde sa valeur).
+        vehicle = attrs["vehicle"] if "vehicle" in attrs else (inst.vehicle if inst is not None else None)
+        if vehicle is not None:
+            from apps.carplan.selectors import pool_block_reason
+
+            blocked = pool_block_reason(vehicle, val("departure_time"), val("estimated_return"))
+            if blocked:
+                raise serializers.ValidationError({"vehicle": blocked})
         return attrs
 
     class Meta:

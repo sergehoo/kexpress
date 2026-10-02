@@ -19,6 +19,11 @@ export interface Me {
   /** Permissions `finance.*` effectives. Sert à ne pas afficher d'écran vide : la
    *  confidentialité est assurée par l'API, qui ne sert aucun montant sans ce droit. */
   finance_permissions?: string[];
+  /** Permissions `carplan.*` effectives (gestion Car Plan) — affichage seulement, l'API reste
+   *  la barrière. */
+  carplan_permissions?: string[];
+  /** Accès « Mon véhicule » : ouvert par la seule attribution valide de l'utilisateur. */
+  car_plan?: { has_vehicle: boolean; assignment: string | null; status: string | null };
 }
 
 export interface Paginated<T> {

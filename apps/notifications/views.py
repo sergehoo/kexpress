@@ -56,15 +56,11 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     filterset_fields = ["is_read", "severity"]
 
     def get_queryset(self):
-        qs = Notification.objects.filter(recipient=self.request.user)
-        # Une alerte budgétaire porte des montants : elle ne se relit qu'avec le droit de lire
-        # les budgets AUJOURD'HUI (un profil rétrogradé ne retrouve pas d'anciens montants).
-        from apps.core.enums import NotificationType
-        from apps.finance import permissions as finance_perms
+        # Droits d'AUJOURD'HUI : un profil rétrogradé ou muté ne relit ni les alertes d'un budget
+        # qu'il ne voit plus, ni (cf. serializer) les montants qu'il n'a plus le droit de lire.
+        from apps.notifications.visibility import visible_notifications
 
-        if not finance_perms.can(self.request.user, finance_perms.VIEW_BUDGETS):
-            qs = qs.exclude(notification_type=NotificationType.BUDGET_ALERT)
-        return qs
+        return visible_notifications(self.request.user, Notification.objects.filter(recipient=self.request.user))
 
     @action(detail=False, methods=["get"])
     def unread_count(self, request):
@@ -126,16 +122,31 @@ class EmailLogViewSet(viewsets.ReadOnlyModelViewSet):
             return qs
         if u.role == RoleChoices.SUBSIDIARY_ADMIN and u.subsidiary_id:
             return qs.filter(recipient__subsidiary_id=u.subsidiary_id)
-        return qs.filter(recipient=u)
+        from django.db.models import Q
+
+        from apps.notifications.models import Notification
+        from apps.notifications.visibility import visible_notifications
+
+        mine = visible_notifications(u, Notification.objects.filter(recipient=u))
+        return qs.filter(recipient=u).filter(Q(notification__isnull=True) | Q(notification__in=mine))
 
     @action(detail=True, methods=["post"])
     def resend(self, request, pk=None):
         """Relance manuelle : renvoie l'email de la notification d'origine."""
         from apps.notifications.services import send_email_for
 
+        from apps.notifications.visibility import AMOUNT, can_read_amounts, notification_visible_to
+
         log = self.get_object()
         if not log.notification:
             return Response({"detail": "Notification d'origine introuvable."}, status=400)
+        # Le destinataire relit-il encore ce contenu ? Rétrogradé ou muté, il ne reçoit pas à
+        # nouveau des montants qu'il n'a plus le droit de voir.
+        notification, recipient = log.notification, log.notification.recipient
+        carries_amounts = bool(AMOUNT.search(f"{notification.title}\n{notification.message}"))
+        if not notification_visible_to(notification, recipient) or (carries_amounts and not can_read_amounts(recipient)):
+            return Response({"detail": "Son destinataire n'a plus accès à ce contenu : relance impossible."},
+                            status=403)
         new_log = send_email_for(log.notification, force=True)
         return Response({
             "detail": "Relance effectuée." if new_log and new_log.status == "sent"

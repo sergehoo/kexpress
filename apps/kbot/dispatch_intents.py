@@ -290,7 +290,9 @@ def best_vehicle_for_return(user, qs, origin=None) -> dict:
     target = returns[0]
     pickup = _point(target, "origin") or origin
     candidates = []
-    for vehicle in qs["vehicles"].filter(
+    from apps.carplan.selectors import pool_vehicles
+
+    for vehicle in pool_vehicles(qs["vehicles"]).filter(
         status=VehicleStatus.AVAILABLE,
         capacity__gte=(target.reservation.passengers if target.reservation_id else 1),
     ).select_related("subsidiary")[:50]:

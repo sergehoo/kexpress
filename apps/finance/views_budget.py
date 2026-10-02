@@ -52,7 +52,9 @@ class BudgetSerializer(serializers.ModelSerializer):
                   "alert_thresholds", "created_by", "created_by_name", "approved_by", "approved_by_name",
                   "approved_at", "lines", "planned_total", "created_at"]
         read_only_fields = ["status", "currency", "created_by", "approved_by", "approved_at"]
-        extra_kwargs = {"subsidiary": {"required": False, "allow_null": True}}
+        extra_kwargs = {"subsidiary": {"required": False, "allow_null": True},
+                        # Vide : « Budget <année> » (cf. `create_budget`), comme l'annonce le formulaire.
+                        "name": {"required": False, "allow_blank": True}}
 
     def get_subsidiary_name(self, obj):
         return obj.subsidiary.name if obj.subsidiary_id else "Groupe"

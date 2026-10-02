@@ -90,14 +90,19 @@ def test_valid_token_provisions_user(db, keys):
 
 @override_settings(**OIDC)
 def test_links_existing_local_account_by_email_without_touching_role(db, keys, sub_a):
-    """Un compte local pré-existant est lié au sub ; son rôle/filiale sont conservés."""
+    """Un compte local pré-existant est lié au sub — seulement si Keycloak CERTIFIE l'email
+    (`email_verified`) ; son rôle/filiale sont conservés."""
     from apps.accounts.models import User
 
     existing = User.objects.create_user(
         email="boss@kaydan.ci", password="x", role="fleet_manager", subsidiary=sub_a
     )
     priv, _ = keys
-    user = auth_mod.authenticate_keycloak_token(make_token(priv, email="boss@kaydan.ci"))
+    with pytest.raises(AuthenticationFailed):  # email non certifié : aucune liaison
+        auth_mod.authenticate_keycloak_token(make_token(priv, email="boss@kaydan.ci"))
+    existing.refresh_from_db()
+    assert existing.keycloak_sub is None
+    user = auth_mod.authenticate_keycloak_token(make_token(priv, email="boss@kaydan.ci", email_verified=True))
     assert user.id == existing.id
     assert user.keycloak_sub == "kc-sub-1"
     assert user.role == "fleet_manager"  # NON écrasé
@@ -197,7 +202,8 @@ def test_strict_audience_enforced(db, keys):
         auth_mod.authenticate_keycloak_token(make_token(priv, aud="autre"))
 
 
-@override_settings(**OIDC)
+# La vérification d'appareil (activée par défaut) est couverte par tests/test_auth_oidc.py.
+@override_settings(**OIDC, AUTH_DEVICE_VERIFICATION=False)
 def test_drf_authentication_via_bearer_header(db, keys):
     from rest_framework.test import APIRequestFactory
 
@@ -210,15 +216,20 @@ def test_drf_authentication_via_bearer_header(db, keys):
 # --- Accès de secours (break-glass) -----------------------------------------
 
 @override_settings(**OIDC)
-def test_local_login_allows_any_active_user(db):
-    """Connexion locale par mot de passe ouverte à tout utilisateur (même avec OIDC actif)."""
+def test_local_login_with_sso_is_reserved_to_break_glass_super_admins(db):
+    """OIDC actif : la connexion locale par mot de passe est l'accès de secours des
+    super-administrateurs (toujours suivie d'un code, cf. tests/test_auth_oidc.py) ; pour tout
+    autre compte, refus identique à des identifiants faux — le SSO et sa MFA restent l'unique
+    système d'authentification (revue adversariale n° 3)."""
     from apps.accounts.models import User
     from apps.accounts.views import LocalTokenSerializer
 
     User.objects.create_user(email="emp@kaydan.ci", password="motdepasse1")
-    ser = LocalTokenSerializer(data={"email": "emp@kaydan.ci", "password": "motdepasse1"})
+    with pytest.raises(AuthenticationFailed):
+        LocalTokenSerializer(data={"email": "emp@kaydan.ci", "password": "motdepasse1"}).is_valid()
+    User.objects.create_superuser(email="root@kaydan.ci", password="motdepasse1")
+    ser = LocalTokenSerializer(data={"email": "root@kaydan.ci", "password": "motdepasse1"})
     assert ser.is_valid(), ser.errors
-    assert "access" in ser.validated_data
 
 
 @override_settings(**dict(OIDC, LOCAL_LOGIN_ENABLED=False))

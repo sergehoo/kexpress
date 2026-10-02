@@ -32,6 +32,8 @@ const SOURCES = [
   { value: "maintenance", label: "Maintenance" }, { value: "insurance", label: "Assurance" },
   { value: "inspection", label: "Visite technique" }, { value: "revision", label: "Révision" },
   { value: "vehicle_charge", label: "Charge véhicule" },
+  // Facture de loyer d'un véhicule en leasing / location : le contrat porte déjà le coût.
+  { value: "lease", label: "Loyer de leasing / location (contrat du véhicule)" },
 ];
 
 type Values = Record<string, string>;

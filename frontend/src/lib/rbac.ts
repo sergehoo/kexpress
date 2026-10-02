@@ -43,6 +43,8 @@ export const PAGE_ROLES: Record<string, Role[]> = {
   // Organisation
   "/subsidiaries": ADMINS,
   "/employees": ADMINS,
+  // Référentiel RH Kaydan Shield : données de tout le groupe (auditeur en lecture).
+  "/hr-sync": ["super_admin", "company_admin", "auditor"],
   "/incidents": [...MANAGERS, "driver", "auditor"],
   "/alerts": [...MANAGERS, "department_manager", "finance"],
   // Système
@@ -86,12 +88,25 @@ const PAGE_PERMISSIONS: Record<string, string> = {
   "/finance": "view_trip_cost",
 };
 
-export function canAccessPage(
-  me: { role: string; finance_permissions?: string[] }, pathname: string,
-): boolean {
-  const entry = Object.entries(PAGE_PERMISSIONS).find(
-    ([prefix]) => pathname === prefix || pathname.startsWith(prefix + "/"),
-  );
+type AccessProfile = {
+  role: string;
+  finance_permissions?: string[];
+  carplan_permissions?: string[];
+  car_plan?: { has_vehicle?: boolean } | null;
+};
+
+/** Permission Car Plan effective (`view_carplan`, `manage_carplan_assignments`…) — affichage. */
+export function canCarPlan(me: AccessProfile | null | undefined, codename: string): boolean {
+  return !!me?.carplan_permissions?.includes(codename);
+}
+
+export function canAccessPage(me: AccessProfile, pathname: string): boolean {
+  const matches = (prefix: string) => pathname === prefix || pathname.startsWith(prefix + "/");
+  // Car Plan : la gestion suit la permission, « Mon véhicule » la seule attribution valide
+  // (calculée par l'API) — jamais un rôle.
+  if (matches("/car-plan")) return canCarPlan(me, "view_carplan");
+  if (matches("/my-vehicle")) return !!me.car_plan?.has_vehicle;
+  const entry = Object.entries(PAGE_PERMISSIONS).find(([prefix]) => matches(prefix));
   if (entry) return canFinance(me, entry[1]);
   return canAccess(me.role, pathname);
 }

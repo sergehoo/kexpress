@@ -616,6 +616,14 @@ def test_6_subsidiary_finance_manages_its_own_subsidiary_budget(
     unmotivated = api.patch(f"{LINES}{line_id}/", {"amount": "160000"}, format="json")
     assert unmotivated.status_code == 400 and "motif" in str(unmotivated.json())
     assert BudgetLine.objects.get(pk=line_id).amount == Decimal("150000.00")
+    # Approuvé : une hausse ou une ligne nouvelle relève du niveau groupe ; la baisse reste à A.
+    refused = api.patch(f"{LINES}{line_id}/", {"amount": "160000", "reason": "Hausse des tarifs"}, format="json")
+    assert refused.status_code == 400 and "niveau groupe" in str(refused.json())
+    assert api.post(f"{BUDGETS}{budget_id}/lines/", {"amount": "9000", "category": "toll",
+                                                     "reason": "Nouveau péage"}, format="json").status_code == 400
+    lowered = api.patch(f"{LINES}{line_id}/", {"amount": "140000", "reason": "Moins de trajets"}, format="json")
+    assert lowered.status_code == 200 and lowered.json()["amount"] == "140000.00"
+    api.force_authenticate(company_admin)
     revised = api.patch(f"{LINES}{line_id}/", {"amount": "160000", "reason": "Hausse des tarifs"}, format="json")
     assert revised.status_code == 200 and revised.json()["amount"] == "160000.00"
     assert api.post(f"{BUDGETS}{budget_id}/lines/", {"amount": "9000", "category": "toll"},
@@ -623,6 +631,7 @@ def test_6_subsidiary_finance_manages_its_own_subsidiary_budget(
     added = api.post(f"{BUDGETS}{budget_id}/lines/", {"amount": "9000", "category": "toll",
                                                       "reason": "Nouveau péage"}, format="json")
     assert added.status_code == 201
+    api.force_authenticate(fin_a)
     assert api.delete(f"{LINES}{line_id}/").status_code == 400  # approuvé : on révise, on ne supprime pas
 
     history = api.get(f"{LINES}{line_id}/revisions/")
@@ -630,7 +639,8 @@ def test_6_subsidiary_finance_manages_its_own_subsidiary_budget(
     assert [(r["kind"], r["previous_amount"], r["new_amount"], r["reason"]) for r in history.json()] == [
         ("initial", None, "120000.00", ""),
         ("draft", "120000.00", "150000.00", ""),
-        ("revision", "150000.00", "160000.00", "Hausse des tarifs"),
+        ("revision", "150000.00", "140000.00", "Moins de trajets"),
+        ("revision", "140000.00", "160000.00", "Hausse des tarifs"),
     ]
     assert BudgetRevision.objects.get(line_id=added.json()["id"]).kind == "revision"
 

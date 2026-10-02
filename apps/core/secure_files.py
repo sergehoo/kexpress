@@ -111,10 +111,22 @@ def _finance_attachment(user, attachment) -> bool:
     return user.has_perm("finance.view_expense") and _in_scope(user, attachment.subsidiary_id)
 
 
+def _carplan_record(user, record) -> bool:
+    """Car Plan (photos et PV d'état des lieux, photo d'incident) : le BÉNÉFICIAIRE de
+    l'attribution, et les gestionnaires Car Plan de son périmètre — pas les collègues."""
+    assignment = getattr(record, "assignment", None) or record.inspection.assignment
+    if assignment.beneficiary_id == user.pk:
+        return True
+    return user.has_perm("carplan.view_carplan") and _in_scope(user, assignment.subsidiary_id)
+
+
 #: (app_label, modèle, champ) → règle. Un champ fichier absent d'ici n'est JAMAIS servi.
 POLICIES = {
     ("organizations", "company", "logo"): _any_authenticated,
     ("vehicles", "vehicle", "photo"): _any_authenticated,  # flotte mutualisée, sans enjeu
+    ("carplan", "carplaninspection", "pv_pdf"): _carplan_record,
+    ("carplan", "carplaninspectionphoto", "image"): _carplan_record,
+    ("carplan", "carplanincident", "photo"): _carplan_record,
     ("vehicles", "vehicledocument", "file"): _vehicle_manager,
     ("vehicles", "insurancepolicy", "document"): _vehicle_cost_document,
     ("vehicles", "technicalinspection", "document"): _vehicle_cost_document,

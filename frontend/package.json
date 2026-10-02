@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "check:carto": "node scripts/check-carto.mjs",
+    "test:map": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"tests/**/*.test.mjs\"",
     "start": "next start",
     "lint": "next lint"
   },

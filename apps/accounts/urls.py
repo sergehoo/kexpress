@@ -1,17 +1,33 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
+from rest_framework_simplejwt.views import TokenVerifyView
 
-from apps.accounts.views import ChangePasswordView, LocalTokenView, MeView, PasswordSetupView
+from apps.accounts import views
 
 app_name = "accounts"
 
 urlpatterns = [
-    # Connexion locale par mot de passe (alternative au SSO Keycloak).
-    path("token/", LocalTokenView.as_view(), name="token_obtain_pair"),
-    path("refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    # Connexion locale par mot de passe (alternative au SSO Keycloak) → session ou OTP.
+    path("token/", views.LocalTokenView.as_view(), name="token_obtain_pair"),
+    path("token/otp/", views.LoginOtpView.as_view(), name="token_otp"),
+    path("token/otp/resend/", views.LoginOtpResendView.as_view(), name="token_otp_resend"),
+    # Session : rafraîchissement par cookie HttpOnly, déconnexion (cet appareil / tous).
+    path("refresh/", views.CookieTokenRefreshView.as_view(), name="token_refresh"),
+    path("logout/", views.LogoutView.as_view(), name="logout"),
     path("verify/", TokenVerifyView.as_view(), name="token_verify"),
-    path("me/", MeView.as_view(), name="me"),
-    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
+    path("me/", views.MeView.as_view(), name="me"),
+    path("change-password/", views.ChangePasswordView.as_view(), name="change-password"),
     # Invitation : le titulaire définit lui-même son mot de passe (aucun mot de passe par défaut).
-    path("password-setup/", PasswordSetupView.as_view(), name="password-setup"),
+    path("password-setup/", views.PasswordSetupView.as_view(), name="password-setup"),
+    # Activation par l'employé (première connexion) : email → OTP → mot de passe.
+    path("activation/start/", views.ActivationStartView.as_view(), name="activation-start"),
+    path("activation/verify/", views.ActivationVerifyView.as_view(), name="activation-verify"),
+    path("activation/complete/", views.ActivationCompleteView.as_view(), name="activation-complete"),
+    # Appareils reconnus.
+    path("devices/", views.DeviceListView.as_view(), name="devices"),
+    path("devices/revoke-all/", views.DeviceRevokeAllView.as_view(), name="devices-revoke-all"),
+    path("devices/<uuid:pk>/", views.DeviceDetailView.as_view(), name="device-detail"),
+    # Vérification de l'appareil courant (mode SSO).
+    path("device/status/", views.DeviceStatusView.as_view(), name="device-status"),
+    path("device/challenge/", views.DeviceChallengeView.as_view(), name="device-challenge"),
+    path("device/verify/", views.DeviceVerifyView.as_view(), name="device-verify"),
 ]

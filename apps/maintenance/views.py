@@ -38,12 +38,27 @@ class MaintenanceForecastView(APIView):
         })
 
 
+class ReferenceWritePermission(IsAuthenticated):
+    """Référentiels partagés : lecture pour tous ; écriture pour l'exploitation et les
+    administrateurs — jamais l'auditeur (D7), le demandeur ni le chauffeur."""
+
+    WRITERS = {"super_admin", "company_admin", "subsidiary_admin", "fleet_manager"}
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return True
+        user = request.user
+        return bool(user.is_superuser or user.role in self.WRITERS)
+
+
 class MaintenanceTypeViewSet(viewsets.ModelViewSet):
     """Types de maintenance (référentiel partagé)."""
 
     queryset = MaintenanceType.objects.all().order_by("name")
     serializer_class = MaintenanceTypeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [ReferenceWritePermission]
     search_fields = ["name"]
 
 
@@ -52,7 +67,7 @@ class BreakdownTypeViewSet(viewsets.ModelViewSet):
 
     queryset = BreakdownType.objects.all().order_by("name")
     serializer_class = BreakdownTypeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [ReferenceWritePermission]
     search_fields = ["name"]
 
 

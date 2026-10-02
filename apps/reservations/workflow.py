@@ -178,6 +178,11 @@ def check_vehicle_assignable(vehicle, reservation) -> None:
     check_capacity(vehicle, reservation.passengers)
     if vehicle.status in (VehicleStatus.MAINTENANCE, VehicleStatus.OUT_OF_SERVICE):
         raise WorkflowError(f"Véhicule indisponible (état : {vehicle.get_status_display()}).")
+    from apps.carplan.selectors import pool_block_reason, pool_vehicles
+
+    blocked = pool_block_reason(vehicle, reservation.departure_time, reservation.estimated_return)
+    if blocked:
+        raise WorkflowError(blocked)
 
     # Conformité administrative & technique : assurance/visite expirée ou
     # révision dépassée → affectation interdite, avec raison + alternative.
@@ -190,9 +195,9 @@ def check_vehicle_assignable(vehicle, reservation) -> None:
         reasons = " ; ".join(i["label"] for i in issues)
         alt = next(
             (
-                v for v in Vehicle.objects.filter(
+                v for v in pool_vehicles(Vehicle.objects.filter(
                     status=VehicleStatus.AVAILABLE, capacity__gte=reservation.passengers
-                ).exclude(pk=vehicle.pk)
+                ).exclude(pk=vehicle.pk), reservation.departure_time, reservation.estimated_return)
                 if is_compliant(v) and not vehicle_conflicts(v, reservation).exists()
             ),
             None,

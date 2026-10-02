@@ -85,8 +85,14 @@ def test_subsidiary_admin_cannot_create_a_group_finance_account(api, admin_a, su
     assert response.status_code == 403
     target.refresh_from_db()
     assert target.subsidiary_id == sub_a.pk and target.role == RoleChoices.REQUESTER
-    # Un financier DE SA filiale reste possible.
+    # Revue F3 + P0 : même DANS sa filiale, l'admin de filiale n'attribue pas un rôle Finance —
+    # il conférerait validation et paiement, qu'il n'a pas ; le super administrateur le peut.
+    assert api.patch(url, {"role": "finance"}, format="json").status_code == 403
+    root = User.objects.create_user("rv-root@test.io", "Racine-Solide-91", role=RoleChoices.SUPER_ADMIN)
+    api.force_authenticate(root)
     assert api.patch(url, {"role": "finance"}, format="json").status_code == 200
+    target.refresh_from_db()
+    assert target.role == RoleChoices.FINANCE and target.subsidiary_id == sub_a.pk
 
 
 # --- Montants patrimoniaux -------------------------------------------------------

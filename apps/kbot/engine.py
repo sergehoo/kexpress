@@ -15,6 +15,7 @@ from django.db.models import Count, Sum
 from django.utils import timezone
 
 from apps.analytics.scope import scoped
+from apps.carplan.selectors import pool_vehicles
 from apps.kbot import blocks as B
 
 
@@ -246,9 +247,9 @@ def answer_question(user, question: str, origin=None, context: dict | None = Non
 
 def _available_vehicles(qs) -> dict:
     avail = list(
-        qs["vehicles"].filter(status="available").select_related("subsidiary").order_by("subsidiary__name", "registration")[:50]
+        pool_vehicles(qs["vehicles"]).filter(status="available").select_related("subsidiary").order_by("subsidiary__name", "registration")[:50]
     )
-    total = qs["vehicles"].filter(status="available").count()
+    total = pool_vehicles(qs["vehicles"]).filter(status="available").count()
     if not avail:
         return B.respond("available_vehicles", answer="Aucun véhicule n'est disponible actuellement.",
                          blocks=[B.alert("info", "Aucun véhicule disponible sur votre périmètre.")],
@@ -664,9 +665,10 @@ def _trip_diagnosis(qs) -> dict:
 # --- Intentions : routage (origine = position du demandeur) -----------------
 
 def _nearest_vehicle(qs, origin) -> dict:
-    located = qs["vehicles"].filter(status="available", last_location__isnull=False).select_related("last_location")
+    located = pool_vehicles(qs["vehicles"]).filter(status="available", last_location__isnull=False) \
+        .select_related("last_location")
     if origin is None:
-        n = qs["vehicles"].filter(status="available").count()
+        n = pool_vehicles(qs["vehicles"]).filter(status="available").count()
         return B.respond("nearest_vehicle",
                          answer=f"{n} véhicule(s) disponible(s). Partagez votre position ou choisissez un point sur la carte pour le plus proche.",
                          blocks=[B.paragraph(f"{n} véhicule(s) disponible(s). Pour le plus proche par temps de trajet réel, ouvrez la carte (/map).")],
@@ -808,7 +810,7 @@ def _build_context(user, qs) -> str:
     lines = [f"Périmètre : {'entreprise (toutes filiales)' if user.has_company_scope else (user.subsidiary.name if user.subsidiary_id else 'aucun')}."]
     status_rows = qs["vehicles"].values("status").annotate(n=Count("id"))
     lines.append("Véhicules par statut : " + (", ".join(f"{r['status']}={r['n']}" for r in status_rows) or "aucun"))
-    avail = list(qs["vehicles"].filter(status="available").values_list("registration", flat=True)[:15])
+    avail = list(pool_vehicles(qs["vehicles"]).filter(status="available").values_list("registration", flat=True)[:15])
     lines.append("Véhicules disponibles : " + (", ".join(avail) if avail else "aucun"))
     drv = list(qs["drivers"].filter(is_available=True).values_list("first_name", "last_name")[:15])
     lines.append("Chauffeurs disponibles : " + (", ".join(f"{f} {l}" for f, l in drv) if drv else "aucun"))
