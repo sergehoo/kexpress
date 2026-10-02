@@ -10,6 +10,7 @@ import {
   EyeOff,
   History,
   KeyRound,
+  Mail,
   Lock,
   MailCheck,
   Moon,
@@ -25,17 +26,22 @@ import {
   User,
   UserCog,
   Users,
+  Wallet,
 } from "lucide-react";
 
 import { Button, Card, CardBody, CardHeader, CardTitle, EmptyState, Input, Label, Select, Spinner } from "@/components/ui";
 import { Modal } from "@/components/Modal";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { StatChips } from "@/components/StatChips";
+import { TripPricingSettings } from "@/components/TripPricingSettings";
+import { CostCentersSettings } from "@/components/finance/CostCentersSettings";
+import { ExpenseSettings } from "@/components/finance/ExpenseSettings";
 import { useEmployees, useSubsidiaries } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
+import { canFinance } from "@/lib/rbac";
 import { useTheme } from "@/lib/theme";
 import { subscribePush } from "@/lib/push";
-import { api, apiError } from "@/lib/api";
+import { api, apiError, tokens } from "@/lib/api";
 import type { Employee } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -56,13 +62,21 @@ const ADMIN_ROLES = ["super_admin", "company_admin", "subsidiary_admin"];
 export default function SettingsPage() {
   const { me } = useAuth();
   const isAdmin = !!me && (ADMIN_ROLES.includes(me.role) || me.has_company_scope);
-  const [tab, setTab] = useState<"account" | "users">("account");
+  // Le barème se CONSULTE avec `view_trip_cost` et se MODIFIE avec `manage_trip_pricing` ;
+  // l'API applique la même règle, cet onglet ne fait que s'y conformer.
+  const seesFinance = canFinance(me, "view_trip_cost");
+  const [tab, setTab] = useState<"account" | "users" | "finance">("account");
+  const tabs = [
+    ["account", User, "Mon compte"] as const,
+    ...(isAdmin ? [["users", Users, "Utilisateurs"] as const] : []),
+    ...(seesFinance ? [["finance", Wallet, "Finance & Coûts"] as const] : []),
+  ];
 
   return (
     <div className="space-y-5">
-      {isAdmin && (
+      {tabs.length > 1 && (
         <div className="flex rounded-lg border border-line bg-surface p-0.5 sm:w-fit">
-          {([["account", User, "Mon compte"], ["users", Users, "Utilisateurs"]] as const).map(([k, Icon, label]) => (
+          {tabs.map(([k, Icon, label]) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -77,7 +91,11 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === "users" && isAdmin ? <UsersPanel /> : <AccountPanel />}
+      {tab === "users" && isAdmin ? <UsersPanel />
+        : tab === "finance" && seesFinance ? (
+          <div className="space-y-5"><TripPricingSettings /><CostCentersSettings /><ExpenseSettings /></div>
+        )
+        : <AccountPanel />}
     </div>
   );
 }
@@ -182,8 +200,11 @@ function AccountPanel() {
     }
     setPwdBusy(true);
     try {
-      await api.post("/auth/change-password/", { current_password: current, new_password: next });
-      setPwdMsg({ ok: true, text: "Mot de passe modifié avec succès." });
+      // Le serveur coupe les sessions ouvertes et renvoie une paire de jetons neuve pour celle-ci.
+      const { data } = await api.post<{ access?: string; refresh?: string }>("/auth/change-password/",
+        { current_password: current, new_password: next });
+      if (data.access) tokens.set(data.access, data.refresh);
+      setPwdMsg({ ok: true, text: "Mot de passe modifié avec succès. Vos autres sessions sont fermées." });
       setCurrent(""); setNext(""); setConfirm("");
     } catch (err) {
       setPwdMsg({ ok: false, text: apiError(err) });
@@ -409,9 +430,6 @@ function UsersPanel() {
       options: roleOptions.map((r) => ({ value: r.value, label: r.label })) },
     { name: "subsidiary", label: "Filiale", type: "select",
       options: [{ value: "", label: "— (périmètre entreprise)" }, ...(subs ?? []).map((s) => ({ value: s.id, label: s.name }))] },
-    ...(modal?.type === "create"
-      ? [{ name: "password", label: "Mot de passe initial (vide = demo1234)", type: "text" as const }]
-      : []),
   ];
 
   function submitUser(values: Record<string, unknown>) {
@@ -425,7 +443,7 @@ function UsersPanel() {
         .catch(onError);
     } else {
       api.post("/employees/", values)
-        .then(() => { invalidate(); setModal(null); setToast("Utilisateur créé."); })
+        .then(() => { invalidate(); setModal(null); setToast("Utilisateur créé : une invitation à définir son mot de passe lui a été envoyée."); })
         .catch(onError);
     }
   }
@@ -526,6 +544,11 @@ function UsersPanel() {
                           <div className="flex justify-end gap-1">
                             <IconBtn title="Modifier (rôle, filiale, infos)" onClick={() => { setError(""); setModal({ type: "edit", row: u }); }}>
                               <UserCog className="h-4 w-4" />
+                            </IconBtn>
+                            {/* Invitation : le lien part à l'adresse du titulaire, jamais à l'administrateur. */}
+                            <IconBtn title="Envoyer l'invitation (définition du mot de passe par l'utilisateur)" disabled={busyId === u.id}
+                              onClick={() => run(`Invitation envoyée à ${u.email}.`, u.id, () => api.post(`/employees/${u.id}/invite/`, {}))}>
+                              <Mail className="h-4 w-4" />
                             </IconBtn>
                             <IconBtn title="Définir / réinitialiser le mot de passe (local)" onClick={() => { setError(""); setModal({ type: "set-password", row: u }); }}>
                               <KeyRound className="h-4 w-4" />

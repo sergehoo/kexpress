@@ -28,9 +28,14 @@ def _get_user(token: str):
 
     from apps.accounts.models import User
 
+    from apps.accounts.sessions import issued_before_revocation
+
     try:
         access = AccessToken(token)
-        return User.objects.filter(pk=access["user_id"], is_active=True).first() or AnonymousUser()
+        user = User.objects.filter(pk=access["user_id"], is_active=True).first()
+        if user is None or issued_before_revocation(user, access.get("iat")):
+            return AnonymousUser()
+        return user
     except (TokenError, KeyError, Exception):
         return AnonymousUser()
 

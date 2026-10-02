@@ -124,7 +124,7 @@ class InsurancePolicy(TimeStampedModel):
     """Police d'assurance d'un véhicule (suivi d'expiration + rappels)."""
 
     vehicle = models.ForeignKey(
-        Vehicle, on_delete=models.CASCADE, related_name="insurances", verbose_name="véhicule"
+        Vehicle, on_delete=models.PROTECT, related_name="insurances", verbose_name="véhicule"
     )
     company = models.CharField("compagnie d'assurance", max_length=160)
     policy_number = models.CharField("numéro de police", max_length=120, blank=True)
@@ -150,7 +150,7 @@ class TechnicalInspection(TimeStampedModel):
     RESULTS = [("passed", "Favorable"), ("failed", "Défavorable"), ("", "—")]
 
     vehicle = models.ForeignKey(
-        Vehicle, on_delete=models.CASCADE, related_name="inspections", verbose_name="véhicule"
+        Vehicle, on_delete=models.PROTECT, related_name="inspections", verbose_name="véhicule"
     )
     last_date = models.DateField("dernière visite", null=True, blank=True)
     next_date = models.DateField("prochaine visite", db_index=True)
@@ -177,7 +177,7 @@ class VehicleRevision(TimeStampedModel):
     """
 
     vehicle = models.ForeignKey(
-        Vehicle, on_delete=models.CASCADE, related_name="revisions", verbose_name="véhicule"
+        Vehicle, on_delete=models.PROTECT, related_name="revisions", verbose_name="véhicule"
     )
     date = models.DateField("date de révision")
     mileage_at_revision = models.PositiveIntegerField("kilométrage à la révision")

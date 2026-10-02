@@ -64,6 +64,14 @@ def build_dataset(user, rtype: str, subsidiary_id=None, start=None, end=None) ->
             rows.append([_d(e.date), e.get_category_display(),
                          e.vehicle.registration if e.vehicle_id else "—",
                          e.label, _num(e.amount), e.subsidiary.name])
+        # Dépenses tardives et corrections : comptées par leur ajustement approuvé (F2).
+        adjustments = qs["adjustments"].select_related("vehicle", "subsidiary")
+        if start and end:
+            adjustments = adjustments.filter(decided_at__date__range=(start, end))
+        for a in adjustments:
+            rows.append([_d(a.decided_at.date()), "Ajustement",
+                         a.vehicle.registration if a.vehicle_id else "—",
+                         a.reason[:120], _num(a.amount), a.subsidiary.name])
         rows.sort(key=lambda r: r[0], reverse=True)
 
     elif rtype == "maintenance":

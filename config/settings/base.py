@@ -72,6 +72,8 @@ LOCAL_APPS = [
     "apps.analytics",
     # Missions regroupées + suggestions de dispatching.
     "apps.dispatch",
+    # Finance & coûts : barème kilométrique historisé, instantanés financiers des courses.
+    "apps.finance",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -139,6 +141,9 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+    # Mots de passe connus de l'application (ancien mot de passe de démonstration, nom du
+    # produit…) : jamais acceptés, quelle que soit la voie.
+    {"NAME": "apps.accounts.validators.KnownPasswordValidator"},
 ]
 
 # --- Internationalisation -------------------------------------------------
@@ -152,6 +157,11 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+# Durée de validité (s) des URL signées des fichiers téléversés (`apps.core.secure_files`).
+SECURE_FILE_URL_TTL = env.int("SECURE_FILE_URL_TTL", default=600)
+# Capacité normative mensuelle par défaut d'un véhicule (km) : base de la mesure de
+# sous-utilisation (D4) quand son acquisition ne la précise pas.
+FINANCE_NORMATIVE_MONTHLY_KM = env.int("FINANCE_NORMATIVE_MONTHLY_KM", default=2000)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -168,6 +178,19 @@ ALERT_THRESHOLDS: dict = {}
 # plus juste que la distance seule, qui ferait payer autant une course d'un passager et une
 # course de quatre sur le même trajet. Autres valeurs : distance, passengers, duration.
 ENERGY_ALLOCATION_RULE = env("ENERGY_ALLOCATION_RULE", default="passenger_distance")
+
+# --- Finance & coûts -------------------------------------------------------
+# Permissions financières `finance.*` : accordées par RÔLE (défaut) et, en complément, par
+# les permissions Django classiques (groupes) pour les exceptions.
+# L'ordre compte : le backend de rôle passe EN PREMIER, pour que son refus absolu (demandeur,
+# chauffeur) ne puisse pas être contourné par un groupe accordé via ModelBackend.
+AUTHENTICATION_BACKENDS = [
+    "apps.finance.permissions.RoleFinancePermissionBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+# Barèmes kilométriques par filiale / type de véhicule. Désactivés tant qu'ils ne sont pas
+# explicitement voulus : seul le barème global (tarif/km + période) s'applique.
+TRIP_PRICING_ADVANCED_SCOPES = env.bool("TRIP_PRICING_ADVANCED_SCOPES", default=False)
 
 # --- Keycloak / OIDC (SSO) -------------------------------------------------
 # Keycloak authentifie ; Kexpress gère l'autorisation (rôle + filiale).
@@ -208,7 +231,8 @@ KEYCLOAK_ADMIN_ENABLED = bool(KEYCLOAK_SERVER_URL and KEYCLOAK_ADMIN_CLIENT_SECR
 _AUTH_CLASSES = []
 if OIDC_ENABLED:
     _AUTH_CLASSES.append("apps.accounts.authentication.KeycloakAuthentication")
-_AUTH_CLASSES.append("rest_framework_simplejwt.authentication.JWTAuthentication")
+# JWT local, refusé s'il a été émis avant une révocation (mot de passe changé, blocage…).
+_AUTH_CLASSES.append("apps.accounts.sessions.RevocableJWTAuthentication")
 if not OIDC_ENABLED:
     # SessionAuthentication (cookie + CSRF) uniquement hors SSO : évite une voie
     # d'authentification non-OIDC lorsque le SSO est obligatoire. (Le site /admin
@@ -228,11 +252,19 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "apps.core.pagination.DefaultPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "apps.core.exceptions.exception_handler",
     # Limite de débit pour les vues qui le déclarent (scope « kbot » : protège contre
     # l'amplification de coût LLM et la saturation des threads par appels sortants).
     "DEFAULT_THROTTLE_RATES": {
         "kbot": env("KBOT_THROTTLE_RATE", default="30/min"),
+        # Définition du mot de passe depuis une invitation (route publique) : anti-force brute.
+        "password_setup": env("PASSWORD_SETUP_THROTTLE_RATE", default="20/hour"),
+        # Connexion locale par mot de passe : anti-devinette en ligne.
+        "login": env("LOGIN_THROTTLE_RATE", default="10/min"),
     },
+    # Adresse du client pour la limitation de débit : `REMOTE_ADDR` par défaut (0) — l'en-tête
+    # X-Forwarded-For, que le client écrit lui-même, n'est lu que derrière un proxy déclaré.
+    "NUM_PROXIES": env.int("DRF_NUM_PROXIES", default=0),
 }
 
 SIMPLE_JWT = {
@@ -242,6 +274,7 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": False,
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
+    "TOKEN_REFRESH_SERIALIZER": "apps.accounts.sessions.RevocableTokenRefreshSerializer",
 }
 
 SPECTACULAR_SETTINGS = {
@@ -313,6 +346,11 @@ TRACKING_GEOCODE_ROUTES = env.bool("TRACKING_GEOCODE_ROUTES", default=True)
 # Notifications email (canal optionnel ; backend console en local, SMTP via EMAIL_* env)
 NOTIFY_EMAIL_ENABLED = env.bool("NOTIFY_EMAIL_ENABLED", default=False)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@kaydan-express.ci")
+
+# Invitations : lien de définition du mot de passe (frontend) et durée de validité.
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
+INVITATION_TIMEOUT_HOURS = env.int("INVITATION_TIMEOUT_HOURS", default=72)
+PASSWORD_RESET_TIMEOUT = INVITATION_TIMEOUT_HOURS * 3600
 
 # Seuils de rappel révision en %% de l'intervalle du véhicule (admin/env)
 REVISION_ALERT_PCTS = env("REVISION_ALERT_PCTS", default="20,10,5")

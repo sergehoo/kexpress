@@ -78,6 +78,15 @@ class Reservation(TenantScopedModel):
     purpose = models.CharField("motif", max_length=255)
     passengers = models.PositiveSmallIntegerField("nombre de passagers", default=1)
     needs_driver = models.BooleanField("besoin d'un chauffeur", default=True)
+    # Souplesse acceptée par le demandeur sur l'heure de départ (minutes, 0 = horaire ferme).
+    # C'est le levier le plus fort de mutualisation, et il ne dépend pas de l'algorithme :
+    # deux courses séparées de 50 minutes sont irréconciliables avec un horaire ferme, mais
+    # évidemment regroupables si chacune accepte un quart d'heure de décalage. Aucun moteur
+    # ne peut compenser l'absence de cette information.
+    flexibility_minutes = models.PositiveSmallIntegerField(
+        "souplesse horaire (min)", default=0,
+        help_text="Décalage acceptable du départ, pour permettre le partage de véhicule.",
+    )
     priority = models.CharField(
         "priorité", max_length=12, choices=PriorityLevel.choices, default=PriorityLevel.NORMAL
     )

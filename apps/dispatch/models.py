@@ -28,7 +28,8 @@ class MissionManager(models.Manager):
         qs = self.get_queryset()
         if not user or not user.is_authenticated:
             return qs.none()
-        if user.is_superuser or getattr(user, "has_company_scope", False):
+        # Lecture groupe (entreprise, Finance groupe D6) : toutes les missions.
+        if user.is_superuser or getattr(user, "has_group_read_scope", False):
             return qs
         # Le chauffeur affecté doit atteindre SA tournée, même s'il n'appartient à aucune
         # des filiales transportées (flotte mutualisée) — sinon il ne peut pas l'exécuter.
@@ -205,6 +206,22 @@ class MissionStop(TimeStampedModel):
         return self.actual_time > self.planned_time
 
 
+class DispatchSuggestionManager(models.Manager):
+    def for_user(self, user):
+        """Suggestions lisibles par un utilisateur — règle UNIQUE (API, tableau, alertes).
+
+        Une suggestion rattachée à une filiale n'est visible que de celle-ci ; une suggestion
+        sans filiale (regroupement de courses de plusieurs filiales) n'est visible que du
+        périmètre groupe : son explication cite destinations et passagers de chacune.
+        """
+        qs = self.get_queryset()
+        if user.is_superuser or getattr(user, "has_company_scope", False):
+            return qs
+        if not getattr(user, "subsidiary_id", None):
+            return qs.none()
+        return qs.filter(generated_for_id=user.subsidiary_id)
+
+
 class DispatchSuggestion(TimeStampedModel):
     """Proposition du moteur de dispatching (§8) — jamais appliquée d'elle-même.
 
@@ -241,6 +258,8 @@ class DispatchSuggestion(TimeStampedModel):
         "organizations.Subsidiary", on_delete=models.CASCADE, null=True, blank=True,
         related_name="dispatch_suggestions", verbose_name="filiale concernée",
     )
+
+    objects = DispatchSuggestionManager()
 
     class Meta:
         verbose_name = "suggestion de dispatching"

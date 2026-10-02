@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { API_BASE, tokens } from "@/lib/api";
+import { closeWhenPossible } from "@/lib/useFleetLive";
 import type { TripTracking } from "@/lib/types";
 
 /** Suivi temps réel d'une course via WebSocket (ws/trips/<id>/tracking/). */
@@ -14,10 +15,15 @@ export function useTripTracking(tripId?: string | null) {
 
   useEffect(() => {
     setData(null);
-    if (!tripId || typeof window === "undefined" || !tokens.access) return;
+    if (!tripId || typeof window === "undefined") return;
     let closedByEffect = false;
 
     function connect() {
+      if (!tokens.access) {
+        // Jeton pas encore disponible : réessayer plutôt que d'abandonner le suivi.
+        if (!closedByEffect) retryRef.current = setTimeout(connect, 1000);
+        return;
+      }
       const base = API_BASE.replace(/^http/, "ws").replace(/\/api\/?$/, "");
       const ws = new WebSocket(`${base}/ws/trips/${tripId}/tracking/?token=${tokens.access}`);
       wsRef.current = ws;
@@ -39,7 +45,9 @@ export function useTripTracking(tripId?: string | null) {
     return () => {
       closedByEffect = true;
       if (retryRef.current) clearTimeout(retryRef.current);
-      wsRef.current?.close();
+      // Ne jamais interrompre une négociation en cours (cf. closeWhenPossible).
+      closeWhenPossible(wsRef.current);
+      wsRef.current = null;
     };
   }, [tripId]);
 

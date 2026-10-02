@@ -32,8 +32,61 @@ class DriverViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
 # --- Sous-ressources de la fiche chauffeur (#7), filtrables par ?driver=<id> ---
 
 
-class DriverAvailabilityViewSet(viewsets.ModelViewSet):
-    """Planning / créneaux de disponibilité du chauffeur."""
+class _HrWriteGuardMixin:
+    """Interdit d'écrire dans le dossier d'un chauffeur d'une autre filiale.
+
+    Le queryset scopé protège la lecture, mais le champ `driver` du serializer accepte
+    n'importe quel chauffeur (fiche mutualisée) : sans cette garde, un utilisateur pourrait
+    créer une évaluation ou un créneau sur un chauffeur d'une filiale sœur.
+    """
+
+    def _check_driver_subsidiary(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        user = self.request.user
+        if user.is_superuser or getattr(user, "has_company_scope", False):
+            return
+        driver = serializer.validated_data.get("driver") or serializer.instance.driver
+        if driver.subsidiary_id != user.subsidiary_id:
+            raise PermissionDenied(
+                "Le dossier d'un chauffeur est géré par sa filiale employeuse."
+            )
+
+    def perform_create(self, serializer):
+        self._check_driver_subsidiary(serializer)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._check_driver_subsidiary(serializer)
+        super().perform_update(serializer)
+
+
+class _HrScopedMixin(_HrWriteGuardMixin):
+    """Le dossier RH suit la filiale du CHAUFFEUR, pas la mutualisation de la flotte.
+
+    La fiche chauffeur est volontairement visible de toutes les filiales
+    (`FleetWideDriverManager`, dispatching inter-filiales) ; ses évaluations, incidents et
+    documents sont des données RH de la filiale employeuse — l'équivalent chauffeur des
+    dépenses véhicule, qui ne traversent pas non plus les filiales.
+    """
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        if user.is_superuser or getattr(user, "has_company_scope", False):
+            return qs
+        if not user.subsidiary_id:
+            return qs.none()
+        return qs.filter(driver__subsidiary_id=user.subsidiary_id)
+
+
+class DriverAvailabilityViewSet(_HrWriteGuardMixin, viewsets.ModelViewSet):
+    """Planning / créneaux de disponibilité du chauffeur.
+
+    Lecture MUTUALISÉE à dessein : le planning inter-filiales en dépend — sans la
+    disponibilité des chauffeurs des filiales sœurs, un dispatcher double-réserverait.
+    L'écriture, elle, reste réservée à la filiale employeuse.
+    """
 
     queryset = DriverAvailability.objects.select_related("driver")
     serializer_class = DriverAvailabilitySerializer
@@ -42,7 +95,7 @@ class DriverAvailabilityViewSet(viewsets.ModelViewSet):
     ordering_fields = ["start"]
 
 
-class DriverEvaluationViewSet(viewsets.ModelViewSet):
+class DriverEvaluationViewSet(_HrScopedMixin, viewsets.ModelViewSet):
     """Évaluations du chauffeur (l'évaluateur est l'utilisateur courant)."""
 
     queryset = DriverEvaluation.objects.select_related("driver", "evaluator")
@@ -52,10 +105,11 @@ class DriverEvaluationViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "score"]
 
     def perform_create(self, serializer):
+        self._check_driver_subsidiary(serializer)
         serializer.save(evaluator=self.request.user)
 
 
-class DriverIncidentViewSet(viewsets.ModelViewSet):
+class DriverIncidentViewSet(_HrScopedMixin, viewsets.ModelViewSet):
     """Incidents impliquant le chauffeur."""
 
     queryset = DriverIncident.objects.select_related("driver")
@@ -65,7 +119,7 @@ class DriverIncidentViewSet(viewsets.ModelViewSet):
     ordering_fields = ["occurred_at"]
 
 
-class DriverDocumentViewSet(viewsets.ModelViewSet):
+class DriverDocumentViewSet(_HrScopedMixin, viewsets.ModelViewSet):
     """Dossier documentaire du chauffeur (permis, pièce, contrat…)."""
 
     queryset = DriverDocument.objects.select_related("driver")

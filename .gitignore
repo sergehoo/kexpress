@@ -41,3 +41,5 @@ frontend/.env.local
 .idea/
 
 .claude
+# Identifiants de test locaux (générés, jamais versionnés)
+/.local/

@@ -50,6 +50,30 @@ class MaintenanceRecordSerializer(serializers.ModelSerializer):
             "validated_by", "validated_by_name", "document", "photo", "notes",
             "subsidiary", "subsidiary_name", "created_at",
         ]
+        extra_kwargs = {"labor_cost": {"min_value": 0}, "parts_cost": {"min_value": 0},
+                        "cost": {"min_value": 0}}
+
+    def validate(self, attrs):
+        from apps.core.mixins import has_company_scope, validate_imputed_trip
+
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        if "trip" in attrs or "vehicle" in attrs:
+            validate_imputed_trip(
+                request,
+                attrs.get("trip", getattr(self.instance, "trip", None)),
+                attrs.get("vehicle", getattr(self.instance, "vehicle", None)),
+            )
+        # Le responsable de validation désigné appartient à la filiale qui gère l'intervention :
+        # sinon on pouvait « faire valider » par un inconnu d'une filiale sœur.
+        validator = attrs.get("validated_by")
+        user = getattr(request, "user", None)
+        if validator is not None and user is not None and not has_company_scope(user):
+            if validator.subsidiary_id != user.subsidiary_id:
+                raise serializers.ValidationError(
+                    {"validated_by": "Le responsable de validation doit appartenir à votre filiale."}
+                )
+        return attrs
 
 
 class MaintenanceScheduleSerializer(serializers.ModelSerializer):

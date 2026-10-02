@@ -25,9 +25,15 @@ class LocalTokenSerializer(TokenObtainPairSerializer):
 
 
 class LocalTokenView(TokenObtainPairView):
-    """Émission de jetons locaux (SimpleJWT) par mot de passe."""
+    """Émission de jetons locaux (SimpleJWT) par mot de passe — débit limité (anti-devinette)."""
 
     serializer_class = LocalTokenSerializer
+    throttle_scope = "login"
+
+    def get_throttles(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        return [ScopedRateThrottle()]
 
 
 class MeView(generics.RetrieveAPIView):
@@ -62,10 +68,64 @@ class ChangePasswordView(generics.GenericAPIView):
         user = request.user
         if not user.check_password(ser.validated_data["current_password"]):
             return Response({"detail": "Mot de passe actuel incorrect."}, status=400)
+        from apps.accounts.api_views import check_password_strength
+
+        check_password_strength(ser.validated_data["new_password"], user, field="new_password")
+        from apps.accounts.sessions import fresh_tokens, revoke_sessions
+
         user.set_password(ser.validated_data["new_password"])
-        user.save(update_fields=["password"])
+        # Les autres sessions (un appareil perdu, un tiers qui connaissait l'ancien mot de passe)
+        # sont coupées ; celle-ci repart avec une paire de jetons neuve.
+        revoke_sessions(user, save=False)
+        user.save(update_fields=["password", "sessions_revoked_at"])
         from apps.audit import services as audit
         from apps.core.enums import AuditAction
 
         audit.record(user, AuditAction.UPDATE, user, changes={"action": "change_own_password"})
-        return Response({"detail": "Mot de passe modifié."})
+        return Response({"detail": "Mot de passe modifié.", **fresh_tokens(user)})
+
+
+class PasswordSetupView(generics.GenericAPIView):
+    """Définition du mot de passe par le titulaire, depuis son lien d'invitation.
+
+    Public (le titulaire n'a pas encore de mot de passe), mais : jeton signé à usage unique et
+    à durée limitée, validateurs de mot de passe Django, débit limité (anti-force brute).
+    GET vérifie un lien sans rien consommer (pour l'écran) ; POST définit le mot de passe.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+    throttle_scope = "password_setup"
+
+    def get_throttles(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        return [ScopedRateThrottle()]
+
+    def get(self, request):
+        from rest_framework.response import Response
+
+        from apps.accounts.invitations import InvitationError, resolve
+
+        try:
+            user = resolve(request.query_params.get("uid", ""), request.query_params.get("token", ""))
+        except InvitationError as exc:
+            return Response({"valid": False, "detail": str(exc)}, status=400)
+        return Response({"valid": True, "email": user.email})
+
+    def post(self, request):
+        from rest_framework.response import Response
+
+        from apps.accounts.invitations import InvitationError, set_password_from_invitation
+
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Objet JSON attendu."}, status=400)
+        password = request.data.get("password")
+        if not isinstance(password, str) or not password:
+            return Response({"detail": "Choisissez un mot de passe."}, status=400)
+        try:
+            set_password_from_invitation(str(request.data.get("uid", "")), str(request.data.get("token", "")),
+                                         password)
+        except InvitationError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response({"detail": "Mot de passe défini : vous pouvez vous connecter."})

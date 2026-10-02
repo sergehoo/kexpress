@@ -35,7 +35,62 @@ class VehicleViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
     ordering_fields = ["registration", "mileage", "created_at"]
 
 
-class InsurancePolicyViewSet(viewsets.ModelViewSet):
+class _OwnerSubsidiaryWriteMixin:
+    """L'écriture du dossier d'un véhicule appartient à sa filiale propriétaire.
+
+    La LECTURE reste mutualisée à dessein : avant de réserver un véhicule d'une filiale
+    sœur, un dispatcher doit voir si son assurance ou sa visite technique a expiré. Mais
+    créer, modifier ou supprimer ces enregistrements ne regarde que la filiale qui possède
+    le véhicule — sans cette garde, n'importe quel utilisateur authentifié pouvait réécrire
+    l'historique d'assurance de toute la flotte.
+    """
+
+    def _check_vehicle_subsidiary(self, vehicle):
+        from rest_framework.exceptions import PermissionDenied
+
+        from apps.finance.permissions import is_auditor
+
+        from apps.finance.permissions import MANAGE_EXPENSES, can
+
+        user = self.request.user
+        if is_auditor(user):
+            raise PermissionDenied("L'auditeur est en lecture seule.")
+        # Assurance, visite, révision portent un coût qui alimente les charges du véhicule :
+        # leur écriture est un geste de gestion de flotte (`manage_expenses`), jamais celui
+        # d'un demandeur ou d'un chauffeur, même de la filiale propriétaire.
+        if not can(user, MANAGE_EXPENSES):
+            raise PermissionDenied("Le dossier d'un véhicule est géré par la gestion de flotte.")
+        if user.is_superuser or getattr(user, "has_company_scope", False):
+            return
+        if vehicle.subsidiary_id != user.subsidiary_id:
+            raise PermissionDenied(
+                "Le dossier d'un véhicule est géré par sa filiale propriétaire."
+            )
+
+    def perform_create(self, serializer):
+        self._check_vehicle_subsidiary(serializer.validated_data["vehicle"])
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        from rest_framework.exceptions import ValidationError
+
+        # Le propriétaire ACTUEL décide ; et un document ne change pas de véhicule (son coût
+        # irait sinon d'une filiale à l'autre) : on le supprime et on le recrée.
+        self._check_vehicle_subsidiary(serializer.instance.vehicle)
+        moved = serializer.validated_data.get("vehicle")
+        if moved is not None and moved.pk != serializer.instance.vehicle_id:
+            raise ValidationError({"vehicle": "Un document ne change pas de véhicule : recréez-le."})
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        from apps.finance.locks import assert_unlocked
+
+        self._check_vehicle_subsidiary(instance.vehicle)
+        assert_unlocked(instance)  # pièce d'un mois clos : 409, base intacte
+        super().perform_destroy(instance)
+
+
+class InsurancePolicyViewSet(_OwnerSubsidiaryWriteMixin, viewsets.ModelViewSet):
     """Polices d'assurance des véhicules (suivi d'expiration)."""
 
     queryset = InsurancePolicy.objects.select_related("vehicle")
@@ -45,7 +100,7 @@ class InsurancePolicyViewSet(viewsets.ModelViewSet):
     ordering_fields = ["expiry_date", "created_at"]
 
 
-class TechnicalInspectionViewSet(viewsets.ModelViewSet):
+class TechnicalInspectionViewSet(_OwnerSubsidiaryWriteMixin, viewsets.ModelViewSet):
     """Visites techniques des véhicules (échéances)."""
 
     queryset = TechnicalInspection.objects.select_related("vehicle")
@@ -55,7 +110,7 @@ class TechnicalInspectionViewSet(viewsets.ModelViewSet):
     ordering_fields = ["next_date", "created_at"]
 
 
-class VehicleRevisionViewSet(viewsets.ModelViewSet):
+class VehicleRevisionViewSet(_OwnerSubsidiaryWriteMixin, viewsets.ModelViewSet):
     """Révisions périodiques (historique 10 000 km)."""
 
     queryset = VehicleRevision.objects.select_related("vehicle")

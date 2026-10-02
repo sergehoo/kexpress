@@ -7,6 +7,14 @@ from django.db import models
 from apps.core.enums import COMPANY_SCOPE_ROLES
 
 
+def has_group_read_scope(user) -> bool:
+    """Lecture de toutes les filiales : périmètre entreprise ou financier groupe (D6)."""
+    return bool(
+        user.is_superuser or user.role in COMPANY_SCOPE_ROLES
+        or getattr(user, "is_group_finance", False)
+    )
+
+
 class TimeStampedModel(models.Model):
     """Base abstraite : PK UUID + horodatage + auteur."""
 
@@ -33,15 +41,15 @@ class TenantManager(models.Manager):
     def for_user(self, user):
         """Restreint le queryset au périmètre de l'utilisateur.
 
-        - Rôles à périmètre entreprise (super admin, admin entreprise, auditeur)
-          → tout voir.
+        - Rôles à périmètre entreprise (super admin, admin entreprise, auditeur) et
+          financier groupe (D6) → tout voir.
         - Autres rôles → uniquement leur filiale.
         - Utilisateur sans filiale et hors périmètre entreprise → rien.
         """
         qs = self.get_queryset()
         if not user or not user.is_authenticated:
             return qs.none()
-        if user.is_superuser or user.role in COMPANY_SCOPE_ROLES:
+        if has_group_read_scope(user):
             return qs
         if user.subsidiary_id:
             return qs.filter(subsidiary_id=user.subsidiary_id)

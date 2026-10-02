@@ -80,6 +80,18 @@ class Command(BaseCommand):
                             help="Nombre maximal de conflits listés (défaut : 200).")
 
     def handle(self, *args, **options):
+        from apps.trips.models import Trip
+
+        # Base pas encore migrée : le dire clairement plutôt que de laisser remonter une
+        # erreur SQL brute — c'est précisément au moment d'un déploiement qu'un message
+        # confus fait perdre du temps.
+        if Trip._meta.db_table not in connection.introspection.table_names():
+            self.stderr.write(self.style.ERROR(
+                "La table des courses n'existe pas encore : appliquez d'abord les migrations "
+                "de base, puis relancez ce contrôle avant la migration anti-double-booking."
+            ))
+            raise SystemExit(2)
+
         overlaps = find_overlaps(options["limit"])
         if not overlaps:
             self.stdout.write(self.style.SUCCESS(

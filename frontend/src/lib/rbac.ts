@@ -70,3 +70,28 @@ export function canAccess(role: string, pathname: string): boolean {
   if (!entry) return true; // route non répertoriée : laissée à l'API
   return entry[1].includes(role as Role);
 }
+
+/** Permission financière effective (`view_trip_cost`, `manage_trip_pricing`…).
+ *
+ *  Pour l'AFFICHAGE seulement : sans ce droit, l'API ne sert de toute façon aucun montant. */
+export function canFinance(
+  me: { finance_permissions?: string[] } | null | undefined, codename: string,
+): boolean {
+  return !!me?.finance_permissions?.includes(codename);
+}
+
+/** Pages gouvernées par une PERMISSION financière plutôt que par une liste de rôles : une
+ *  exception accordée par groupe Django doit ouvrir la page, et un demandeur ne l'a jamais. */
+const PAGE_PERMISSIONS: Record<string, string> = {
+  "/finance": "view_trip_cost",
+};
+
+export function canAccessPage(
+  me: { role: string; finance_permissions?: string[] }, pathname: string,
+): boolean {
+  const entry = Object.entries(PAGE_PERMISSIONS).find(
+    ([prefix]) => pathname === prefix || pathname.startsWith(prefix + "/"),
+  );
+  if (entry) return canFinance(me, entry[1]);
+  return canAccess(me.role, pathname);
+}

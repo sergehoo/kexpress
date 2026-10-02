@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.core.mixins import OwnerOnlyFieldsMixin
 from apps.drivers.models import (
     Driver,
     DriverAvailability,
@@ -9,7 +10,11 @@ from apps.drivers.models import (
 )
 
 
-class DriverSerializer(serializers.ModelSerializer):
+class DriverSerializer(OwnerOnlyFieldsMixin, serializers.ModelSerializer):
+    # Identité et contact restent mutualisés (le dispatching inter-filiales en a besoin) ;
+    # le numéro de permis et la note de performance relèvent de la filiale employeuse.
+    owner_only_fields = ("license_number", "rating")
+
     full_name = serializers.CharField(read_only=True)
     subsidiary = serializers.PrimaryKeyRelatedField(
         queryset=Driver._meta.get_field("subsidiary").related_model.objects.all(),

@@ -112,13 +112,11 @@ class DispatchSuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         from apps.dispatch.models import DispatchSuggestion
 
-        user = self.request.user
-        qs = DispatchSuggestion.objects.all()
-        if user.is_superuser or getattr(user, "has_company_scope", False):
-            return qs
-        if not user.subsidiary_id:
-            return qs.none()
-        return qs.filter(generated_for_id=user.subsidiary_id)
+        # Un demandeur ou un chauffeur n'a rien à faire des propositions de dispatching, qui
+        # décrivent les courses de toute sa filiale : lecture réservée à ceux qui décident.
+        if not services.can_manage_mission_creation(self.request.user):
+            return DispatchSuggestion.objects.none()
+        return DispatchSuggestion.objects.for_user(self.request.user)
 
     @extend_schema(request=None, responses=DispatchSuggestionSerializer(many=True))
     @action(detail=False, methods=["post"])
@@ -129,7 +127,9 @@ class DispatchSuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         if not services.can_manage_mission_creation(request.user):
             raise PermissionDenied("Réservé aux gestionnaires de flotte et administrateurs.")
         rows = _run(generate_grouping_suggestions, request.user)
-        return Response(DispatchSuggestionSerializer(rows, many=True).data)
+        return Response(
+            DispatchSuggestionSerializer(rows, many=True, context={"request": request}).data
+        )
 
     @extend_schema(request=DispatchDecisionInputSerializer, responses=DispatchDecisionSerializer)
     @action(detail=True, methods=["post"])
@@ -165,3 +165,39 @@ class DispatchBoardView(APIView):
         if not services.can_manage_mission_creation(request.user):
             raise PermissionDenied("Réservé aux gestionnaires de flotte et administrateurs.")
         return Response(dispatch_board(request.user, request.query_params))
+
+
+class DispatchAnticipationView(APIView):
+    """Demandes récurrentes et occurrences non couvertes — lecture seule.
+
+    Répond à « quelles demandes vont probablement tomber cette semaine, et lesquelles n'ont
+    pas encore de réservation ? ». Le module propose, il ne réserve ni n'affecte rien : la
+    frontière est garantie par construction (`anticipation.py` est dans PROPOSERS).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.dispatch.anticipation import anticipated_demand
+
+        if not services.can_manage_mission_creation(request.user):
+            raise PermissionDenied("Réservé aux gestionnaires de flotte et administrateurs.")
+        return Response(anticipated_demand(request.user, request.query_params))
+
+
+class MutualisationPotentialView(APIView):
+    """Potentiel de mutualisation sur une période PASSÉE — lecture seule.
+
+    Répond à « qu'aurions-nous économisé si nous avions mutualisé ? ». Les hypothèses de la
+    simulation accompagnent le résultat : un gain contrefactuel ne doit jamais être présenté
+    comme une mesure.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.dispatch.simulation import mutualisation_potential
+
+        if not services.can_manage_mission_creation(request.user):
+            raise PermissionDenied("Réservé aux gestionnaires de flotte et administrateurs.")
+        return Response(mutualisation_potential(request.user, request.query_params))

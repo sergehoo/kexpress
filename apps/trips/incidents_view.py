@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.analytics.scope import owned
 from apps.drivers.models import Driver, DriverIncident
 from apps.trips.models import Trip, TripIncident
 
@@ -13,7 +14,9 @@ class IncidentsView(APIView):
     def get(self, request):
         user = request.user
         trips = Trip.objects.for_user(user)
-        drivers = Driver.objects.for_user(user)
+        # Les chauffeurs EMPLOYÉS par la filiale, pas la flotte mutualisée : un incident
+        # chauffeur est une donnée RH (même règle que `/api/driver-incidents/`).
+        drivers = owned(Driver, user)
 
         rows = []
         for inc in (

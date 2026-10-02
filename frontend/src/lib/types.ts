@@ -16,6 +16,9 @@ export interface Me {
   is_active: boolean;
   has_company_scope: boolean;
   date_joined: string;
+  /** Permissions `finance.*` effectives. Sert à ne pas afficher d'écran vide : la
+   *  confidentialité est assurée par l'API, qui ne sert aucun montant sans ce droit. */
+  finance_permissions?: string[];
 }
 
 export interface Paginated<T> {
@@ -480,11 +483,26 @@ export interface Expense {
   vehicle: string | null;
   vehicle_registration: string | null;
   trip: string | null;
+  mission: string | null;
+  mission_code: string | null;
+  driver: string | null;
+  driver_name: string | null;
+  cost_center: string | null;
+  cost_center_label: string | null;
+  supplier: string;
   category: string;
   category_display: string;
   label: string;
   amount: string;
   date: string;
+  /** URL signée, courte durée — à ouvrir avec `openSecureFile`, jamais en lien direct. */
+  receipt: string | null;
+  source_type: string;
+  source_type_display: string;
+  source_id: string | null;
+  source_reference: string;
+  /** Faux : pièce d'un plein / d'une maintenance… ou reprise — le coût est compté ailleurs. */
+  is_countable: boolean;
   subsidiary_name: string;
   created_at: string;
 }
@@ -536,6 +554,8 @@ export interface Reservation {
   purpose: string;
   passengers: number;
   needs_driver: boolean;
+  /** Décalage de départ accepté (min) : 0 = horaire ferme. Levier de mutualisation. */
+  flexibility_minutes: number;
   priority: string;
   priority_display: string;
   status: string;

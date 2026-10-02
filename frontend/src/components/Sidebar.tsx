@@ -26,10 +26,11 @@ import {
   Wallet,
   Wrench,
   X,
+  Coins,
 } from "lucide-react";
 
 import { useAuth } from "@/lib/auth";
-import { canAccess } from "@/lib/rbac";
+import { canAccessPage } from "@/lib/rbac";
 import { cn } from "@/lib/utils";
 
 type Item = { href: string; label: string; icon: React.ElementType };
@@ -66,6 +67,7 @@ const GROUPS: Group[] = [
   {
     title: "Finance",
     items: [
+      { href: "/finance", label: "Coûts des courses", icon: Coins },
       { href: "/energie", label: "Énergie", icon: Fuel },
       { href: "/expenses", label: "Dépenses", icon: Wallet },
       { href: "/reports", label: "Rapports", icon: FileText },
@@ -98,7 +100,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   // Navigation organisée par rôle : seuls les modules du métier apparaissent.
   const groups = GROUPS.map((g) => ({
     ...g,
-    items: g.items.filter((i) => !me || canAccess(me.role, i.href)),
+    items: g.items.filter((i) => !me || canAccessPage(me, i.href)),
   })).filter((g) => g.items.length > 0);
 
   return (

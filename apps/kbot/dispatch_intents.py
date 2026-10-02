@@ -71,10 +71,18 @@ def groupable_trips(user, qs) -> dict:
             departure_at=trip.planned_departure_at, arrival_at=trip.planned_arrival_at,
             origin=_point(trip, "origin"), destination=_point(trip, "destination"),
             origin_zone=_zone_id(trip, "origin"), destination_zone=_zone_id(trip, "destination"),
+            flexibility_minutes=(
+                trip.reservation.flexibility_minutes if trip.reservation_id else 0
+            ),
         )
         for trip in trips
     ]
-    groupings = build_groupings(candidates, capacity=capacity)[:5]
+    # Mesure routière quand elle est disponible (une seule matrice pour tout le jeu).
+    from apps.dispatch.road import road_distance
+
+    groupings = build_groupings(
+        candidates, capacity=capacity, distance=road_distance(candidates),
+    )[:5]
     if not groupings:
         return B.respond(
             "groupable_trips",
@@ -132,12 +140,14 @@ def _zone_id(trip, side):
 
 def emptiest_vehicles(user, qs) -> dict:
     """« Quels véhicules roulent le plus souvent à vide ? »"""
-    from apps.analytics.metrics import metrics_by_vehicle
+    from apps.analytics.metrics import asset_trips, metrics_by_vehicle
 
     start, end = _month_bounds()
-    vehicles = {v["id"]: v for v in qs["vehicles"].values("id", "registration", "capacity")}
+    # Même base que le tableau de bord (parc possédé, tout son usage) : à la même question,
+    # K-BOT et l'écran doivent donner le même chiffre.
+    vehicles = {v["id"]: v for v in qs["owned_vehicles"].values("id", "registration", "capacity")}
     computed = metrics_by_vehicle(
-        qs["trips"], start_dt=start, end_dt=end,
+        asset_trips(qs["owned_vehicles"]), start_dt=start, end_dt=end,
         capacities={vid: v["capacity"] for vid, v in vehicles.items()},
     )
     ranked = sorted(
@@ -340,8 +350,25 @@ def best_vehicle_for_return(user, qs, origin=None) -> dict:
 # --- 5. Consommation électrique --------------------------------------------
 
 
+def _costs_forbidden(user, intent: str) -> dict | None:
+    """Réponse de refus si l'utilisateur ne voit pas les coûts (même idiome que `_fleet_costs`).
+
+    Aucun montant — ni XOF/kWh, ni coût au km — ne sort vers un demandeur ou un chauffeur (§8).
+    """
+    from apps.fuelintel.access import can_see_costs
+
+    if can_see_costs(user):
+        return None
+    return B.respond(intent, answer="Les coûts énergétiques sont réservés aux gestionnaires.",
+                     blocks=[B.alert("info", "Donnée financière réservée aux profils habilités.")],
+                     confidence=0.9, data_source="security_guard")
+
+
 def electric_consumption(user, qs) -> dict:
     """« Quelle est la consommation électrique des véhicules ce mois-ci ? »"""
+    refusal = _costs_forbidden(user, "electric_consumption")
+    if refusal:
+        return refusal
     start, end = _month_bounds()
     charges = qs["charges"].filter(date__gte=start.date(), date__lte=end.date())
     totals = charges.aggregate(kwh=Sum("kwh_recharged"), cost=Sum("amount"), n=Count("id"))
@@ -396,6 +423,9 @@ def compare_energy_costs(user, qs) -> dict:
     Les quantités ne sont JAMAIS additionnées (litres et kWh ne se somment pas) : la
     comparaison porte sur le coût et sur le coût au kilomètre.
     """
+    refusal = _costs_forbidden(user, "compare_energy_costs")
+    if refusal:
+        return refusal
     from apps.analytics.metrics import metrics_by_vehicle
 
     start, end = _month_bounds()
@@ -476,26 +506,18 @@ def compare_energy_costs(user, qs) -> dict:
 
 def best_mutualisation_subsidiary(user, qs) -> dict:
     """« Quelle filiale a le meilleur taux de mutualisation ? »"""
-    from apps.analytics.metrics import mutualisation_stats
-    from apps.organizations.models import Subsidiary
+    from apps.analytics.metrics import mutualisation_by_subsidiary
 
     start, end = _month_bounds()
-    rows, data = [], []
-    subsidiaries = Subsidiary.objects.filter(
-        pk__in=qs["trips"].values("subsidiary_id").distinct()
-    ).order_by("name")
-
-    for subsidiary in subsidiaries:
-        stats = mutualisation_stats(
-            qs["trips"].filter(subsidiary=subsidiary), start_dt=start, end_dt=end,
-        )
-        if not stats["trips"]:
-            continue
-        data.append({"subsidiary": subsidiary.name, **stats})
-        rows.append([
-            subsidiary.name, stats["trips"], stats["grouped_trips"], stats["missions"],
-            f"{stats['rate']:.0%}" if stats["rate"] is not None else "—",
-        ])
+    # UNE requête groupée, au lieu d'une par filiale.
+    data = sorted(
+        mutualisation_by_subsidiary(qs["trips"], start_dt=start, end_dt=end).values(),
+        key=lambda row: -(row["rate"] or 0),
+    )
+    rows = [[
+        row["subsidiary"], row["trips"], row["grouped_trips"], row["missions"],
+        f"{row['rate']:.0%}" if row["rate"] is not None else "—",
+    ] for row in data]
 
     if not rows:
         return B.respond(
@@ -507,8 +529,6 @@ def best_mutualisation_subsidiary(user, qs) -> dict:
             suggestions=["Quelles courses peuvent être regroupées aujourd'hui ?"],
         )
 
-    data.sort(key=lambda row: -(row["rate"] or 0))
-    rows.sort(key=lambda row: -float(str(row[4]).rstrip("%") or 0) if row[4] != "—" else 1)
     best = data[0]
     answer = (
         f"{best['subsidiary']} a le meilleur taux de mutualisation ce mois-ci : "

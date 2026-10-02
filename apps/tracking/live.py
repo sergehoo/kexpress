@@ -354,6 +354,10 @@ def ensure_trip_route(trip, allow_provision=True):
         from apps.tracking.zones import resolve_route_zones
 
         resolve_route_zones(route, subsidiary_id=trip.subsidiary_id)
+        # La distance OSRM est désormais connue : l'estimation du coût kilométrique aussi.
+        from apps.finance.trip_pricing import refresh_estimate
+
+        refresh_estimate(trip)
         return route
     except Exception:
         logger.warning("ensure_trip_route: échec pour trip=%s", getattr(trip, "pk", None), exc_info=True)
@@ -604,8 +608,50 @@ def _position_rows(vehicles, now=None) -> list[dict]:
             "heading": str(loc.heading) if (loc and loc.heading is not None) else None,
             "recorded_at": loc.recorded_at.isoformat() if (loc and loc.recorded_at) else None,
             "is_late": is_late,
+            # Marqueurs de visibilité, retirés par `redact_positions` avant tout envoi.
+            "_trip_subsidiary": str(trip.subsidiary_id) if trip else None,
+            "_trip_requester": str(trip.requester_id) if (trip and trip.requester_id) else None,
+            "_trip_driver_user": (
+                str(trip.driver.user_id) if (trip and trip.driver and trip.driver.user_id) else None
+            ),
         })
     return rows
+
+
+#: Champs qui décrivent la COURSE en cours, par opposition au véhicule mutualisé.
+TRIP_DETAIL_FIELDS = ("driver_name", "destination", "trip_id")
+
+
+def _sees_trip_details(user, row) -> bool:
+    """Même règle que `scoped()` : sa filiale pour les rôles d'encadrement, ses propres
+    courses (demandeur ou chauffeur) pour les autres, tout pour le périmètre groupe."""
+    from apps.analytics.scope import sees_colleagues_trips
+
+    if row.get("_trip_subsidiary") is None:
+        return True  # aucune course en cours : rien à masquer
+    if user.is_superuser or getattr(user, "has_company_scope", False):
+        return True
+    viewer = str(user.pk)
+    if viewer in (row.get("_trip_requester"), row.get("_trip_driver_user")):
+        return True
+    return sees_colleagues_trips(user) and row["_trip_subsidiary"] == str(user.subsidiary_id)
+
+
+def redact_positions(rows, user) -> list[dict]:
+    """Positions telles qu'un utilisateur peut les recevoir.
+
+    La position, le statut et la vitesse d'un véhicule mutualisé restent visibles de tous ;
+    le chauffeur et la destination de sa course ne le sont que du périmètre de cette course.
+    Appelé à l'ENVOI — REST comme WebSocket — car le diffuseur calcule une seule charge
+    pour tous les abonnés.
+    """
+    out = []
+    for row in rows:
+        clean = {k: v for k, v in row.items() if not k.startswith("_")}
+        if not _sees_trip_details(user, row):
+            clean.update(dict.fromkeys(TRIP_DETAIL_FIELDS))
+        out.append(clean)
+    return out
 
 
 def compute_positions(user, subsidiary_id=None) -> list[dict]:
@@ -617,14 +663,15 @@ def compute_positions(user, subsidiary_id=None) -> list[dict]:
     vehicles = Vehicle.objects.for_user(user).select_related("subsidiary")
     if subsidiary_id and user.has_company_scope:
         vehicles = vehicles.filter(subsidiary_id=subsidiary_id)
-    return _position_rows(vehicles)
+    return redact_positions(_position_rows(vehicles), user)
 
 
 def compute_all_positions() -> list[dict]:
     """Positions de TOUTE la flotte (sans scoping) — source du diffuseur temps réel.
 
-    La flotte est mutualisée : tous les véhicules sont visibles par tous. Le filtrage
-    éventuel par filiale est appliqué côté consumer à partir du champ `subsidiary`.
+    La flotte est mutualisée : tous les véhicules sont visibles par tous. Le contenu des
+    courses, lui, est masqué par chaque consumer (`redact_positions`) : cette charge porte
+    encore les marqueurs internes et ne doit JAMAIS être envoyée telle quelle à un client.
     """
     return _position_rows(Vehicle.objects.select_related("subsidiary").all())
 

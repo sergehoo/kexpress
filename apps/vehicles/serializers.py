@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.core.mixins import OwnerOnlyFieldsMixin
 from apps.vehicles.models import (
     InspectionCenter,
     InsuranceCompany,
@@ -25,7 +26,12 @@ class VehicleDocumentSerializer(serializers.ModelSerializer):
         ]
 
 
-class VehicleSerializer(serializers.ModelSerializer):
+class VehicleSerializer(OwnerOnlyFieldsMixin, serializers.ModelSerializer):
+    # Donnée patrimoniale de la filiale propriétaire, pas de la flotte mutualisée — et, au sein
+    # de celle-ci, réservée aux profils habilités aux coûts.
+    owner_only_fields = ("purchase_value",)
+    owner_only_perm = "finance.view_vehicle_cost"
+
     subsidiary = serializers.PrimaryKeyRelatedField(
         queryset=Vehicle._meta.get_field("subsidiary").related_model.objects.all(),
         required=False,
@@ -65,7 +71,19 @@ class VehicleStatusLogSerializer(serializers.ModelSerializer):
 # --- Conformité : assurance, visite technique, révision -------------------
 
 
-class InsurancePolicySerializer(serializers.ModelSerializer):
+class _VehicleCostMixin(OwnerOnlyFieldsMixin):
+    """Échéances lisibles de toute la flotte (réserver un véhicule mutualisé suppose de savoir
+    s'il est assuré) ; leur COÛT, lui, reste à la filiale propriétaire habilitée aux coûts."""
+
+    # Le justificatif (facture, attestation) porte le montant : même règle que le coût.
+    owner_only_fields = ("cost", "document")
+    owner_only_perm = "finance.view_vehicle_cost"
+
+    def owner_subsidiary_id(self, instance):
+        return instance.vehicle.subsidiary_id
+
+
+class InsurancePolicySerializer(_VehicleCostMixin, serializers.ModelSerializer):
     vehicle_registration = serializers.CharField(source="vehicle.registration", read_only=True)
 
     class Meta:
@@ -76,7 +94,7 @@ class InsurancePolicySerializer(serializers.ModelSerializer):
         ]
 
 
-class TechnicalInspectionSerializer(serializers.ModelSerializer):
+class TechnicalInspectionSerializer(_VehicleCostMixin, serializers.ModelSerializer):
     vehicle_registration = serializers.CharField(source="vehicle.registration", read_only=True)
     result_display = serializers.CharField(source="get_result_display", read_only=True)
 
@@ -89,7 +107,7 @@ class TechnicalInspectionSerializer(serializers.ModelSerializer):
         ]
 
 
-class VehicleRevisionSerializer(serializers.ModelSerializer):
+class VehicleRevisionSerializer(_VehicleCostMixin, serializers.ModelSerializer):
     vehicle_registration = serializers.CharField(source="vehicle.registration", read_only=True)
 
     class Meta:

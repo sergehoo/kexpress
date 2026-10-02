@@ -1,15 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { BatteryCharging, Droplet, Fuel as FuelIcon, Plug, Plus, Wallet, Zap } from "lucide-react";
+import { BatteryCharging, Droplet, Fuel as FuelIcon, Gauge, Plug, Plus, Users, Wallet, Zap } from "lucide-react";
 
 import { Button, Card, CardBody, EmptyState, Spinner } from "@/components/ui";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { RowActions } from "@/components/RowActions";
-import { useElectricCharges, useFuel, useSubsidiaries, useVehicles } from "@/lib/queries";
+import { AdjustmentProposalDialog } from "@/components/finance/AdjustmentProposalDialog";
+import {
+  useElectricCharges,
+  useEnergyEfficiency,
+  useFuel,
+  useSubsidiaries,
+  useVehicles,
+} from "@/lib/queries";
 import { useCrud } from "@/lib/crud";
 import { useAuth } from "@/lib/auth";
 import { apiError } from "@/lib/api";
+import { adjustmentProposal, type AdjustmentProposal } from "@/lib/financeF2";
 import type { ElectricCharge, FuelLog } from "@/lib/types";
 import { cn, formatDate, formatNumber } from "@/lib/utils";
 
@@ -24,18 +32,23 @@ function Mini({ icon: Icon, label, value, tone }: { icon: React.ElementType; lab
   );
 }
 
-type Section = "fuel" | "electric";
+type Section = "fuel" | "electric" | "efficiency";
 
 const SECTIONS: { key: Section; label: string; icon: React.ElementType }[] = [
   { key: "fuel", label: "Carburants", icon: FuelIcon },
   { key: "electric", label: "Électricité", icon: Zap },
+  { key: "efficiency", label: "Efficacité", icon: Gauge },
 ];
 
-/** Gestion de l'énergie (§12) — deux sections, deux unités.
+/** Gestion de l'énergie (§12) — deux unités, trois sections.
  *
  *  La flotte mêle essence, gasoil, GPL, hybride et électrique : le module couvre donc
  *  « l'énergie », pas seulement le carburant. Les litres et les kWh restent dans leurs
- *  sections respectives — seuls les coûts sont comparables entre les deux. */
+ *  sections respectives — seuls les coûts sont comparables entre les deux.
+ *
+ *  La troisième section (§16) est la seule où les deux motorisations se comparent, et elle
+ *  le fait par le coût au PASSAGER-kilomètre : le seul denominateur qui ne pénalise pas
+ *  mécaniquement les véhicules de grande capacité. */
 export default function EnergiePage() {
   const [section, setSection] = useState<Section>("fuel");
 
@@ -63,7 +76,9 @@ export default function EnergiePage() {
         ))}
       </div>
 
-      {section === "fuel" ? <CarburantsSection /> : <ElectriciteSection />}
+      {section === "fuel" ? <CarburantsSection />
+        : section === "electric" ? <ElectriciteSection />
+        : <EfficaciteSection />}
     </div>
   );
 }
@@ -76,6 +91,7 @@ function CarburantsSection() {
   const { me } = useAuth();
   const [modal, setModal] = useState<FuelModal>(null);
   const [error, setError] = useState("");
+  const [proposal, setProposal] = useState<AdjustmentProposal | null>(null);
   const { data, isLoading } = useFuel();
   const { data: vehicles } = useVehicles();
   const { data: subs } = useSubsidiaries();
@@ -108,7 +124,11 @@ function CarburantsSection() {
 
   function handleSubmit(values: Record<string, unknown>) {
     setError("");
-    const opts = { onSuccess: () => setModal(null), onError: (e: unknown) => setError(apiError(e)) };
+    // Mois clos / coût figé (409 + proposition) : on propose l'ajustement au lieu d'une impasse.
+    const opts = { onSuccess: () => setModal(null), onError: (e: unknown) => {
+      setError(apiError(e));
+      setProposal(adjustmentProposal(e));
+    } };
     if (modal?.mode === "edit") crud.update.mutate({ id: modal.row.id, body: values }, opts);
     else crud.create.mutate(values, opts);
   }
@@ -193,6 +213,10 @@ function CarburantsSection() {
           onSubmit={handleSubmit}
         />
       )}
+      {proposal && (
+        <AdjustmentProposalDialog proposal={proposal} onClose={() => setProposal(null)}
+                                  onCreated={() => setModal(null)} />
+      )}
     </div>
   );
 }
@@ -205,6 +229,7 @@ function ElectriciteSection() {
   const { me } = useAuth();
   const [modal, setModal] = useState<ChargeModal>(null);
   const [error, setError] = useState("");
+  const [proposal, setProposal] = useState<AdjustmentProposal | null>(null);
   const { data, isLoading } = useElectricCharges();
   const { data: vehicles } = useVehicles();
   const { data: subs } = useSubsidiaries();
@@ -245,7 +270,11 @@ function ElectriciteSection() {
 
   function handleSubmit(values: Record<string, unknown>) {
     setError("");
-    const opts = { onSuccess: () => setModal(null), onError: (e: unknown) => setError(apiError(e)) };
+    // Mois clos / coût figé (409 + proposition) : on propose l'ajustement au lieu d'une impasse.
+    const opts = { onSuccess: () => setModal(null), onError: (e: unknown) => {
+      setError(apiError(e));
+      setProposal(adjustmentProposal(e));
+    } };
     if (modal?.mode === "edit") crud.update.mutate({ id: modal.row.id, body: values }, opts);
     else crud.create.mutate(values, opts);
   }
@@ -338,6 +367,163 @@ function ElectriciteSection() {
           onSubmit={handleSubmit}
         />
       )}
+      {proposal && (
+        <AdjustmentProposalDialog proposal={proposal} onClose={() => setProposal(null)}
+                                  onCreated={() => setModal(null)} />
+      )}
+    </div>
+  );
+}
+
+// --- Efficacité comparée (§16) ---------------------------------------------
+
+const PERIODS: { key: string; label: string }[] = [
+  { key: "month", label: "Ce mois" },
+  { key: "week", label: "Cette semaine" },
+  { key: "year", label: "Cette année" },
+];
+
+const FUEL_LABELS: Record<string, string> = {
+  diesel: "Gasoil", gasoline: "Essence", hybrid: "Hybride",
+  electric: "Électrique", lpg: "GPL", other: "Autre",
+};
+
+/** `null` signifie « pas de base de comparaison », pas « zéro ».
+ *
+ *  Afficher 0 pour un véhicule qui n'a transporté personne le placerait en tête du
+ *  classement des plus économes — exactement la conclusion inverse de la réalité. */
+function Ratio({ value, suffix, digits = 2 }: { value: number | null; suffix?: string; digits?: number }) {
+  if (value == null) return <span className="text-faint" title="Pas de base de comparaison sur la période">—</span>;
+  return <span>{value.toFixed(digits)}{suffix ? ` ${suffix}` : ""}</span>;
+}
+
+function EfficaciteSection() {
+  const [period, setPeriod] = useState("month");
+  const { data, isLoading } = useEnergyEfficiency({ period });
+  const rows = data?.results ?? [];
+  const fleet = data?.fleet;
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-lg border border-line bg-surface2/40 px-4 py-3">
+        <p className="text-xs leading-relaxed text-muted">
+          <span className="font-medium text-ink">Pourquoi le passager-kilomètre.</span>{" "}
+          Un minibus plein consomme plus au kilomètre qu&apos;une berline vide, mais bien moins
+          par personne transportée. Comparer au seul kilomètre pénaliserait les gros véhicules
+          et conduirait à renouveler la flotte à contresens.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-fit rounded-lg border border-line bg-surface p-0.5">
+          {PERIODS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setPeriod(key)}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                period === key ? "bg-brand-600 text-white" : "text-muted hover:bg-surface2",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {fleet && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Les quantités restent ventilées par unité : litres et kWh ne s'additionnent pas. */}
+          <Mini
+            icon={Droplet}
+            label="Énergie consommée"
+            value={
+              Object.keys(fleet.quantities).length
+                ? Object.entries(fleet.quantities).map(([u, v]) => `${formatNumber(v)} ${u}`).join(" · ")
+                : "—"
+            }
+            tone="bg-sky-500/10 text-sky-600"
+          />
+          <Mini icon={Wallet} label="Coût énergétique" value={formatNumber(fleet.cost)} tone="bg-brand-500/10 text-brand-600" />
+          <Mini
+            icon={Users}
+            label="Coût / passager-km"
+            value={fleet.cost_per_passenger_km != null ? formatNumber(fleet.cost_per_passenger_km) : "—"}
+            tone="bg-emerald-500/10 text-emerald-600"
+          />
+          <Mini
+            icon={Gauge}
+            label="Coût / km"
+            value={fleet.cost_per_km != null ? formatNumber(fleet.cost_per_km) : "—"}
+            tone="bg-amber-500/10 text-amber-600"
+          />
+        </div>
+      )}
+
+      <Card>
+        <CardBody className="p-0">
+          {isLoading ? (
+            <div className="flex justify-center py-16"><Spinner className="h-7 w-7" /></div>
+          ) : rows.length === 0 ? (
+            <EmptyState
+              title="Aucune donnée sur la période"
+              hint="L'efficacité se calcule à partir des courses effectuées et des pleins ou recharges enregistrés."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-faint">
+                    <th className="px-5 py-3 font-medium">Véhicule</th>
+                    <th className="px-5 py-3 font-medium">Énergie</th>
+                    <th className="px-5 py-3 font-medium">Coût</th>
+                    <th className="px-5 py-3 font-medium">Passager-km</th>
+                    <th className="px-5 py-3 font-medium">Énergie / km</th>
+                    <th className="px-5 py-3 font-medium">Coût / km</th>
+                    <th className="px-5 py-3 font-medium">Coût / passager-km</th>
+                    <th className="px-5 py-3 font-medium">CO₂</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {rows.map((r, index) => (
+                    <tr key={r.vehicle} className="hover:bg-surface2">
+                      <td className="px-5 py-3">
+                        <p className="font-medium text-ink">{r.registration}</p>
+                        <p className="text-[11px] text-muted">
+                          {FUEL_LABELS[r.fuel_type] ?? r.fuel_type} · {r.capacity} places · {r.trips} course{r.trips > 1 ? "s" : ""}
+                          {r.mixed_energy && (
+                            <span
+                              className="ml-1 text-amber-600"
+                              title="Pleins ET recharges sur la période : la quantité affichée ne couvre qu'une des deux énergies."
+                            >
+                              · énergies mêlées
+                            </span>
+                          )}
+                        </p>
+                      </td>
+                      <td className="px-5 py-3 text-muted">{formatNumber(r.quantity)} {r.unit}</td>
+                      <td className="px-5 py-3 text-muted">{r.cost != null ? formatNumber(r.cost) : "—"}</td>
+                      <td className="px-5 py-3 text-muted">{formatNumber(r.passenger_km, "km")}</td>
+                      <td className="px-5 py-3 text-muted"><Ratio value={r.energy_per_km} suffix={r.unit} digits={3} /></td>
+                      <td className="px-5 py-3 text-muted"><Ratio value={r.cost_per_km} digits={1} /></td>
+                      {/* Le classement remonte les moins efficaces : on souligne le premier. */}
+                      <td className={cn("px-5 py-3", index === 0 && r.cost_per_passenger_km != null
+                        ? "font-semibold text-rose-600" : "text-muted")}>
+                        <Ratio value={r.cost_per_passenger_km} />
+                      </td>
+                      <td className="px-5 py-3 text-muted">
+                        {r.co2_kg != null
+                          ? `${formatNumber(r.co2_kg)} kg`
+                          : <span className="text-faint" title="Dépend du mix électrique : inconnu, pas nul">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
     </div>
   );
 }

@@ -1,9 +1,7 @@
 """URLs racine de Kaydan Express."""
-from django.conf import settings
 from django.contrib import admin
 from django.http import JsonResponse
-from django.urls import include, path, re_path
-from django.views.static import serve as static_serve
+from django.urls import include, path
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
@@ -37,6 +35,8 @@ urlpatterns = [
     path("api/", include("apps.reports.urls")),
     path("api/", include("apps.maps.urls")),
     path("api/", include("apps.kbot.urls")),
+    path("api/", include("apps.finance.urls")),
+    path("api/", include("apps.core.urls")),
     # OpenAPI / Swagger
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
@@ -46,13 +46,7 @@ urlpatterns = [
     ),
 ]
 
-# Fichiers médias (uploads : photos véhicules, justificatifs…). Servis par Django
-# y compris en production (déploiement mono-nœud derrière proxy ; les statiques
-# admin/DRF sont servis par WhiteNoise).
-urlpatterns += [
-    re_path(
-        r"^media/(?P<path>.*)$",
-        static_serve,
-        {"document_root": settings.MEDIA_ROOT},
-    ),
-]
+# Fichiers téléversés : PLUS de route publique `/media/`. Permis, pièces d'identité,
+# factures et justificatifs ne sortent que par `/api/files/<jeton>/` — URL signée, nominative,
+# à durée limitée, dont le téléchargement revérifie les droits (`apps.core.secure_files`).
+# En production, le proxy ne doit pas non plus exposer MEDIA_ROOT.

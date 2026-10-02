@@ -261,11 +261,13 @@ def test_idle_vehicle_detector(db, sub_a, requester_a, fleet_a, vehicle_a):
     assert any(vehicle_a.registration in row["title"] for row in rows)
 
 
-def test_groupable_not_grouped_detector(db, fleet_a):
+def test_groupable_not_grouped_detector(db, fleet_a, sub_a):
     from apps.dispatch.models import DispatchSuggestion
 
+    # Rattachée à la filiale du lecteur : une suggestion sans filiale est réservée au
+    # périmètre groupe (cf. tests/test_owned_assets_scope.py).
     DispatchSuggestion.objects.create(
-        kind="group", payload={"trip_ids": []}, score=0.8, rank=1,
+        kind="group", payload={"trip_ids": []}, score=0.8, rank=1, generated_for=sub_a,
         rationale="Regrouper 2 courses (Plateau + Marcory) · 4 passagers.",
     )
     rows = _run(fleet_a, "detect_groupable_not_grouped")
@@ -329,3 +331,88 @@ def test_alerts_do_not_leak_across_subsidiaries(db, sub_a, sub_b, requester_a):
         "out-alr@test.io", "pw", role=RoleChoices.FLEET_MANAGER, subsidiary=sub_b,
     )
     assert _run(outsider, "detect_return_without_vehicle") == []
+
+
+# --- Poussée des alertes critiques ------------------------------------------
+
+
+def test_critical_alert_is_pushed_to_subsidiary_managers(db, sub_a, requester_a, fleet_a):
+    """Une alerte critique ne doit pas attendre que quelqu'un ouvre la page d'alertes."""
+    from apps.analytics.tasks import push_critical_alerts
+    from apps.core.enums import NotificationType
+    from apps.notifications.models import Notification
+
+    _trip(sub_a, requester_a, trip_type=TripType.ROUND_TRIP, minutes=60)  # retour sans véhicule
+
+    result = push_critical_alerts()
+    assert result["pushed"] >= 1
+    pushed = Notification.objects.filter(
+        notification_type=NotificationType.OPERATIONAL_ALERT, recipient=fleet_a,
+    )
+    assert pushed.exists()
+    assert "Retour sans véhicule" in pushed.first().title
+
+
+def test_the_same_alert_is_not_pushed_twice(db, sub_a, requester_a, fleet_a):
+    """ADVERSARIAL — sans silence, la même alerte repartirait à chaque exécution et
+    l'ensemble finirait en bruit de fond que plus personne ne lit."""
+    from apps.analytics.tasks import push_critical_alerts
+    from apps.core.enums import NotificationType
+    from apps.notifications.models import Notification
+
+    _trip(sub_a, requester_a, trip_type=TripType.ROUND_TRIP, minutes=60)
+
+    first = push_critical_alerts()
+    second = push_critical_alerts()
+    assert first["pushed"] >= 1
+    assert second["pushed"] == 0 and second["skipped"] >= 1
+    assert Notification.objects.filter(
+        notification_type=NotificationType.OPERATIONAL_ALERT, recipient=fleet_a,
+    ).count() == first["pushed"]
+
+
+def test_cooldown_expiry_allows_a_reminder(db, sub_a, requester_a, fleet_a):
+    """Le silence est temporaire : un problème persistant doit finir par re-remonter."""
+    from apps.analytics.tasks import push_critical_alerts
+
+    _trip(sub_a, requester_a, trip_type=TripType.ROUND_TRIP, minutes=60)
+    push_critical_alerts()
+    # Fenêtre de silence nulle : la même alerte est de nouveau poussée.
+    assert push_critical_alerts(cooldown_hours=0)["pushed"] >= 1
+
+
+def test_opportunities_are_not_pushed(db, fleet_a):
+    """Les alertes « info » restent consultables : les pousser noierait les urgences."""
+    from apps.analytics.tasks import push_critical_alerts
+    from apps.dispatch.models import DispatchSuggestion
+
+    DispatchSuggestion.objects.create(kind="group", payload={"trip_ids": []}, score=0.6,
+                                      rank=1, rationale="Regroupement possible.")
+    assert push_critical_alerts()["pushed"] == 0
+
+
+def test_push_does_not_notify_another_subsidiary(db, sub_a, sub_b, requester_a):
+    """ADVERSARIAL — une alerte est une donnée de mission : elle ne franchit pas la filiale."""
+    from apps.accounts.models import User
+    from apps.analytics.tasks import push_critical_alerts
+    from apps.core.enums import NotificationType, RoleChoices
+    from apps.notifications.models import Notification
+
+    _trip(sub_a, requester_a, trip_type=TripType.ROUND_TRIP, minutes=60)
+    outsider = User.objects.create_user(
+        "fleet-b-push@test.io", "pw", role=RoleChoices.FLEET_MANAGER, subsidiary=sub_b,
+    )
+    push_critical_alerts()
+    assert not Notification.objects.filter(
+        notification_type=NotificationType.OPERATIONAL_ALERT, recipient=outsider,
+    ).exists()
+
+
+def test_subsidiary_scope_needs_no_user(db, sub_a, requester_a):
+    """La tâche n'a pas d'utilisateur : inventer un compte privilégié serait fragile."""
+    from apps.analytics.scope import scope_for_subsidiary
+
+    _trip(sub_a, requester_a)
+    scope = scope_for_subsidiary(sub_a.pk)
+    assert set(scope) >= {"vehicles", "trips", "charges", "fuel"}
+    assert scope["trips"].count() >= 1

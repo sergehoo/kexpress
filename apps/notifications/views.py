@@ -56,7 +56,15 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     filterset_fields = ["is_read", "severity"]
 
     def get_queryset(self):
-        return Notification.objects.filter(recipient=self.request.user)
+        qs = Notification.objects.filter(recipient=self.request.user)
+        # Une alerte budgétaire porte des montants : elle ne se relit qu'avec le droit de lire
+        # les budgets AUJOURD'HUI (un profil rétrogradé ne retrouve pas d'anciens montants).
+        from apps.core.enums import NotificationType
+        from apps.finance import permissions as finance_perms
+
+        if not finance_perms.can(self.request.user, finance_perms.VIEW_BUDGETS):
+            qs = qs.exclude(notification_type=NotificationType.BUDGET_ALERT)
+        return qs
 
     @action(detail=False, methods=["get"])
     def unread_count(self, request):

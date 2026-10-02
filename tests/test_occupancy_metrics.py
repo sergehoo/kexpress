@@ -250,7 +250,10 @@ def test_check_constraint_rejects_broken_identity(fleet, vehicle_a, sub_a):
 def test_occupancy_endpoint_ranks_emptiest_first(fleet, fleet_a, vehicle_a):
     client = APIClient()
     client.force_authenticate(fleet_a)
-    response = client.get("/api/dashboard/occupancy/", {"period": "month"})
+    # Période EXPLICITE : la journée des courses du jeu de données (hier) — « month » les
+    # excluait le 1er du mois.
+    day = (timezone.localdate() - timedelta(days=1)).isoformat()
+    response = client.get("/api/dashboard/occupancy/", {"period": "custom", "start": day, "end": day})
     assert response.status_code == 200, response.content
 
     payload = response.json()
@@ -267,9 +270,9 @@ def test_occupancy_endpoint_ranks_emptiest_first(fleet, fleet_a, vehicle_a):
 def test_occupancy_endpoint_leaks_no_mission_data_across_subsidiaries(fleet, sub_b, vehicle_a):
     """ADVERSARIAL — isolation multi-tenant des métriques.
 
-    La flotte est MUTUALISÉE (`FleetWideManager`) : un gestionnaire d'une autre filiale voit
-    donc bien la ligne du véhicule, c'est voulu. Ce qui ne doit jamais fuir, ce sont les
-    données de mission de la filiale voisine : courses, passagers, kilomètres.
+    La flotte est mutualisée, mais l'occupation mesure un actif pour son PROPRIÉTAIRE : un
+    gestionnaire d'une autre filiale ne reçoit même plus la ligne du véhicule. A fortiori,
+    aucune donnée de mission de la filiale voisine : courses, passagers, kilomètres.
     """
     from apps.accounts.models import User
     from apps.core.enums import RoleChoices
@@ -284,7 +287,111 @@ def test_occupancy_endpoint_leaks_no_mission_data_across_subsidiaries(fleet, sub
 
     payload = response.json()
     assert payload["fleet"]["loaded_km"] == 0.0  # aucun km d'Abidjan
-    mine = next(r for r in payload["results"] if r["registration"] == vehicle_a.registration)
-    assert mine["trips"] == 0
-    assert mine["passengers_carried"] == 0
-    assert mine["loaded_km"] == 0.0
+    assert vehicle_a.registration not in {r["registration"] for r in payload["results"]}
+
+
+# --- Optimisation : cache lu, mais jamais source de vérité ------------------
+
+
+def test_materialised_rows_are_actually_read(db, fleet, vehicle_a):
+    """La tâche nocturne écrivait des lignes que personne ne lisait : on les lit désormais."""
+    from apps.analytics.metrics import metrics_from_materialised, occupancy_for_period
+    from apps.analytics.tasks import recompute_metrics
+    from apps.trips.models import Trip
+
+    day = timezone.localdate() - timedelta(days=1)
+    recompute_metrics(day=day.isoformat())
+
+    cached = metrics_from_materialised([vehicle_a.pk], day, day)
+    assert cached, "le cache doit contenir la journée calculée"
+    assert cached[vehicle_a.pk]["mileage"].empty_km == pytest.approx(10.0)
+
+    # Même résultat en passant par la fonction de période, sans toucher aux courses.
+    hybrid = occupancy_for_period(
+        Trip.objects.all(), start_date=day, end_date=day,
+        capacities={vehicle_a.pk: vehicle_a.capacity},
+    )
+    assert hybrid[vehicle_a.pk]["mileage"].empty_km == pytest.approx(10.0)
+
+
+def test_missing_day_is_recomputed_instead_of_showing_zero(db, fleet, vehicle_a):
+    """ADVERSARIAL — une tâche nocturne en échec ne doit pas blanchir le tableau de bord.
+
+    C'est le piège de ce genre d'optimisation : lire le cache et s'en contenter afficherait
+    zéro là où il y a de vraies données, ce qui est bien pire qu'une requête lente.
+    """
+    from apps.analytics.metrics import materialised_days, occupancy_for_period
+    from apps.trips.models import Trip
+
+    day = timezone.localdate() - timedelta(days=1)
+    assert materialised_days([vehicle_a.pk], day, day) == set(), "aucun calcul nocturne joué"
+
+    hybrid = occupancy_for_period(
+        Trip.objects.all(), start_date=day, end_date=day,
+        capacities={vehicle_a.pk: vehicle_a.capacity},
+    )
+    assert hybrid[vehicle_a.pk]["mileage"].empty_km == pytest.approx(10.0)
+
+
+def test_cached_and_live_days_are_never_double_counted(db, fleet, vehicle_a):
+    """Les plages recalculées ne doivent jamais recouvrir une journée déjà lue du cache."""
+    from apps.analytics.metrics import occupancy_for_period
+    from apps.analytics.tasks import recompute_metrics
+    from apps.trips.models import Trip
+
+    day = timezone.localdate() - timedelta(days=1)
+    recompute_metrics(day=day.isoformat())
+
+    # Période large : jours vides + la journée matérialisée + aujourd'hui.
+    hybrid = occupancy_for_period(
+        Trip.objects.all(), start_date=day - timedelta(days=5), end_date=timezone.localdate(),
+        capacities={vehicle_a.pk: vehicle_a.capacity},
+    )
+    mileage = hybrid[vehicle_a.pk]["mileage"]
+    assert mileage.loaded_km == pytest.approx(40.0), "kilométrage compté une seule fois"
+    assert hybrid[vehicle_a.pk]["occupancy"].trips == 2
+
+
+def test_missing_ranges_skip_covered_days():
+    """Cœur pur du découpage : les journées couvertes coupent les plages à recalculer."""
+    from datetime import date
+
+    from apps.analytics.metrics import _missing_ranges
+
+    start, end = date(2026, 7, 1), date(2026, 7, 5)
+    covered = {date(2026, 7, 2), date(2026, 7, 4)}
+    assert _missing_ranges(start, end, covered) == [
+        (date(2026, 7, 1), date(2026, 7, 1)),
+        (date(2026, 7, 3), date(2026, 7, 3)),
+        (date(2026, 7, 5), date(2026, 7, 5)),
+    ]
+    assert _missing_ranges(start, end, set()) == [(start, end)]
+    assert _missing_ranges(start, end, {start + timedelta(days=i) for i in range(5)}) == []
+
+
+def test_detectors_compute_shared_metrics_only_once(db, fleet, fleet_a):
+    """Deux détecteurs demandaient les mêmes métriques et chacun refaisait le calcul."""
+    from apps.analytics import detectors
+    from apps.analytics.scope import scoped
+
+    # On compte le CALCUL coûteux, pas les accès à la propriété : deux détecteurs peuvent
+    # légitimement lire la valeur, ce qui ne doit déclencher qu'une seule agrégation.
+    from apps.analytics import metrics as metrics_module
+
+    calls = {"n": 0}
+    original = metrics_module.occupancy_for_period
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    metrics_module.occupancy_for_period = counting
+    try:
+        detectors.run_detectors(scoped(fleet_a))
+    finally:
+        metrics_module.occupancy_for_period = original
+
+    assert calls["n"] == 1, (
+        f"agrégat recalculé {calls['n']} fois : deux détecteurs le demandent, "
+        "il ne doit être calculé qu'une fois par exécution"
+    )

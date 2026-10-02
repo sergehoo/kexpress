@@ -14,6 +14,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { StatChips } from "@/components/StatChips";
 import { Tabs } from "@/components/Tabs";
 import { EntityForm, type Field } from "@/components/EntityForm";
+import { SecureFileLink } from "@/components/SecureFileLink";
 import { useTrips } from "@/lib/queries";
 import { useCrud } from "@/lib/crud";
 import { api, apiError } from "@/lib/api";
@@ -307,7 +308,7 @@ function DocumentsTab({ driverId }: { driverId: string }) {
                 {doc.expiry_date && <p className="text-[11px] text-muted">Expire le {formatDate(doc.expiry_date)}</p>}
               </div>
               {doc.file && (
-                <a href={doc.file} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-brand-600 hover:underline">Voir</a>
+                <SecureFileLink url={doc.file} />
               )}
             </li>
           ))}

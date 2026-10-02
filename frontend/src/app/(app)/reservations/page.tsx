@@ -415,6 +415,7 @@ function CreateModal({ onClose, onError }: { onClose: () => void; onError: (s: s
     purpose: "",
     passengers: 1,
     needs_driver: true,
+    flexibility_minutes: 0,
     priority: "normal",
     requester: "",
   });
@@ -576,6 +577,24 @@ function CreateModal({ onClose, onError }: { onClose: () => void; onError: (s: s
           <input type="checkbox" checked={form.needs_driver} onChange={(e) => set("needs_driver", e.target.checked)} />
           Besoin d&apos;un chauffeur
         </label>
+        <div>
+          <Label>Souplesse sur l&apos;heure de départ</Label>
+          <Select
+            value={String(form.flexibility_minutes)}
+            onChange={(e) => set("flexibility_minutes", Number(e.target.value))}
+          >
+            <option value="0">Horaire ferme</option>
+            <option value="15">± 15 minutes</option>
+            <option value="30">± 30 minutes</option>
+            <option value="60">± 1 heure</option>
+          </Select>
+          {/* C'est le levier le plus efficace de partage de véhicule : deux trajets séparés
+              d'une heure sont inconciliables à horaire ferme, et évidents avec un peu de jeu. */}
+          <p className="mt-1 text-[11px] text-faint">
+            Accepter un léger décalage permet de partager un véhicule avec un collègue —
+            et réduit le coût imputé à votre filiale.
+          </p>
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>
             Annuler

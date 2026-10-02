@@ -9,7 +9,7 @@ import { KBot } from "@/components/KBot";
 import { OfflineSync } from "@/components/OfflineSync";
 import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
-import { canAccess, homeFor } from "@/lib/rbac";
+import { canAccessPage, homeFor } from "@/lib/rbac";
 
 const TITLES: Record<string, string> = {
   "/dashboard": "Tableau de bord",
@@ -26,6 +26,7 @@ const TITLES: Record<string, string> = {
   "/energie": "Gestion de l'énergie",
   "/expenses": "Dépenses",
   "/reports": "Rapports",
+  "/finance": "Coûts des courses",
   "/subsidiaries": "Filiales",
   "/employees": "Employés",
   "/incidents": "Incidents",
@@ -48,7 +49,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   // Vue organisée par rôle : une page hors périmètre redirige vers
   // l'accueil du rôle (les données restent de toute façon protégées par l'API).
-  const allowed = !me || canAccess(me.role, pathname);
+  const allowed = !me || canAccessPage(me, pathname);
   useEffect(() => {
     if (me && !allowed) router.replace(homeFor(me.role));
   }, [me, allowed, router]);

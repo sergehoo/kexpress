@@ -62,6 +62,12 @@ def start_trip(trip: Trip, actor, start_mileage: int | None = None) -> Trip:
     ).exclude(status__in=[TripStatus.RETURNED, TripStatus.CLOSED]).exists():
         raise WorkflowError("Terminez d'abord le trajet aller avant de démarrer le retour.")
 
+    # Dernière estimation avant le départ : véhicule réellement affecté, barème en vigueur.
+    # Ensuite, le tarif ne bouge plus (le réel sera valorisé au même tarif).
+    from apps.finance.trip_pricing import refresh_estimate
+
+    refresh_estimate(trip)
+
     trip.actual_departure = timezone.now()
     trip.start_mileage = start_mileage if start_mileage is not None else trip.vehicle.mileage
     trip.status = TripStatus.IN_PROGRESS
@@ -95,6 +101,9 @@ def end_trip(trip: Trip, actor, end_mileage: int | None = None, fuel_consumed=No
     if trip.status != TripStatus.IN_PROGRESS:
         raise WorkflowError("Seule une course en cours peut être terminée.")
 
+    # Sans relevé, le compteur est DÉDUIT (GPS, sinon distance prévue) : la valorisation doit
+    # le savoir pour ne pas prendre une estimation pour une mesure.
+    odometer_measured = end_mileage is not None
     if end_mileage is None:
         base = trip.start_mileage if trip.start_mileage is not None else trip.vehicle.mileage
         from apps.tracking.live import real_traveled_km
@@ -144,6 +153,9 @@ def end_trip(trip: Trip, actor, end_mileage: int | None = None, fuel_consumed=No
         next_action="Clôture de la course par le gestionnaire.",
     )
     _check_fuel_anomaly(trip)
+    from apps.finance.trip_pricing import record_actual
+
+    record_actual(trip, odometer_measured=odometer_measured)  # distance réelle × tarif estimé
     # La tournée dont cette course fait partie doit suivre l'avancement réel : sans quoi
     # elle resterait « planifiée » à vie, son véhicule réputé engagé indéfiniment.
     if trip.dispatch_group:
@@ -171,6 +183,14 @@ def close_trip(trip: Trip, actor) -> Trip:
         title=f"Course clôturée — {trip.destination}",
         next_action="Aucune (dossier clos).",
     )
+    # Coût kilométrique figé : un changement ultérieur du barème ne le touchera plus.
+    from apps.finance.trip_cost import freeze_direct
+    from apps.finance.trip_pricing import freeze
+
+    freeze(trip)
+    # Coût RÉEL direct figé avec les éléments connus à la clôture (D3) — après le barème, dont
+    # il reprend la distance mesurée. Notion distincte : les deux ne se mélangent pas.
+    freeze_direct(trip)
     # La tournée dont cette course fait partie doit suivre l'avancement réel : sans quoi
     # elle resterait « planifiée » à vie, son véhicule réputé engagé indéfiniment.
     if trip.dispatch_group:
@@ -194,7 +214,7 @@ def _check_fuel_anomaly(trip, threshold_pct: float = 20.0):
     from apps.notifications.events import finance_users
 
     notify_many(
-        managers_of(trip.subsidiary_id) + finance_users(),
+        managers_of(trip.subsidiary_id) + finance_users(trip.subsidiary_id),
         NotificationType.FUEL_ANOMALY,
         title=f"Consommation anormale — {trip.vehicle.registration}",
         message=(
@@ -251,6 +271,22 @@ def trip_time_conflicts(trip, *, field):
     return conflicts
 
 
+def _conflict_message(resource: str, conflict, actor) -> str:
+    """Signale le conflit à tous, mais n'en DÉTAILLE la course qu'à qui peut la voir.
+
+    Véhicules et chauffeurs sont mutualisés : le conflit porte souvent sur une course d'une
+    filiale sœur, dont la destination n'a pas à apparaître dans un message d'erreur.
+    """
+    base = f"Conflit horaire : ce {resource} est déjà engagé sur une autre course"
+    sees = actor is not None and (
+        actor.is_superuser or getattr(actor, "has_company_scope", False)
+        or conflict.subsidiary_id == getattr(actor, "subsidiary_id", None)
+    )
+    if sees:
+        return f"{base} ({conflict.get_leg_display()} — {conflict.destination}) sur ce créneau."
+    return f"{base}, d'une autre filiale, sur ce créneau."
+
+
 @transaction.atomic
 def assign_vehicle_to_trip(trip, vehicle, actor, *, allow_grouped: bool = False) -> Trip:
     """Affecte un véhicule à UNE course (aller ou retour), indépendamment de l'autre segment.
@@ -280,11 +316,11 @@ def assign_vehicle_to_trip(trip, vehicle, actor, *, allow_grouped: bool = False)
     trip.vehicle = vehicle  # pour la vérif de conflit sur la fenêtre de CETTE course
     conflict = trip_time_conflicts(trip, field="vehicle").first()
     if conflict:
-        raise WorkflowError(
-            f"Conflit horaire : ce véhicule est déjà engagé sur une autre course "
-            f"({conflict.get_leg_display()} — {conflict.destination}) sur ce créneau."
-        )
+        raise WorkflowError(_conflict_message("véhicule", conflict, actor))
     trip.save(update_fields=["vehicle", "updated_at"])
+    from apps.finance.trip_pricing import refresh_estimate
+
+    refresh_estimate(trip)  # un barème par type de véhicule dépend du véhicule affecté
     _set_vehicle_status(vehicle, VehicleStatus.RESERVED, "Affecté à une course", actor)
     if old_vehicle and old_vehicle.pk != vehicle.pk:
         _release_if_idle(old_vehicle, actor)
@@ -317,10 +353,7 @@ def assign_driver_to_trip(trip, driver, actor, *, allow_grouped: bool = False) -
     trip.driver = driver
     conflict = trip_time_conflicts(trip, field="driver").first()
     if conflict:
-        raise WorkflowError(
-            f"Conflit horaire : ce chauffeur est déjà engagé sur une autre course "
-            f"({conflict.get_leg_display()} — {conflict.destination}) sur ce créneau."
-        )
+        raise WorkflowError(_conflict_message("chauffeur", conflict, actor))
     trip.save(update_fields=["driver", "updated_at"])
     _recompute_reservation_assignment(trip.reservation)
     trip_event(trip, NotificationType.DRIVER_ASSIGNED,

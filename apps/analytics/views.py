@@ -26,8 +26,15 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from apps.analytics.decision import decision_stats
+        from rest_framework.exceptions import PermissionDenied
 
+        from apps.analytics.decision import decision_stats
+        from apps.core.enums import RoleChoices
+
+        # Tableau de bord de gestion : aucun sens pour un demandeur ou un chauffeur. Les
+        # autres profils sans droit financier le reçoivent sans aucun montant.
+        if request.user.role in (RoleChoices.REQUESTER, RoleChoices.DRIVER) and not request.user.is_superuser:
+            raise PermissionDenied("Tableau de bord réservé à l'encadrement.")
         return Response(decision_stats(request.user, request.query_params))
 
 
@@ -36,14 +43,20 @@ class OccupancyStatsView(APIView):
 
     Filtres : ?period=week|month|year|custom (&start=&end=), &subsidiary=.
     Les véhicules les plus « à vide » arrivent en tête (cible d'optimisation).
-    Lecture seule : le périmètre et le RBAC viennent de `scoped()`.
+    Réservé aux gestionnaires, comme dans le frontend : c'est un indicateur de gestion du
+    parc, pas une information d'usage.
     """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from apps.analytics.metrics import fleet_occupancy
+        from rest_framework.exceptions import PermissionDenied
 
+        from apps.analytics.metrics import fleet_occupancy
+        from apps.fuelintel.access import can_see_costs
+
+        if not can_see_costs(request.user):
+            raise PermissionDenied("Réservé aux gestionnaires de flotte et administrateurs.")
         return Response(fleet_occupancy(request.user, request.query_params))
 
 
@@ -200,18 +213,29 @@ class AlertsView(APIView):
         from apps.maintenance.models import MaintenanceSchedule
         from apps.vehicles.models import VehicleDocument
 
-        qs = scoped(request.user)
+        from apps.fuelintel.access import can_see_costs
+
+        user = request.user
+        qs = scoped(user)
         today = timezone.localdate()
         now = timezone.now()
         soon = today + timedelta(days=30)
         alerts = []
+
+        # Les alertes de GESTION (conformité, maintenance, géofence, détecteurs) vont aux
+        # gestionnaires, sur le parc que leur filiale possède ou emploie. Sur la flotte
+        # mutualisée, chacun recevait les échéances, assureurs et zones de toutes les sœurs.
+        # Un chauffeur garde l'alerte de son propre permis ; tous gardent leurs retards.
+        manages = can_see_costs(user)
+        vehicles = qs["owned_vehicles"] if manages else qs["owned_vehicles"].none()
+        drivers = qs["owned_drivers"] if manages else Driver.objects.filter(user=user)
 
         def sev(d):
             return "critical" if d and d < today else "warning"
 
         # Documents véhicule (assurance, visite technique, carte grise)
         for doc in VehicleDocument.objects.filter(
-            vehicle__in=qs["vehicles"], expiry_date__isnull=False, expiry_date__lte=soon
+            vehicle__in=vehicles, expiry_date__isnull=False, expiry_date__lte=soon
         ).select_related("vehicle")[:50]:
             alerts.append({
                 "type": "document",
@@ -226,7 +250,7 @@ class AlertsView(APIView):
         from apps.vehicles.models import InsurancePolicy, TechnicalInspection
 
         for ins in InsurancePolicy.objects.filter(
-            vehicle__in=qs["vehicles"], expiry_date__lte=soon
+            vehicle__in=vehicles, expiry_date__lte=soon
         ).select_related("vehicle")[:50]:
             alerts.append({
                 "type": "insurance",
@@ -240,7 +264,7 @@ class AlertsView(APIView):
             })
 
         for insp in TechnicalInspection.objects.filter(
-            vehicle__in=qs["vehicles"], next_date__lte=soon
+            vehicle__in=vehicles, next_date__lte=soon
         ).select_related("vehicle")[:50]:
             alerts.append({
                 "type": "inspection",
@@ -250,7 +274,7 @@ class AlertsView(APIView):
                 "date": insp.next_date.isoformat(),
             })
 
-        for v in qs["vehicles"].prefetch_related("revisions"):
+        for v in vehicles.prefetch_related("revisions"):
             if not (v.revisions.exists() or v.mileage >= 10_000):
                 continue
             remaining = revision_remaining_km(v)
@@ -268,7 +292,7 @@ class AlertsView(APIView):
             })
 
         # Permis chauffeurs
-        for d in qs["drivers"].filter(license_expiry__isnull=False, license_expiry__lte=soon)[:50]:
+        for d in drivers.filter(license_expiry__isnull=False, license_expiry__lte=soon)[:50]:
             alerts.append({
                 "type": "license",
                 "severity": sev(d.license_expiry),
@@ -279,7 +303,7 @@ class AlertsView(APIView):
 
         # Maintenance à échéance
         for s in MaintenanceSchedule.objects.filter(
-            vehicle__in=qs["vehicles"], is_active=True, due_date__isnull=False, due_date__lte=soon
+            vehicle__in=vehicles, is_active=True, due_date__isnull=False, due_date__lte=soon
         ).select_related("vehicle", "maintenance_type")[:50]:
             alerts.append({
                 "type": "maintenance",
@@ -289,13 +313,15 @@ class AlertsView(APIView):
                 "date": s.due_date.isoformat(),
             })
 
-        # Alertes géofence récentes (48 h)
-        from apps.tracking.models import GeofenceAlert
+        # Alertes géofence récentes (48 h) — zones et courses de la filiale uniquement
+        from apps.tracking.zones import geofence_alerts_for
 
+        geofence = geofence_alerts_for(user, qs["trips"])
+        if not manages:
+            geofence = geofence.none()
         for ga in (
-            GeofenceAlert.objects.filter(
-                vehicle__in=qs["vehicles"], occurred_at__gte=now - timedelta(hours=48)
-            ).select_related("zone", "vehicle").order_by("-occurred_at")[:30]
+            geofence.filter(occurred_at__gte=now - timedelta(hours=48))
+            .select_related("zone", "vehicle").order_by("-occurred_at")[:30]
         ):
             alerts.append({
                 "type": "geofence",
@@ -321,7 +347,8 @@ class AlertsView(APIView):
         # km à vide, regroupements manqués, immobilisation, retour sans véhicule.
         from apps.analytics.detectors import run_detectors
 
-        alerts += run_detectors(qs)
+        if manages:
+            alerts += run_detectors(qs)
 
         order = {"critical": 0, "warning": 1, "info": 2}
         # Certaines alertes n'ont pas de date (agrégats de période) : les trier sur une chaîne

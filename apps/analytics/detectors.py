@@ -90,6 +90,47 @@ def shortfall_severity(needed, capacity) -> str | None:
     return None
 
 
+class DetectorContext:
+    """Données partagées entre détecteurs, calculées au plus une fois par exécution.
+
+    Les métriques d'occupation et de kilométrage rescannent les courses du mois : deux
+    détecteurs les demandaient, et chacun refaisait le travail. Le coût de la page d'alertes
+    était donc doublé sans raison.
+    """
+
+    def __init__(self, data):
+        self.data = data
+        self._metrics = None
+        self._vehicles = None
+
+    @property
+    def vehicles(self) -> dict:
+        if self._vehicles is None:
+            self._vehicles = {
+                v["id"]: v for v in self.data["owned_vehicles"].values("id", "registration", "capacity")
+            }
+        return self._vehicles
+
+    @property
+    def month_metrics(self) -> dict:
+        """Occupation + kilométrage du mois en cours, par véhicule (calcul unique)."""
+        if self._metrics is None:
+            from django.utils import timezone
+
+            from apps.analytics.metrics import asset_trips, occupancy_for_period
+
+            today = timezone.localdate()
+            self._metrics = occupancy_for_period(
+                asset_trips(self.data["owned_vehicles"]), start_date=today.replace(day=1), end_date=today,
+                capacities={vid: v["capacity"] for vid, v in self.vehicles.items()},
+            )
+        return self._metrics
+
+    def __getitem__(self, key):
+        """Les détecteurs continuent d'accéder aux querysets comme à un dictionnaire."""
+        return self.data[key]
+
+
 def _alert(kind, severity, title, detail, date=None, link=None) -> dict:
     """Forme commune à toutes les alertes, alignée sur celles déjà exposées."""
     return {
@@ -196,16 +237,10 @@ def detect_energy_insufficient(data, limits) -> list[dict]:
 
 def detect_empty_mileage(data, limits) -> list[dict]:
     """Kilomètres à vide trop élevés — cible directe d'optimisation (§19)."""
-    from apps.analytics.metrics import metrics_by_vehicle, period_bounds
     from django.utils import timezone
 
     day = timezone.localdate()
-    start, end = period_bounds(day.replace(day=1), day)
-    vehicles = {v["id"]: v for v in data["vehicles"].values("id", "registration", "capacity")}
-    computed = metrics_by_vehicle(
-        data["trips"], start_dt=start, end_dt=end,
-        capacities={vid: v["capacity"] for vid, v in vehicles.items()},
-    )
+    vehicles, computed = data.vehicles, data.month_metrics
     rows = []
     for vehicle_id, values in computed.items():
         mileage = values["mileage"]
@@ -224,16 +259,10 @@ def detect_empty_mileage(data, limits) -> list[dict]:
 
 def detect_low_occupancy(data, limits) -> list[dict]:
     """Faible taux d'occupation : véhicule sous-employé (§19)."""
-    from apps.analytics.metrics import metrics_by_vehicle, period_bounds
     from django.utils import timezone
 
     day = timezone.localdate()
-    start, end = period_bounds(day.replace(day=1), day)
-    vehicles = {v["id"]: v for v in data["vehicles"].values("id", "registration", "capacity")}
-    computed = metrics_by_vehicle(
-        data["trips"], start_dt=start, end_dt=end,
-        capacities={vid: v["capacity"] for vid, v in vehicles.items()},
-    )
+    vehicles, computed = data.vehicles, data.month_metrics
     rows = []
     for vehicle_id, values in computed.items():
         occupancy = values["occupancy"]
@@ -252,10 +281,9 @@ def detect_low_occupancy(data, limits) -> list[dict]:
 
 def detect_groupable_not_grouped(data, limits) -> list[dict]:
     """Trajet regroupable resté individuel — économie manquée (§19)."""
-    from apps.dispatch.models import DispatchSuggestion
-
     rows = []
-    pending = DispatchSuggestion.objects.filter(status="proposed", kind="group").order_by(
+    # Périmètre de `scoped()` : le rationale cite destinations et passagers.
+    pending = data["suggestions"].filter(status="proposed", kind="group").order_by(
         "-score"
     )[: limits["max_rows_per_detector"]]
     for suggestion in pending:
@@ -280,7 +308,7 @@ def detect_idle_vehicles(data, limits) -> list[dict]:
     cutoff = timezone.now() - timedelta(days=limits["idle_days"])
     rows = []
     candidates = (
-        data["vehicles"].filter(status=VehicleStatus.AVAILABLE)
+        data["owned_vehicles"].filter(status=VehicleStatus.AVAILABLE)
         .annotate(last_trip=Max("trips__actual_departure"))
         .filter(last_trip__lt=cutoff)
         .order_by("last_trip")[: limits["max_rows_per_detector"]]
@@ -388,12 +416,13 @@ def run_detectors(data, only=None) -> list[dict]:
     alors qu'une page en erreur ne dit plus rien du tout.
     """
     limits = thresholds()
+    context = data if isinstance(data, DetectorContext) else DetectorContext(data)
     rows: list[dict] = []
     for detector in REGISTRY:
         if only and detector.__name__ not in only:
             continue
         try:
-            rows += detector(data, limits)
+            rows += detector(context, limits)
         except Exception:  # noqa: BLE001 — un détecteur ne doit pas casser les autres
             logger.warning("Détecteur %s en échec", detector.__name__, exc_info=True)
     rows.sort(key=lambda row: (SEVERITY_ORDER.get(row["severity"], 3), row["title"]))

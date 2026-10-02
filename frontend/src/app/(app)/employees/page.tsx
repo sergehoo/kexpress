@@ -53,7 +53,6 @@ export default function EmployeesPage() {
       ? [{ name: "subsidiary", label: "Filiale", type: "select" as const,
           options: (subs ?? []).map((s) => ({ value: s.id, label: s.name })) }]
       : []),
-    { name: "password", label: "Mot de passe (défaut: demo1234)", type: "text" },
     { name: "is_active", label: "Actif", type: "checkbox" },
   ];
 

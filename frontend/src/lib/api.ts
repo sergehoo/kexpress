@@ -129,3 +129,28 @@ export function apiError(err: unknown, fallback = "Une erreur est survenue."): s
   if (typeof first === "string") return first;
   return fallback;
 }
+
+/** Ouvre un fichier protégé (permis, facture, justificatif…).
+ *
+ *  L'API ne donne plus de chemin `/media/` public mais une URL signée, nominative et de
+ *  courte durée, dont le téléchargement exige AUSSI la session (en-tête JWT). Un simple lien
+ *  ne porterait pas cet en-tête : on récupère donc le fichier par l'API, puis on l'affiche. */
+export async function openSecureFile(url: string): Promise<void> {
+  // Fenêtre ouverte AVANT l'attente réseau : ouverte après, le navigateur la bloquerait.
+  const win = typeof window !== "undefined" ? window.open("", "_blank") : null;
+  try {
+    const { data } = await api.get<Blob>(url, { responseType: "blob" });
+    const objectUrl = URL.createObjectURL(data);
+    if (win) {
+      win.opener = null;
+      win.location.href = objectUrl;
+    } else {
+      window.location.assign(objectUrl);
+    }
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (err) {
+    win?.close();
+    const status = (err as AxiosError)?.response?.status;
+    throw new Error(status === 403 ? "Lien expiré ou accès refusé : rechargez la page." : "Document indisponible.");
+  }
+}

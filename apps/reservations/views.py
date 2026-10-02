@@ -50,21 +50,36 @@ class ReservationViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
             qs = qs.filter(requester=user)
         return qs
 
+    def _check_requester(self, requester):
+        """On ne réserve qu'au nom d'un employé de sa propre filiale.
+
+        Sans cette garde, un gestionnaire pouvait déposer une demande au nom d'un employé
+        d'une filiale sœur : elle entrait dans le circuit de validation de celle-ci, et la
+        réponse renvoyait nom et email du demandeur.
+        """
+        from rest_framework.exceptions import PermissionDenied
+
+        from apps.core.mixins import has_company_scope
+
+        user = self.request.user
+        if not has_company_scope(user) and requester.subsidiary_id != user.subsidiary_id:
+            raise PermissionDenied("Vous ne pouvez réserver qu'au nom d'un employé de votre filiale.")
+
     def perform_create(self, serializer):
         user = self.request.user
-        extra = {"created_by": user}
         requester = serializer.validated_data.get("requester") or user
+        self._check_requester(requester)
+        if not (requester.subsidiary_id or user.subsidiary_id
+                or serializer.validated_data.get("subsidiary")):
+            raise ValidationError({
+                "requester": "Sélectionnez un employé demandeur rattaché à une filiale."
+            })
+        # La filiale est déduite du demandeur (sinon de l'utilisateur courant).
+        extra = self.tenant_save_kwargs(
+            serializer, default_subsidiary_id=requester.subsidiary_id or user.subsidiary_id,
+        )
         if not serializer.validated_data.get("requester"):
             extra["requester"] = user
-        # La filiale est déduite du demandeur (sinon de l'utilisateur courant).
-        if not serializer.validated_data.get("subsidiary"):
-            sub_id = requester.subsidiary_id or user.subsidiary_id
-            if sub_id:
-                extra["subsidiary_id"] = sub_id
-            else:
-                raise ValidationError({
-                    "requester": "Sélectionnez un employé demandeur rattaché à une filiale."
-                })
         reservation = serializer.save(**extra)
         from apps.core.enums import NotificationType
         from apps.notifications.events import reservation_event
@@ -76,7 +91,9 @@ class ReservationViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        reservation = serializer.save()
+        if serializer.validated_data.get("requester"):
+            self._check_requester(serializer.validated_data["requester"])
+        reservation = serializer.save(**self.tenant_save_kwargs(serializer))
         from apps.core.enums import NotificationType
         from apps.notifications.events import reservation_event
 
@@ -85,6 +102,28 @@ class ReservationViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
             title=f"Demande modifiée — {reservation.destination}",
             next_action="Vérifier les nouvelles informations de la demande.",
         )
+
+    def perform_destroy(self, instance):
+        """Une réservation dont une course a roulé ne se supprime plus.
+
+        La suppression emporte ses courses en cascade, donc leur coût FIGÉ : l'historique
+        financier disparaîtrait. Une demande qui n'a pas abouti s'annule ; une course réalisée
+        reste au dossier.
+        """
+        if instance.trips.exclude(status__in=("scheduled", "cancelled")).exists():
+            raise ValidationError({"detail": "Cette réservation a des courses réalisées : "
+                                             "elle ne peut plus être supprimée."})
+        # Une pièce financière (dépense, plein, recharge, maintenance) rattachée à l'une de ses
+        # courses perdrait ce rattachement (SET_NULL en masse, hors des verrous d'historique).
+        from apps.expenses.models import ElectricCharge, Expense, FuelLog
+        from apps.maintenance.models import MaintenanceRecord
+
+        trips = instance.trips.all()
+        if any(model.objects.filter(trip__in=trips).exists()
+               for model in (Expense, FuelLog, ElectricCharge, MaintenanceRecord)):
+            raise ValidationError({"detail": "Des pièces financières sont rattachées à ses courses : "
+                                             "annulez la réservation au lieu de la supprimer."})
+        super().perform_destroy(instance)
 
     def _ok(self, reservation):
         return Response(self.get_serializer(reservation).data, status=status.HTTP_200_OK)
@@ -164,16 +203,26 @@ class ReservationFromMapView(APIView):
         if missing:
             raise ValidationError({f: "Ce champ est requis." for f in missing})
 
-        # La filiale est déduite du demandeur ; repli sur la 1re filiale active
-        # pour les comptes à périmètre entreprise (aucun champ requis côté carte).
+        # La filiale est celle du demandeur. Un compte groupe (sans filiale) doit la choisir :
+        # l'ancien repli sur « la première filiale active » versait sa demande, et ses
+        # notifications, dans le circuit de validation d'une filiale prise au hasard.
         subsidiary_id = getattr(user, "subsidiary_id", None)
         if not subsidiary_id:
+            from apps.core.mixins import has_company_scope
             from apps.organizations.models import Subsidiary
 
-            first = Subsidiary.objects.filter(is_active=True).first()
-            if first is None:
-                raise ValidationError({"detail": "Aucune filiale active n'est configurée."})
-            subsidiary_id = first.pk
+            chosen = d.get("subsidiary")
+            if not has_company_scope(user) or not chosen:
+                raise ValidationError({"subsidiary": "Précisez la filiale pour laquelle vous réservez."})
+            from django.core.exceptions import ValidationError as DjangoValidationError
+
+            try:
+                subsidiary = Subsidiary.objects.filter(pk=chosen, is_active=True).first()
+            except (ValueError, DjangoValidationError):
+                subsidiary = None
+            if subsidiary is None:
+                raise ValidationError({"subsidiary": "Filiale inconnue ou inactive."})
+            subsidiary_id = subsidiary.pk
 
         from datetime import datetime
 
@@ -218,6 +267,7 @@ class ReservationFromMapView(APIView):
             purpose=str(d["purpose"])[:255],
             passengers=int(d.get("passengers") or 1),
             needs_driver=bool(d.get("needs_driver", True)),
+            flexibility_minutes=max(0, min(120, int(d.get("flexibility_minutes") or 0))),
             priority=d.get("priority", "normal"),
         )
         if d.get("submit"):

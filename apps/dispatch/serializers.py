@@ -110,12 +110,16 @@ class MissionSerializer(serializers.ModelSerializer):
         """Tracé limité aux arrêts visibles.
 
         Le tracé complet révélerait les points de prise en charge de toutes les filiales —
-        exactement ce que le filtrage du manifeste cherche à empêcher.
+        exactement ce que le filtrage du manifeste cherche à empêcher. Et un tracé n'est
+        qu'une suite de coordonnées : il suit donc aussi la règle des données personnelles,
+        sans quoi il livrerait ce que `get_stops` vient de masquer.
         """
-        from apps.dispatch.services import sees_whole_mission, visible_stops
+        from apps.dispatch.services import sees_manifest_details, sees_whole_mission, visible_stops
 
         if sees_whole_mission(obj, self._user()):
             return obj.consolidated_geometry
+        if not sees_manifest_details(obj, self._user()):
+            return []
         return [
             [float(stop.latitude), float(stop.longitude)]
             for stop in visible_stops(obj, self._user())
@@ -225,6 +229,68 @@ class DispatchSuggestionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def to_representation(self, instance):
+        from apps.finance.permissions import VIEW_TRIP_COST, can
+
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        # Calculé à la lecture, pour le seul lecteur habilité : stocké dans `metrics`, le
+        # montant suivrait la suggestion partout où elle est servie.
+        if instance.kind == "group" and request and can(request.user, VIEW_TRIP_COST):
+            data["financial_impact"] = _grouping_impact(instance)
+        return data
+
+
+def _grouping_impact(suggestion) -> dict | None:
+    """Sans / avec mutualisation : km, coût kilométrique, distance évitée, économie.
+
+    - Séparées, chaque course est valorisée à SON tarif (celui de sa date prévue) : la somme
+      égale les coûts estimés affichés course par course.
+    - Regroupées, le véhicule part avec la première course : le trajet consolidé est valorisé
+      à son tarif.
+    - Un détour mesuré à vol d'oiseau (routage indisponible) est corrigé par le facteur de
+      sinuosité du projet avant d'être ajouté à des trajets routiers ; l'approximation est
+      signalée.
+    """
+    from decimal import Decimal
+
+    from apps.finance import pricing
+    from apps.finance.rates import trip_rule
+    from apps.tracking.live import ROAD_WINDING_FACTOR
+    from apps.trips.models import Trip
+
+    trips = sorted(
+        Trip.objects.filter(pk__in=(suggestion.payload or {}).get("trip_ids", []))
+        .select_related("route", "vehicle", "reservation"),
+        key=lambda trip: trip.planned_departure_at or trip.created_at,
+    )
+    legs = [trip.route.planned_distance_km if getattr(trip, "route", None) else None for trip in trips]
+    if len(trips) < 2 or any(leg is None for leg in legs):
+        return None  # une distance manque : on n'annonce pas une économie non mesurée
+
+    metrics = suggestion.metrics or {}
+    source = metrics.get("distance_source") or "straight_line"
+    detour = metrics.get("detour_km")
+    if detour is not None and source != "road":
+        detour = Decimal(str(detour)) * Decimal(str(ROAD_WINDING_FACTOR))
+    impact = pricing.pooling_impact(legs, detour, None)
+
+    rules = [trip_rule(trip) for trip in trips]
+    if all(rule is not None for rule in rules):
+        separate = sum((pricing.distance_cost(leg, rule.amount_per_km)
+                        for leg, rule in zip(legs, rules)), Decimal("0"))
+        grouped = pricing.distance_cost(impact["km_grouped"], rules[0].amount_per_km)
+        impact.update(cost_separate=separate, cost_grouped=grouped, saving=separate - grouped)
+    lead = rules[0]
+    text = {key: None if value is None else str(value) for key, value in impact.items()}
+    # En texte, comme les DecimalField DRF : un montant ne transite jamais en flottant.
+    return {
+        **text,
+        "amount_per_km": str(lead.amount_per_km) if lead else None,
+        "currency": lead.currency if lead else "XOF",
+        "distance_source": source,
+        "approximate": source != "road",
+    }
 
 class DispatchDecisionInputSerializer(serializers.Serializer):
     """Décision humaine (§9) : accepter, accepter en modifiant, ou rejeter."""

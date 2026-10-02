@@ -412,6 +412,11 @@ def _ensure_trips(reservation):
                     fields.append(attr)
             if fields:
                 trip.save(update_fields=[*fields, "updated_at"])
+        # Chaque segment a SA date prévue, donc potentiellement son propre barème : un
+        # aller le 31/10 et un retour le 01/11 ne sont pas valorisés au même tarif.
+        from apps.finance.trip_pricing import refresh_estimate
+
+        refresh_estimate(trip)
         trips.append(trip)
     return trips
 

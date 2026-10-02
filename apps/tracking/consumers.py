@@ -11,7 +11,7 @@ from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from apps.tracking.live import compute_positions, trip_tracking
+from apps.tracking.live import compute_positions, redact_positions, trip_tracking
 
 TICK = 4  # secondes entre deux diffusions (côté broadcaster)
 FLEET_GROUP = "fleet_positions"
@@ -49,8 +49,12 @@ class FleetConsumer(AsyncJsonWebsocketConsumer):
         return compute_positions(self.user, self.subsidiary_id)
 
     async def fleet_positions(self, event):
-        """Message diffusé par le broadcaster → relais au client (filtré si besoin)."""
-        rows = event["results"]
+        """Message diffusé par le broadcaster → relais au client, masqué pour CE lecteur.
+
+        La charge est commune à tous les abonnés : sans ce masquage, chacun recevrait le
+        chauffeur et la destination des courses de toutes les filiales.
+        """
+        rows = redact_positions(event["results"], self.user)
         if self.subsidiary_id:
             rows = [r for r in rows if r.get("subsidiary") == self.subsidiary_id]
         await self.send_json({"type": "positions", "results": rows})

@@ -49,6 +49,8 @@ class CandidateTrip:
     origin_zone: str | None = None
     destination_zone: str | None = None
     priority: str = "normal"
+    #: Décalage de départ accepté par le demandeur (minutes). Élargit la tolérance d'écart.
+    flexibility_minutes: int = 0
 
 
 @dataclass
@@ -62,6 +64,9 @@ class Grouping:
     detour_km: float | None = None
     time_gap_min: float | None = None
     shared_destination_zone: bool = False
+    #: « road » (moteur d'itinéraire) ou « straight_line » : le régulateur doit savoir si
+    #: « détour 8 km » est une mesure routière ou une approximation.
+    distance_source: str = "straight_line"
     reasons: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -73,6 +78,7 @@ class Grouping:
             "detour_km": round(self.detour_km, 2) if self.detour_km is not None else None,
             "time_gap_min": round(self.time_gap_min, 1) if self.time_gap_min is not None else None,
             "shared_destination_zone": self.shared_destination_zone,
+            "distance_source": self.distance_source,
             "reasons": list(self.reasons),
         }
 
@@ -83,21 +89,26 @@ def time_gap_minutes(a: CandidateTrip, b: CandidateTrip) -> float | None:
     return abs((a.departure_at - b.departure_at).total_seconds()) / 60
 
 
-def detour_km(a: CandidateTrip, b: CandidateTrip) -> float | None:
+def detour_km(a: CandidateTrip, b: CandidateTrip, distance=None) -> float | None:
     """Détour induit par le regroupement, en kilomètres.
 
-    Approximation assumée : on compare la tournée consolidée (origine A → origine B →
-    destination A → destination B) au plus long des deux trajets réalisés seuls. Une
-    évaluation exacte demanderait le moteur d'itinéraire ; ce calcul sert à CLASSER des
-    candidats, pas à facturer.
+    On compare la tournée consolidée (origine A → origine B → destination A → destination B)
+    au plus long des deux trajets réalisés seuls.
+
+    `distance` est la fonction de mesure entre deux points, INJECTÉE par l'appelant. Par
+    défaut la ligne droite, mais à Abidjan c'est trompeur : la lagune impose les ponts, donc
+    deux points « proches » à vol d'oiseau peuvent être très éloignés par la route. Un
+    appelant capable d'interroger le moteur d'itinéraire fournit les distances routières et
+    le classement des regroupements devient fidèle au terrain.
     """
+    measure = distance or _haversine_km
     if None in (a.origin, a.destination, b.origin, b.destination):
         return None
-    solo = max(_haversine_km(a.origin, a.destination), _haversine_km(b.origin, b.destination))
+    solo = max(measure(a.origin, a.destination), measure(b.origin, b.destination))
     consolidated = (
-        _haversine_km(a.origin, b.origin)
-        + _haversine_km(b.origin, a.destination)
-        + _haversine_km(a.destination, b.destination)
+        measure(a.origin, b.origin)
+        + measure(b.origin, a.destination)
+        + measure(a.destination, b.destination)
     )
     return max(0.0, consolidated - solo)
 
@@ -107,6 +118,7 @@ def pair_compatibility(
     max_time_gap_min: float = MAX_TIME_GAP_MIN,
     max_detour: float = MAX_DETOUR_KM,
     max_origin_spread: float = MAX_ORIGIN_SPREAD_KM,
+    distance=None,
 ) -> Grouping:
     """Évalue le regroupement de DEUX courses. Contraintes dures ⇒ `feasible=False`."""
     reasons: list[str] = []
@@ -118,22 +130,22 @@ def pair_compatibility(
         reasons.append(f"capacité insuffisante ({passengers} passagers pour {capacity} places)")
 
     gap = time_gap_minutes(a, b)
+    # Deux courses souples peuvent se rejoindre à mi-chemin : leur marge s'additionne.
+    allowance = max(max_time_gap_min, a.flexibility_minutes + b.flexibility_minutes)
     if gap is None:
         feasible = False
         reasons.append("horaires de départ inconnus")
-    elif gap > max_time_gap_min:
+    elif gap > allowance:
         feasible = False
-        reasons.append(f"départs trop éloignés ({gap:.0f} min > {max_time_gap_min:.0f})")
+        reasons.append(f"départs trop éloignés ({gap:.0f} min > {allowance:.0f})")
 
-    spread = (
-        _haversine_km(a.origin, b.origin)
-        if a.origin and b.origin else None
-    )
+    measure = distance or _haversine_km
+    spread = measure(a.origin, b.origin) if a.origin and b.origin else None
     if spread is not None and spread > max_origin_spread:
         feasible = False
         reasons.append(f"points de départ trop distants ({spread:.1f} km)")
 
-    detour = detour_km(a, b)
+    detour = detour_km(a, b, distance)
     if detour is not None and detour > max_detour:
         feasible = False
         reasons.append(f"détour excessif ({detour:.1f} km > {max_detour:.1f})")
@@ -157,23 +169,29 @@ def pair_compatibility(
     return Grouping(
         trip_ids=[a.trip_id, b.trip_id],
         feasible=feasible,
-        score=_score(passengers, capacity, gap, detour, same_destination_zone) if feasible else float("-inf"),
+        score=(
+            _score(passengers, capacity, gap, detour, same_destination_zone, allowance)
+            if feasible else float("-inf")
+        ),
         passengers=passengers,
         detour_km=detour,
         time_gap_min=gap,
         shared_destination_zone=same_destination_zone,
+        distance_source="road" if distance is not None else "straight_line",
         reasons=reasons,
     )
 
 
-def _score(passengers, capacity, gap, detour, same_zone) -> float:
+def _score(passengers, capacity, gap, detour, same_zone, allowance=MAX_TIME_GAP_MIN) -> float:
     """Score de pertinence dans [0, 1] — remplissage d'abord, friction ensuite.
 
     Un regroupement est d'autant meilleur qu'il remplit le véhicule, avec peu de détour et
     des départs rapprochés. Les poids sont explicites pour rester discutables.
     """
     fill = min(1.0, passengers / capacity) if capacity else 0.0
-    time_penalty = min(1.0, (gap or 0) / MAX_TIME_GAP_MIN)
+    # Pénalité rapportée à la tolérance RÉELLE : un écart de 50 min entre deux courses qui
+    # acceptent chacune 30 min de souplesse n'est pas une friction, c'est un cas prévu.
+    time_penalty = min(1.0, (gap or 0) / max(1.0, allowance))
     detour_penalty = min(1.0, (detour or 0) / MAX_DETOUR_KM)
     return round(
         0.55 * fill + 0.20 * (1 - time_penalty) + 0.20 * (1 - detour_penalty)
@@ -182,7 +200,7 @@ def _score(passengers, capacity, gap, detour, same_zone) -> float:
     )
 
 
-def build_groupings(candidates, *, capacity: int, **thresholds) -> list[Grouping]:
+def build_groupings(candidates, *, capacity: int, distance=None, **thresholds) -> list[Grouping]:
     """Toutes les paires RÉALISABLES, classées par pertinence décroissante.
 
     Se limite volontairement aux paires : au-delà, la combinatoire explose et le régulateur
@@ -193,7 +211,9 @@ def build_groupings(candidates, *, capacity: int, **thresholds) -> list[Grouping
     items = list(candidates)
     for index, first in enumerate(items):
         for second in items[index + 1:]:
-            grouping = pair_compatibility(first, second, capacity=capacity, **thresholds)
+            grouping = pair_compatibility(
+                first, second, capacity=capacity, distance=distance, **thresholds,
+            )
             if grouping.feasible:
                 groupings.append(grouping)
     groupings.sort(key=lambda g: (-g.score, g.trip_ids))

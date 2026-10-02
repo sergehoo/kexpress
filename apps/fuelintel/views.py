@@ -14,7 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.fuelintel.access import can_see_costs
+from apps.fuelintel.access import can_see_costs, profiles_in_scope
 from apps.fuelintel.engine import FUEL_CODE_BY_TYPE
 from apps.fuelintel.models import ElectricityPrice, FuelConsumptionProfile, FuelPrice
 from apps.fuelintel.units import LITER
@@ -22,6 +22,23 @@ from apps.fuelintel.units import LITER
 
 def _f(value):
     return float(value) if value is not None else 0.0
+
+
+class EnergyEfficiencyView(APIView):
+    """Efficacité énergétique comparable (§16) — lecture seule.
+
+    Expose les indicateurs par PASSAGER-kilomètre, seuls comparables entre un minibus et une
+    berline. Réservé à ceux qui voient les coûts : la charge utile en contient.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.fuelintel.efficiency import fleet_efficiency
+
+        if not can_see_costs(request.user):
+            raise PermissionDenied("Réservé aux gestionnaires de flotte et administrateurs.")
+        return Response(fleet_efficiency(request.user, request.query_params))
 
 
 class FuelIntelView(APIView):
@@ -39,7 +56,12 @@ class FuelIntelView(APIView):
         today = timezone.localdate()
         month_start = today.replace(day=1)
 
-        logs = FuelLog.objects.all()
+        # `for_user`, PAS `.all()` : `TenantManager` ne filtre rien tout seul, et
+        # `can_see_costs` habilite des rôles de FILIALE (gestionnaire de flotte, admin
+        # filiale, finance). Avec `.all()`, chacun d'eux voyait les dépenses des filiales
+        # sœurs consolidées dans ses propres totaux. La flotte est mutualisée — les
+        # véhicules sont volontairement visibles de tous — mais les dépenses ne le sont pas.
+        logs = FuelLog.objects.for_user(request.user)
         day_l = _f(logs.filter(date=today).aggregate(s=Sum("liters"))["s"])
         day_cost = _f(logs.filter(date=today).aggregate(s=Sum("amount"))["s"])
         month_l = _f(logs.filter(date__gte=month_start).aggregate(s=Sum("liters"))["s"])
@@ -58,17 +80,17 @@ class FuelIntelView(APIView):
         fleet_rate = float(fleet.rate_l_per_100km) if fleet else None
 
         vehicles = list(
-            FuelConsumptionProfile.objects.filter(scope="vehicle", unit=LITER, samples__gte=1)
+            profiles_in_scope(FuelConsumptionProfile.objects, request.user).filter(scope="vehicle", unit=LITER, samples__gte=1)
             .order_by("-rate_l_per_100km")[:5]
             .values("label", "rate_l_per_100km", "samples")
         )
         drivers = list(
-            FuelConsumptionProfile.objects.filter(scope="driver", unit=LITER, samples__gte=1)
+            profiles_in_scope(FuelConsumptionProfile.objects, request.user).filter(scope="driver", unit=LITER, samples__gte=1)
             .order_by("rate_l_per_100km")[:5]
             .values("label", "rate_l_per_100km", "samples")
         )
         subsidiaries = list(
-            FuelConsumptionProfile.objects.filter(scope="subsidiary", unit=LITER, samples__gte=1)
+            profiles_in_scope(FuelConsumptionProfile.objects, request.user).filter(scope="subsidiary", unit=LITER, samples__gte=1)
             .order_by("rate_l_per_100km")
             .values("label", "rate_l_per_100km", "samples")
         )
@@ -85,7 +107,7 @@ class FuelIntelView(APIView):
                     })
 
         # Écart prévision / réel sur les courses clôturées du mois
-        gap_rows = Trip.objects.filter(
+        gap_rows = Trip.objects.for_user(request.user).filter(
             actual_return__date__gte=month_start,
             fuel_consumed__isnull=False, route__estimated_fuel_l__isnull=False,
         ).values_list("fuel_consumed", "route__estimated_fuel_l")
@@ -109,7 +131,7 @@ class FuelIntelView(APIView):
                 "history": [{"price": _f(h["price"]), "date": h["effective_date"].isoformat()} for h in history],
             }
 
-        electricity = self._electricity_section(today, month_start)
+        electricity = self._electricity_section(request.user, today, month_start)
 
         return Response({
             "day": {"liters": day_l, "cost": day_cost},
@@ -142,15 +164,18 @@ class FuelIntelView(APIView):
             "fuel_code_map": FUEL_CODE_BY_TYPE,
         })
 
-    def _electricity_section(self, today, month_start) -> dict:
+    def _electricity_section(self, user, today, month_start) -> dict:
         """Recharges électriques de la période + tarif kWh applicable.
 
         `price` vaut None si aucun tarif n'est renseigné : le coût d'une recharge est alors
         celui effectivement saisi, mais aucune estimation n'est possible.
+
+        Le périmètre est passé explicitement : une section qui agrégerait sans utilisateur
+        rouvrirait la fuite inter-filiales par la porte de derrière.
         """
         from apps.expenses.models import ElectricCharge
 
-        charges = ElectricCharge.objects.all()
+        charges = ElectricCharge.objects.for_user(user)
         day = charges.filter(date=today).aggregate(kwh=Sum("kwh_recharged"), cost=Sum("amount"))
         month = charges.filter(date__gte=month_start).aggregate(
             kwh=Sum("kwh_recharged"), cost=Sum("amount")

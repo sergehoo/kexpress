@@ -29,6 +29,19 @@ WRITERS = (
     "apps.dispatch.services",
     "apps.dispatch.decisions",
     "apps.dispatch.imputation",
+    # Finance : instantanés de coût des courses et gestion des barèmes. La couche lecture lit
+    # un tarif via `apps.finance.rates`, jamais en écrivant un instantané.
+    "apps.finance.trip_pricing",
+    "apps.finance.rule_admin",
+    # Coût réel (F1) : gel du coût direct des courses, clôture mensuelle.
+    "apps.finance.trip_cost",
+    "apps.finance.periods",
+    # F2 : circuit des dépenses, ajustements, reprise de l'historique.
+    "apps.expenses.workflow",
+    "apps.finance.adjustments",
+    "apps.finance.reconciliation",
+    # F3 : budgets (lignes, révisions, approbation, gel des réalisés, alertes).
+    "apps.finance.budget",
 )
 
 # Couche LECTURE / assistant : recommande, n'applique jamais.
@@ -42,11 +55,18 @@ PERSISTING_MODULES = ("apps.dispatch.suggest",)
 # Modules de PROPOSITION : ils calculent des suggestions et ne doivent RIEN appliquer.
 # C'est la preuve structurelle qu'aucune suggestion ne peut s'auto-exécuter (§9) : le
 # module qui propose est incapable, par construction, d'appeler celui qui décide.
-PROPOSERS = ("dispatch/grouping.py", "dispatch/suggest.py", "dispatch/rules.py")
+PROPOSERS = ("dispatch/grouping.py", "dispatch/suggest.py", "dispatch/rules.py",
+             "dispatch/road.py", "dispatch/simulation.py", "dispatch/anticipation.py")
 
 # Noyaux pédagogiquement purs : calculent, sans connaître l'exécution des courses.
 PURE_ENGINES = {
     "fuelintel/engine.py": ("apps.trips", "apps.reservations", "apps.dispatch"),
+    # Le barème se calcule sans base ni horloge : c'est ce qui le rend vérifiable en isolation.
+    "finance/pricing.py": ("apps.trips", "apps.reservations", "apps.dispatch",
+                           "apps.finance.models", "django.db", "django.utils.timezone"),
+    # Idem pour le coût réel : proratisation, amortissement, absorption, répartition.
+    "finance/costing.py": ("apps.trips", "apps.reservations", "apps.dispatch",
+                           "apps.finance.models", "django.db", "django.utils.timezone"),
 }
 
 

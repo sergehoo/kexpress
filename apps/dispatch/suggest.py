@@ -10,6 +10,7 @@ from __future__ import annotations
 from django.db import transaction
 
 from apps.dispatch.grouping import CandidateTrip, build_groupings
+from apps.dispatch.road import road_distance
 from apps.dispatch.models import DispatchSuggestion
 
 #: Nombre de propositions conservées par génération. Au-delà, le régulateur ne choisit plus,
@@ -66,6 +67,7 @@ def to_candidate(trip) -> CandidateTrip:
         origin_zone=str(route.origin_zone_id) if route and route.origin_zone_id else None,
         destination_zone=str(route.destination_zone_id) if route and route.destination_zone_id else None,
         priority=reservation.priority if reservation else "normal",
+        flexibility_minutes=reservation.flexibility_minutes if reservation else 0,
     )
 
 
@@ -101,16 +103,26 @@ def generate_grouping_suggestions(user, *, within_hours: int = 24) -> list[Dispa
     trips = list(candidate_trips(user, within_hours=within_hours))
     by_id = {str(trip.pk): trip for trip in trips}
 
-    DispatchSuggestion.objects.filter(status="proposed", kind="group").update(status="stale")
+    # Seules les propositions du PÉRIMÈTRE du générateur sont périmées : une génération
+    # lancée à Abidjan ne doit pas rendre caduques celles qui attendent une décision à Dakar.
+    DispatchSuggestion.objects.for_user(user).filter(
+        status="proposed", kind="group",
+    ).update(status="stale")
     if capacity <= 0 or len(trips) < 2:
         return []
 
-    groupings = build_groupings([to_candidate(trip) for trip in trips], capacity=capacity)
+    candidates = [to_candidate(trip) for trip in trips]
+    # Distances ROUTIÈRES (une seule matrice) : à vol d'oiseau, la lagune d'Abidjan rendrait
+    # le classement des regroupements trompeur. Repli automatique si le routage est indisponible.
+    groupings = build_groupings(
+        candidates, capacity=capacity, distance=road_distance(candidates),
+    )
     rows = []
     for rank, grouping in enumerate(groupings[:MAX_SUGGESTIONS], start=1):
         members = [by_id[trip_id] for trip_id in grouping.trip_ids if trip_id in by_id]
         if len(members) != len(grouping.trip_ids):
             continue
+        subsidiaries = {member.subsidiary_id for member in members}
         rows.append(DispatchSuggestion(
             kind="group",
             payload={"trip_ids": grouping.trip_ids, "capacity_required": grouping.passengers},
@@ -118,8 +130,10 @@ def generate_grouping_suggestions(user, *, within_hours: int = 24) -> list[Dispa
             rationale=_explain(grouping, members),
             score=grouping.score,
             rank=rank,
-            # Filiale de la première course : sert au filtrage de lecture, pas à l'imputation.
-            generated_for_id=members[0].subsidiary_id,
+            # Sert au filtrage de LECTURE, pas à l'imputation. Un regroupement qui mêle
+            # plusieurs filiales n'est rattaché à aucune : son explication cite les
+            # destinations et passagers de chacune, il ne regarde que le périmètre groupe.
+            generated_for_id=members[0].subsidiary_id if len(subsidiaries) == 1 else None,
         ))
     return DispatchSuggestion.objects.bulk_create(rows)
 

@@ -88,3 +88,24 @@ def resolve_route_zones(route, *, subsidiary_id=None, force: bool = False) -> bo
     if changed:
         route.save(update_fields=[*changed, "updated_at"])
     return bool(changed)
+
+
+def geofence_alerts_for(user, trips_qs):
+    """Alertes de zone qu'un utilisateur peut lire : celles de SES zones et de SES courses.
+
+    Les zones sont définies par filiale (nom de site, chantier, zone interdite). Filtrer par
+    véhicule — mutualisé — livrait à chacun les zones des filiales sœurs, leurs noms et les
+    coordonnées des franchissements. Une alerte reste visible de la filiale dont la course
+    est concernée : son propre chauffeur a franchi la zone.
+    """
+    from django.db.models import Q
+
+    from apps.tracking.models import GeofenceAlert
+
+    alerts = GeofenceAlert.objects.all()
+    if user.is_superuser or getattr(user, "has_company_scope", False):
+        return alerts
+    own_trips = Q(trip__in=trips_qs)
+    if not user.subsidiary_id:
+        return alerts.filter(own_trips)
+    return alerts.filter(Q(zone__subsidiary_id=user.subsidiary_id) | own_trips)

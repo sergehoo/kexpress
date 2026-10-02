@@ -51,12 +51,31 @@ def _zone_of(route, side: str):
     return (str(zone.pk), zone.name) if zone else None
 
 
-def _trip_row(trip) -> dict:
+def _pricing_block(trip) -> dict | None:
+    """Coût kilométrique estimé de la course — servi aux seuls détenteurs de
+    `finance.view_trip_cost` (cf. `dispatch_board`)."""
+    snapshot = getattr(trip, "pricing", None)
+    if snapshot is None:
+        return None
+    # En texte, comme les DecimalField DRF : un montant ne transite jamais en flottant.
+    return {
+        "amount_per_km": _text(snapshot.amount_per_km),
+        "currency": snapshot.currency,
+        "estimated_cost": _text(snapshot.estimated_cost),
+        "actual_cost": _text(snapshot.actual_cost),
+    }
+
+
+def _text(value):
+    return None if value is None else str(value)
+
+
+def _trip_row(trip, *, with_costs: bool = False) -> dict:
     route = getattr(trip, "route", None)
     reservation = getattr(trip, "reservation", None)
     origin_zone = _zone_of(route, "origin")
     destination_zone = _zone_of(route, "destination")
-    return {
+    row = {
         "id": str(trip.pk),
         "destination": trip.destination,
         "leg": trip.leg,
@@ -85,7 +104,11 @@ def _trip_row(trip) -> dict:
             else None
         ),
         "grouped": trip.dispatch_group is not None,
+        "distance_km": _text(route.planned_distance_km) if route else None,
     }
+    if with_costs:
+        row["pricing"] = _pricing_block(trip)
+    return row
 
 
 def _filtered_trips(user, params, start, end):
@@ -95,7 +118,7 @@ def _filtered_trips(user, params, start, end):
     qs = (
         Trip.objects.accessible_to(user)
         .filter(planned_departure_at__gte=start, planned_departure_at__lte=end)
-        .select_related("reservation", "subsidiary", "vehicle", "driver",
+        .select_related("reservation", "subsidiary", "vehicle", "driver", "pricing",
                         "route__origin_zone", "route__destination_zone")
     )
     simple = {
@@ -156,33 +179,59 @@ def _available_vehicles(user, params):
     ]
 
 
+def _mission_row(mission, user) -> dict:
+    """Ligne de tournée vue par CE lecteur.
+
+    Une tournée partagée doit se lire à travers ses propres courses : le nombre total de
+    courses et l'heure du premier ramassage — souvent celui d'une autre filiale — révélaient
+    l'activité des filiales sœurs. Même règle que le manifeste (`visible_trip_links`).
+    """
+    from django.db.models import Count, Min
+
+    from apps.dispatch.services import sees_whole_mission, visible_trip_links
+
+    if sees_whole_mission(mission, user):
+        trips, departure = mission.trips.count(), mission.planned_departure_at
+    else:
+        seen = visible_trip_links(mission, user).aggregate(
+            n=Count("id"), first=Min("trip__planned_departure_at"),
+        )
+        trips, departure = seen["n"], seen["first"]
+    return {
+        "id": str(mission.pk), "code": mission.code, "status": mission.status,
+        "status_display": mission.get_status_display(),
+        "vehicle_registration": mission.vehicle.registration,
+        "vehicle_capacity": mission.vehicle.capacity,
+        "driver_name": mission.driver.full_name if mission.driver_id else None,
+        "planned_departure_at": departure,
+        "trips": trips,
+    }
+
+
 def dispatch_board(user, params) -> dict:
     """Instantané complet du centre de dispatching pour cet utilisateur."""
     from apps.dispatch.models import DispatchSuggestion, TransportMission
 
+    from apps.finance.permissions import VIEW_TRIP_COST, can
+
     start, end = _window(params)
-    rows = [_trip_row(trip) for trip in _filtered_trips(user, params, start, end)]
+    sees_costs = can(user, VIEW_TRIP_COST)
+    group_wide = user.is_superuser or getattr(user, "has_group_read_scope", False)
+    # `accessible_to` ajoute les courses d'autres filiales où l'on est chauffeur ou demandeur :
+    # légitime pour les voir, pas pour lire leur coût (même règle que `TripPricingView`).
+    rows = [
+        _trip_row(trip, with_costs=sees_costs and (group_wide or trip.subsidiary_id == user.subsidiary_id))
+        for trip in _filtered_trips(user, params, start, end)
+    ]
     unassigned = [row for row in rows if not row["vehicle"]]
 
     missions = (
         TransportMission.objects.for_user(user)
         .filter(planned_departure_at__gte=start, planned_departure_at__lte=end)
         .select_related("vehicle", "driver")
-        .prefetch_related("trips")
         .order_by("planned_departure_at")[:100]
     )
-    mission_rows = [
-        {
-            "id": str(mission.pk), "code": mission.code, "status": mission.status,
-            "status_display": mission.get_status_display(),
-            "vehicle_registration": mission.vehicle.registration,
-            "vehicle_capacity": mission.vehicle.capacity,
-            "driver_name": mission.driver.full_name if mission.driver_id else None,
-            "planned_departure_at": mission.planned_departure_at,
-            "trips": mission.trips.count(),
-        }
-        for mission in missions
-    ]
+    mission_rows = [_mission_row(mission, user) for mission in missions]
 
     return {
         "window": {"start": start, "end": end},
@@ -191,7 +240,9 @@ def dispatch_board(user, params) -> dict:
         "zone_matrix": _zone_matrix(rows),
         "missions": mission_rows,
         "available_vehicles": _available_vehicles(user, params),
-        "pending_suggestions": DispatchSuggestion.objects.filter(status="proposed").count(),
+        "pending_suggestions": DispatchSuggestion.objects.for_user(user).filter(
+            status="proposed",
+        ).count(),
         "totals": {
             "trips": len(rows),
             "unassigned": len(unassigned),

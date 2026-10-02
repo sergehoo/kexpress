@@ -58,13 +58,13 @@ class LiveAlertsView(APIView):
         from django.utils import timezone
 
         from apps.analytics.scope import scoped
-        from apps.tracking.models import GeofenceAlert, RouteDeviationAlert
+        from apps.tracking.models import RouteDeviationAlert
+        from apps.tracking.zones import geofence_alerts_for
 
         qs = scoped(request.user)
         now = timezone.now()
         since = now - timedelta(hours=12)
         trips = qs["trips"]
-        vehicles = qs["vehicles"]
         items = []
 
         # Détours & arrêts prolongés (#3C/#12)
@@ -92,8 +92,8 @@ class LiveAlertsView(APIView):
 
         # Entrées en zone interdite
         for g in (
-            GeofenceAlert.objects.filter(
-                vehicle__in=vehicles, zone__zone_type="forbidden", event="enter", occurred_at__gte=since
+            geofence_alerts_for(request.user, trips).filter(
+                zone__zone_type="forbidden", event="enter", occurred_at__gte=since
             ).select_related("vehicle", "zone")[:100]
         ):
             items.append({

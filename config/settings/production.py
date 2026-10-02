@@ -66,6 +66,23 @@ if NOTIFY_EMAIL_ENABLED:
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
+# --- Cache partagé (P0) ---------------------------------------------------
+# Les limites de débit (connexion, définition du mot de passe) comptent dans le cache : en
+# production, il est PARTAGÉ entre les processus (Redis) — sinon chaque worker aurait son
+# propre compteur et la limite serait multipliée par le nombre de workers.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env("CACHE_URL", default=REDIS_URL),  # noqa: F405
+    }
+}
+
+# --- Invitations (P0) -----------------------------------------------------
+# En production, une invitation ne part que si elle peut ARRIVER : adresse publique du
+# frontend (pas localhost) et envoi d'email réel (pas la console du conteneur). Sinon l'envoi
+# est refusé avec un message clair, au lieu d'un lien perdu dans les journaux.
+INVITATION_DELIVERY_CHECK = env.bool("INVITATION_DELIVERY_CHECK", default=True)
+
 # --- Sentry (monitoring erreurs + performance, optionnel) -----------------
 # Activé uniquement si SENTRY_DSN est défini. Instrumente Django et Celery.
 SENTRY_DSN = env("SENTRY_DSN", default="")

@@ -28,10 +28,22 @@ def managers_of(subsidiary_id):
     )
 
 
-def finance_users():
+def finance_users(subsidiary_id):
+    """Financiers concernés par un événement à coût : ceux de LA filiale + le groupe.
+
+    Même convention de périmètre que `managers_of` : FINANCE est un rôle de filiale, un
+    financier rattaché ne reçoit que les événements de sa filiale ; un financier SANS
+    filiale est un financier groupe et consolide tout. Sans ce partitionnement, chaque
+    plein, recharge ou maintenance poussait montant, véhicule et destination dans les
+    notifications des financiers de toutes les autres filiales.
+    """
     from apps.accounts.models import User
 
-    return list(User.objects.filter(is_active=True, role=RoleChoices.FINANCE))
+    return list(
+        User.objects.filter(is_active=True, role=RoleChoices.FINANCE).filter(
+            Q(subsidiary_id=subsidiary_id) | Q(subsidiary_id__isnull=True)
+        )
+    )
 
 
 def reservation_stakeholders(reservation, *, include_driver=True) -> list:

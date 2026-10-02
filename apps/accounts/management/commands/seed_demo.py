@@ -1,7 +1,9 @@
 """Crée un jeu de données de démonstration (idempotent).
 
 1 entreprise, 2 filiales, un utilisateur par rôle, quelques véhicules et chauffeurs.
-Mot de passe commun à tous les comptes de démo : « demo1234 ».
+Aucun mot de passe par défaut : les comptes de démo reçoivent le mot de passe choisi par
+l'opérateur (variable d'environnement `DEMO_PASSWORD`), sinon aucun mot de passe utilisable —
+la commande affiche alors, pour chaque compte créé, son lien d'invitation à usage unique.
 """
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -17,7 +19,7 @@ from apps.drivers.models import Driver
 from apps.organizations.models import Company, Department, Subsidiary
 from apps.vehicles.models import Vehicle
 
-DEMO_PASSWORD = "demo1234"
+import os
 
 
 class Command(BaseCommand):
@@ -55,6 +57,7 @@ class Command(BaseCommand):
             ("audit@kaydan.test", RoleChoices.AUDITOR, None, False, False),
         ]
         created_count = 0
+        created_without_password = []
         for email, role, sub, is_super, is_staff in users_spec:
             user, created = User.objects.get_or_create(
                 email=email,
@@ -68,7 +71,20 @@ class Command(BaseCommand):
                 },
             )
             if created:
-                user.set_password(DEMO_PASSWORD)
+                demo_password = os.environ.get("DEMO_PASSWORD", "")
+                if demo_password:
+                    from django.contrib.auth.password_validation import validate_password
+                    from django.core.exceptions import ValidationError
+                    from django.core.management.base import CommandError
+
+                    try:  # mêmes validateurs que partout : pas de mot de passe faible ou connu
+                        validate_password(demo_password, user)
+                    except ValidationError as exc:
+                        raise CommandError("DEMO_PASSWORD refusé : " + " ".join(exc.messages))
+                    user.set_password(demo_password)  # choisi par l'opérateur, jamais codé en dur
+                else:
+                    user.set_unusable_password()
+                    created_without_password.append(user)
                 user.save()
                 created_count += 1
 
@@ -117,7 +133,13 @@ class Command(BaseCommand):
             f"Démo prête : 1 entreprise, 2 filiales, {len(users_spec)} comptes "
             f"({created_count} créés), {len(vehicles_spec)} véhicules, 2 chauffeurs."
         ))
-        self.stdout.write(self.style.WARNING(f"Mot de passe de tous les comptes de démo : {DEMO_PASSWORD}"))
+        if created_without_password:
+            from apps.accounts.invitations import invitation_link
+
+            self.stdout.write(self.style.WARNING(
+                "Comptes créés sans mot de passe (DEMO_PASSWORD absent) — liens d'invitation :"))
+            for user in created_without_password:
+                self.stdout.write(f"  {user.email} : {invitation_link(user)}")
 
     def _seed_operations(self, sub_a, sub_b):
         """Positions GPS, maintenance et carburant de démonstration (idempotent)."""
@@ -226,7 +248,7 @@ class Command(BaseCommand):
                         "liters": Decimal("45.00"),
                         "amount": Decimal("38250"),
                         "price_per_liter": Decimal("850"),
-                        "mileage": v.mileage - k * 300,
+                        "mileage": max(0, v.mileage - k * 300),  # jamais négatif (contrainte base)
                     },
                 )
 
@@ -261,11 +283,13 @@ class Command(BaseCommand):
         for i, v in enumerate(vehicles[:3]):
             Expense.objects.get_or_create(
                 vehicle=v, label="Péage autoroute", category="toll",
-                defaults={"subsidiary": v.subsidiary, "amount": Decimal("2500"), "date": date.today() - timedelta(days=i + 1)},
+                defaults={"subsidiary": v.subsidiary, "amount": Decimal("2500"), "status": "validated",
+                          "date": date.today() - timedelta(days=i + 1)},
             )
             Expense.objects.get_or_create(
-                vehicle=v, label="Lavage", category="other",
-                defaults={"subsidiary": v.subsidiary, "amount": Decimal("5000"), "date": date.today() - timedelta(days=i + 3)},
+                vehicle=v, label="Lavage", category="washing",
+                defaults={"subsidiary": v.subsidiary, "amount": Decimal("5000"), "status": "validated",
+                          "date": date.today() - timedelta(days=i + 3)},
             )
 
         # Zone de géofencing (mission Plateau) — le trajet vers Cocody en sort.

@@ -17,11 +17,82 @@ from apps.core.enums import COMPANY_SCOPE_ROLES, AuditAction, RoleChoices
 
 logger = logging.getLogger("apps.accounts.api_views")
 
-ADMIN_ROLES = COMPANY_SCOPE_ROLES | {RoleChoices.SUBSIDIARY_ADMIN}
+#: Rôles qui ADMINISTRENT des comptes. Explicite : l'auditeur a le périmètre entreprise en
+#: LECTURE, jamais l'administration des comptes (D7) — sinon il pouvait se promouvoir ou
+#: prendre la main sur un compte financier et contourner sa lecture seule.
+ADMIN_ROLES = frozenset({RoleChoices.SUPER_ADMIN, RoleChoices.COMPANY_ADMIN, RoleChoices.SUBSIDIARY_ADMIN})
+#: Rôles qui administrent les comptes de niveau GROUPE.
+GROUP_ADMIN_ROLES = frozenset({RoleChoices.SUPER_ADMIN, RoleChoices.COMPANY_ADMIN})
+#: Attributs qui fixent les droits : personne ne modifie les siens.
+PRIVILEGE_FIELDS = ("role", "subsidiary", "is_superuser", "is_staff")
+
+
+def _invite_best_effort(user, actor) -> None:
+    """Invitation après création : un incident d'envoi ne défait pas le compte créé (on
+    renvoie l'invitation par l'action `invite`), il est journalisé."""
+    from apps.accounts.invitations import send_invitation
+
+    try:
+        send_invitation(user, actor)
+    except Exception:
+        logger.warning("Invitation non envoyée à %s : à renvoyer depuis la fiche.", user.email, exc_info=True)
+
+
+def _finance_writes_of_role(role, subsidiary_id) -> set[str]:
+    """Permissions financières d'ÉCRITURE que confère un rôle (à filiale donnée)."""
+    from types import SimpleNamespace
+
+    from apps.finance.permissions import WRITE_CODENAMES, role_grants
+
+    probe = SimpleNamespace(role=role, subsidiary_id=subsidiary_id, is_superuser=False,
+                            is_active=True, is_authenticated=True)
+    return {c for c in WRITE_CODENAMES if role_grants(probe, c)}
+
+
+def _finance_writes_of(user) -> set[str]:
+    from apps.finance.permissions import WRITE_CODENAMES, can
+
+    return {c for c in WRITE_CODENAMES if can(user, c)}
+
+
+def _nominative_finance_writes(user) -> set[str]:
+    """Écritures financières accordées NOMINATIVEMENT (groupes Django, permissions directes) :
+    elles restent attachées au compte quel que soit son rôle."""
+    from django.contrib.auth.backends import ModelBackend
+
+    from apps.finance.permissions import WRITE_CODENAMES
+
+    if not getattr(user, "pk", None):
+        return set()
+    granted = ModelBackend().get_all_permissions(user)
+    return {c for c in WRITE_CODENAMES if f"finance.{c}" in granted}
+
+
+_CURRENT = object()
+
+
+def _target_writes(target, role=_CURRENT, subsidiary_id=_CURRENT) -> set[str]:
+    """Droits financiers d'écriture d'un compte : ceux de son rôle (actuel, ou celui qu'on lui
+    donne — une filiale `None` est le niveau groupe) ET ceux qu'il détient nominativement."""
+    role = target.role if role is _CURRENT else role
+    subsidiary_id = target.subsidiary_id if subsidiary_id is _CURRENT else subsidiary_id
+    return _finance_writes_of_role(role, subsidiary_id) | _nominative_finance_writes(target)
 
 
 class SetPasswordSerializer(serializers.Serializer):
     password = serializers.CharField(min_length=6, max_length=128)
+
+
+def check_password_strength(password, user, *, field):
+    """Validateurs Django (`AUTH_PASSWORD_VALIDATORS`) sur TOUT mot de passe choisi : longueur,
+    mots de passe courants, tout-numérique, proximité avec l'identité du titulaire."""
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    try:
+        validate_password(password, user)
+    except DjangoValidationError as exc:
+        raise ValidationError({field: list(exc.messages)})
 
 
 class EmployeeViewSet(viewsets.ModelViewSet):
@@ -56,21 +127,66 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     # --- Garde-fous -------------------------------------------------------
 
     def _check_admin(self):
+        from apps.finance.permissions import is_auditor
+
         u = self.request.user
-        if not (u.is_superuser or u.role in ADMIN_ROLES):
+        if is_auditor(u) or not (u.is_superuser or u.role in ADMIN_ROLES):
             raise PermissionDenied("Gestion des utilisateurs réservée aux administrateurs.")
+
+    def _is_group_admin(self) -> bool:
+        u = self.request.user
+        return bool(u.is_superuser or u.role in GROUP_ADMIN_ROLES)
+
+    def _is_super_admin(self) -> bool:
+        u = self.request.user
+        return bool(u.is_superuser or u.role == RoleChoices.SUPER_ADMIN)
+
+    def _exceeds_ceiling(self, target, role=_CURRENT, subsidiary_id=_CURRENT) -> bool:
+        """Le compte (dans son état actuel, ou avec le rôle / la filiale qu'on lui donne)
+        a-t-il des droits financiers d'écriture que l'administrateur n'a pas ?"""
+        if self._is_super_admin():
+            return False
+        return not _target_writes(target, role, subsidiary_id) <= _finance_writes_of(self.request.user)
+
+    def _check_password_ceiling(self, target, role=_CURRENT, subsidiary_id=_CURRENT, *,
+                                what="son mot de passe"):
+        """On ne connaît pas le mot de passe d'un compte plus puissant que soi.
+
+        Définir, réinitialiser le mot de passe d'un compte — ou changer l'adresse où partent
+        ses invitations — c'est pouvoir agir en son nom. Un administrateur ne le fait donc que
+        pour un compte dont les droits financiers d'écriture (rôle ET permissions nominatives,
+        avant ET après la modification) n'excèdent pas les siens (un super administrateur,
+        pour tous) — sinon la séparation des tâches (saisie / validation / paiement) tomberait.
+        """
+        if self._exceeds_ceiling(target) or self._exceeds_ceiling(target, role, subsidiary_id):
+            raise PermissionDenied(
+                f"Ce compte détient des droits financiers que vous n'avez pas : {what} relève de "
+                "l'utilisateur (invitation) ou d'un super administrateur.")
+
+    @staticmethod
+    def _is_group_level(role, subsidiary) -> bool:
+        """Compte de niveau GROUPE : rôle à périmètre entreprise, ou financier sans filiale.
+
+        Un financier sans filiale est un financier groupe : il reçoit les notifications de
+        toutes les filiales et fixe le barème kilométrique global. Le créer revient donc à
+        attribuer un rôle de niveau groupe, ce qu'un admin de filiale ne peut pas faire.
+        """
+        return role in COMPANY_SCOPE_ROLES or (role == RoleChoices.FINANCE and subsidiary is None)
 
     def _check_can_manage(self, target: User):
         """Un admin de filiale ne gère ni les rôles entreprise ni les super admins."""
         u = self.request.user
         if target.is_superuser and not u.is_superuser:
             raise PermissionDenied("Seul un super administrateur peut gérer ce compte.")
-        if target.role in COMPANY_SCOPE_ROLES and not (u.is_superuser or u.role in COMPANY_SCOPE_ROLES):
+        if target.role == RoleChoices.SUPER_ADMIN and not self._is_super_admin():
+            raise PermissionDenied("Seul un super administrateur peut gérer ce compte.")
+        if self._is_group_level(target.role, target.subsidiary) and not self._is_group_admin():
             raise PermissionDenied("Ce compte a un périmètre entreprise : gestion réservée au siège.")
 
     def _check_role_assignable(self, role: str | None):
-        u = self.request.user
-        if role in COMPANY_SCOPE_ROLES and not (u.is_superuser or u.role in COMPANY_SCOPE_ROLES):
+        if role == RoleChoices.SUPER_ADMIN and not self._is_super_admin():
+            raise PermissionDenied("Seul un super administrateur peut attribuer ce rôle.")
+        if role in COMPANY_SCOPE_ROLES and not self._is_group_admin():
             raise PermissionDenied("Vous ne pouvez pas attribuer un rôle à périmètre entreprise.")
 
     # --- CRUD --------------------------------------------------------------
@@ -80,6 +196,11 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_role_assignable(serializer.validated_data.get("role"))
         u = self.request.user
         sub = serializer.validated_data.get("subsidiary")
+        if serializer.validated_data.get("password"):
+            # Aucun mot de passe choisi à la création, par personne : le titulaire le définit
+            # lui-même depuis son invitation (séparation des responsabilités).
+            raise ValidationError({"password": "Le mot de passe est défini par l'utilisateur depuis son "
+                                               "invitation : laissez ce champ vide."})
         # Un admin de filiale ne crée QUE dans SA filiale (refuse une autre filiale
         # explicitement fournie ; isolation non garantie par le seul scoping de lecture).
         if not u.has_company_scope and u.subsidiary_id:
@@ -89,24 +210,71 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         else:
             user = serializer.save()
         audit.record(u, AuditAction.CREATE, user, changes={"action": "create_user", "role": user.role})
+        # Invitation au SEUL titulaire (lien à usage unique). Avec le SSO, Keycloak s'en charge
+        # (email d'activation) après la synchronisation.
+        from django.conf import settings as django_settings
+
+        if not getattr(django_settings, "OIDC_ENABLED", False):
+            transaction.on_commit(lambda: _invite_best_effort(user, u))
         # Provisioning Keycloak (création + rôles) après commit, en asynchrone.
         transaction.on_commit(lambda: schedule_user_sync(user.id))
 
     def perform_update(self, serializer):
         self._check_admin()
         self._check_can_manage(serializer.instance)
+        data = serializer.validated_data
+        target = serializer.instance
+        if target.pk == self.request.user.pk and any(
+            field in data and data[field] != getattr(target, field) for field in PRIVILEGE_FIELDS
+        ):
+            raise PermissionDenied("Vous ne pouvez pas modifier vos propres droits (rôle, filiale).")
+        new_role_value = data.get("role", target.role)
+        new_sub_id = getattr(data.get("subsidiary", target.subsidiary), "pk", None)
+        if data.get("password"):
+            self._check_password_ceiling(target, new_role_value, new_sub_id)
+        if "email" in data and (data["email"] or "").lower() != (target.email or "").lower():
+            # L'adresse reçoit les invitations : la changer, c'est pouvoir prendre le compte.
+            self._check_password_ceiling(target, new_role_value, new_sub_id, what="son adresse email")
+        # Promotion au-delà de ses propres droits : un mot de passe connu (fixé avant par cet
+        # admin) ou une session ouverte ne doivent pas en profiter → mot de passe inutilisable,
+        # sessions coupées, nouvelle invitation au titulaire.
+        promoted_beyond = (("role" in data or "subsidiary" in data)
+                           and not self._exceeds_ceiling(target)
+                           and self._exceeds_ceiling(target, new_role_value, new_sub_id))
         new_role = serializer.validated_data.get("role")
         if new_role and new_role != serializer.instance.role:
             self._check_role_assignable(new_role)
         u = self.request.user
-        # Un admin de filiale ne peut pas déplacer un utilisateur vers une autre filiale.
-        if not u.has_company_scope and u.subsidiary_id:
-            new_sub = serializer.validated_data.get("subsidiary", serializer.instance.subsidiary)
-            if new_sub and str(new_sub.id) != str(u.subsidiary_id):
+        # Un admin de filiale ne peut ni déplacer un utilisateur vers une autre filiale, ni lui
+        # RETIRER sa filiale : sans filiale, un financier devient financier groupe.
+        if not (u.is_superuser or u.has_company_scope):
+            data = serializer.validated_data
+            if "subsidiary" in data and (
+                data["subsidiary"] is None or str(data["subsidiary"].id) != str(u.subsidiary_id)
+            ):
                 raise PermissionDenied("Vous ne pouvez pas affecter un utilisateur à une autre filiale.")
+            role = data.get("role", serializer.instance.role)
+            subsidiary = data.get("subsidiary", serializer.instance.subsidiary)
+            if self._is_group_level(role, subsidiary):
+                raise PermissionDenied("Vous ne pouvez pas attribuer un rôle à périmètre entreprise.")
         user = serializer.save()
-        audit.record(self.request.user, AuditAction.UPDATE, user,
-                     changes={"action": "update_user", "role": user.role})
+        from apps.accounts.sessions import revoke_sessions
+
+        changes = {"action": "update_user", "role": user.role}
+        if data.get("password"):
+            revoke_sessions(user)
+            changes["password_set"] = True
+        if promoted_beyond:
+            user.set_unusable_password()
+            user.save(update_fields=["password"])
+            revoke_sessions(user)
+            changes["credentials_reset"] = True
+            from django.conf import settings as django_settings
+
+            if not getattr(django_settings, "OIDC_ENABLED", False):
+                actor = self.request.user
+                transaction.on_commit(lambda: _invite_best_effort(user, actor))
+        audit.record(self.request.user, AuditAction.UPDATE, user, changes=changes)
         # Propage nom/prénom/email/rôle/filiale/téléphone/statut vers Keycloak.
         transaction.on_commit(lambda: schedule_user_sync(user.id))
 
@@ -119,11 +287,19 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         if hard:
             if not (self.request.user.is_superuser or self.request.user.role == RoleChoices.SUPER_ADMIN):
                 raise PermissionDenied("Suppression définitive réservée au super administrateur.")
+            # La suppression est-elle permise ? (auteur d'un ajustement, d'une clôture, d'un
+            # historique de dépense… sont protégés.) Vérifié AVANT tout effet : sinon Keycloak
+            # serait désactivé et l'audit écrit pour une suppression qui n'aura pas lieu.
+            from django.db.models.deletion import Collector
+
+            Collector(using=instance._state.db or "default").collect([instance])
             # Côté Keycloak : on DÉSACTIVE (jamais de suppression) avant le purge local.
             self._keycloak_disable_best_effort(instance)
-            audit.record(self.request.user, AuditAction.DELETE, instance,
-                         changes={"action": "hard_delete_user", "email": instance.email})
-            instance.delete()
+            email = instance.email
+            with transaction.atomic():
+                audit.record(self.request.user, AuditAction.DELETE, instance,
+                             changes={"action": "hard_delete_user", "email": email})
+                instance.delete()
             return
         # Suppression douce : désactivation (préserve l'historique métier) + désactive Keycloak.
         instance.is_active = False
@@ -157,6 +333,10 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             raise ValidationError("Vous ne pouvez pas bloquer votre propre compte.")
         user.is_active = active
         user.save(update_fields=["is_active"])
+        if not active:
+            from apps.accounts.sessions import revoke_sessions
+
+            revoke_sessions(user)  # sessions coupées, liens d'invitation caducs
         audit.record(request.user, AuditAction.UPDATE, user,
                      changes={"action": "unblock_user" if active else "block_user"})
         # Reflète l'état actif/inactif dans Keycloak (enabled).
@@ -179,12 +359,31 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_admin()
         user = self.get_object()
         self._check_can_manage(user)
+        self._check_password_ceiling(user)
         ser = SetPasswordSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        check_password_strength(ser.validated_data["password"], user, field="password")
+        from apps.accounts.sessions import revoke_sessions
+
         user.set_password(ser.validated_data["password"])
-        user.save(update_fields=["password"])
+        revoke_sessions(user, save=False)
+        user.save(update_fields=["password", "sessions_revoked_at"])
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "set_password"})
         return Response({"detail": "Mot de passe mis à jour."})
+
+    @action(detail=True, methods=["post"])
+    def invite(self, request, pk=None):
+        """(Ré)envoie l'invitation : le lien part à l'adresse du titulaire, jamais à l'appelant."""
+        from apps.accounts.invitations import InvitationError, send_invitation
+
+        self._check_admin()
+        user = self.get_object()
+        self._check_can_manage(user)
+        try:
+            send_invitation(user, request.user)
+        except InvitationError as exc:
+            raise ValidationError({"detail": str(exc)})
+        return Response({"detail": f"Invitation envoyée à {user.email}."})
 
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request, pk=None):
@@ -192,9 +391,13 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self._check_admin()
         user = self.get_object()
         self._check_can_manage(user)
-        temp = secrets.token_urlsafe(8)
+        self._check_password_ceiling(user)
+        from apps.accounts.sessions import revoke_sessions
+
+        temp = secrets.token_urlsafe(12)
         user.set_password(temp)
-        user.save(update_fields=["password"])
+        revoke_sessions(user, save=False)
+        user.save(update_fields=["password", "sessions_revoked_at"])
         audit.record(request.user, AuditAction.UPDATE, user, changes={"action": "reset_password"})
         return Response({"detail": "Mot de passe réinitialisé.", "temporary_password": temp})
 

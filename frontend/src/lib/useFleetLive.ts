@@ -16,6 +16,23 @@ function wsUrl(subsidiaryId?: string) {
 }
 
 /**
+ * Ferme un WebSocket sans jamais interrompre une négociation en cours.
+ *
+ * Appeler `close()` pendant l'état `CONNECTING` provoque l'avertissement navigateur
+ * « WebSocket is closed before the connection is established » et laisse une connexion
+ * orpheline côté serveur : la poignée de main aboutit alors que plus personne n'écoute.
+ * On attend donc l'ouverture pour fermer proprement.
+ */
+export function closeWhenPossible(ws: WebSocket | null | undefined) {
+  if (!ws) return;
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.addEventListener("open", () => ws.close(), { once: true });
+    return;
+  }
+  if (ws.readyState === WebSocket.OPEN) ws.close();
+}
+
+/**
  * Positions de la flotte en temps réel via WebSocket (Channels).
  * Repli automatique sur le polling REST si le WebSocket n'est pas disponible.
  */
@@ -34,7 +51,14 @@ export function useFleetLive(subsidiaryId?: string, enabled = true) {
     let attempt = 0;
 
     function connect() {
-      if (typeof window === "undefined" || !tokens.access) return;
+      if (typeof window === "undefined") return;
+      if (!tokens.access) {
+        // Jeton pas encore résolu (SSO en cours d'initialisation) : réessayer bientôt.
+        // Sans cela, un montage plus rapide que l'authentification condamnait le suivi
+        // temps réel pour toute la durée de la page, avec un repli REST silencieux.
+        if (!closedByEffect) retryRef.current = setTimeout(connect, 1000);
+        return;
+      }
       let ws: WebSocket;
       try {
         ws = new WebSocket(wsUrl(subsidiaryId));
@@ -72,7 +96,8 @@ export function useFleetLive(subsidiaryId?: string, enabled = true) {
     return () => {
       closedByEffect = true;
       if (retryRef.current) clearTimeout(retryRef.current);
-      wsRef.current?.close();
+      closeWhenPossible(wsRef.current);
+      wsRef.current = null;
     };
   }, [subsidiaryId, enabled]);
 

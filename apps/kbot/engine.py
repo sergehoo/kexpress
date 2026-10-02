@@ -403,7 +403,7 @@ def _upcoming_maintenance(qs) -> dict:
 
     soon = timezone.localdate() + timedelta(days=30)
     sched = list(
-        MaintenanceSchedule.objects.filter(is_active=True, due_date__lte=soon, vehicle__in=qs["vehicles"])
+        MaintenanceSchedule.objects.filter(is_active=True, due_date__lte=soon, vehicle__in=qs["owned_vehicles"])
         .select_related("vehicle", "maintenance_type").order_by("due_date")[:25]
     )
     if not sched:
@@ -428,7 +428,7 @@ def _expired_insurance(qs) -> dict:
     today = timezone.localdate()
     soon = today + timedelta(days=30)
     pols = list(
-        InsurancePolicy.objects.filter(vehicle__in=qs["vehicles"], expiry_date__lte=soon)
+        InsurancePolicy.objects.filter(vehicle__in=qs["owned_vehicles"], expiry_date__lte=soon)
         .select_related("vehicle", "vehicle__subsidiary").order_by("expiry_date")[:25]
     )
     if not pols:
@@ -453,7 +453,7 @@ def _expired_technical_visit(qs) -> dict:
     today = timezone.localdate()
     soon = today + timedelta(days=30)
     insp = list(
-        TechnicalInspection.objects.filter(vehicle__in=qs["vehicles"], next_date__lte=soon)
+        TechnicalInspection.objects.filter(vehicle__in=qs["owned_vehicles"], next_date__lte=soon)
         .select_related("vehicle").order_by("next_date")[:25]
     )
     if not insp:
@@ -524,14 +524,14 @@ def _fuel_consumption(user, qs, period) -> dict:
 
 
 def _fuel_drivers(user) -> dict:
-    from apps.fuelintel.access import can_see_costs
+    from apps.fuelintel.access import can_see_costs, profiles_in_scope
     from apps.fuelintel.models import FuelConsumptionProfile
 
     if not can_see_costs(user):
         return B.respond("fuel_drivers", answer="L'analyse de consommation est réservée aux gestionnaires.",
                          blocks=[B.alert("info", "L'efficacité carburant est réservée aux gestionnaires de flotte.")],
                          confidence=0.9, data_source="security_guard")
-    rows = list(FuelConsumptionProfile.objects.filter(scope="driver", samples__gte=1).order_by("rate_l_per_100km")[:5])
+    rows = list(profiles_in_scope(FuelConsumptionProfile.objects, user).filter(scope="driver", samples__gte=1).order_by("rate_l_per_100km")[:5])
     if not rows:
         return B.respond("fuel_drivers", answer="Pas encore assez de courses mesurées pour classer les chauffeurs.",
                          blocks=[B.alert("info", "Données insuffisantes pour le classement.")], confidence=0.8)
@@ -543,7 +543,7 @@ def _fuel_drivers(user) -> dict:
 
 
 def _fuel_replace(user) -> dict:
-    from apps.fuelintel.access import can_see_costs
+    from apps.fuelintel.access import can_see_costs, profiles_in_scope
     from apps.fuelintel.models import FuelConsumptionProfile
 
     if not can_see_costs(user):
@@ -551,7 +551,7 @@ def _fuel_replace(user) -> dict:
                          blocks=[B.alert("info", "L'efficacité carburant est réservée aux gestionnaires de flotte.")],
                          confidence=0.9, data_source="security_guard")
     fleet = FuelConsumptionProfile.objects.filter(scope="fleet").first()
-    rows = list(FuelConsumptionProfile.objects.filter(scope="vehicle", samples__gte=1).order_by("-rate_l_per_100km")[:5])
+    rows = list(profiles_in_scope(FuelConsumptionProfile.objects, user).filter(scope="vehicle", samples__gte=1).order_by("-rate_l_per_100km")[:5])
     if not rows:
         return B.respond("fuel_replace", answer="Pas encore assez de courses mesurées pour identifier les véhicules à surveiller.",
                          blocks=[B.alert("info", "Données insuffisantes.")], confidence=0.8)
@@ -750,8 +750,8 @@ def _today_summary(user, qs, period) -> dict:
     from apps.maintenance.models import MaintenanceSchedule
     from apps.vehicles.models import InsurancePolicy
 
-    revisions = MaintenanceSchedule.objects.filter(is_active=True, due_date__lte=soon, vehicle__in=qs["vehicles"]).count()
-    ins_soon = InsurancePolicy.objects.filter(vehicle__in=qs["vehicles"], expiry_date__lte=soon).count()
+    revisions = MaintenanceSchedule.objects.filter(is_active=True, due_date__lte=soon, vehicle__in=qs["owned_vehicles"]).count()
+    ins_soon = InsurancePolicy.objects.filter(vehicle__in=qs["owned_vehicles"], expiry_date__lte=soon).count()
 
     top = qs["trips"].filter(status="in_progress").values("subsidiary__name").annotate(n=Count("id")).order_by("-n").first()
 

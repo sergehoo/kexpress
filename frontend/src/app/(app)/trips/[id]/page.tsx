@@ -21,9 +21,12 @@ import { Button, Card, CardBody, EmptyState, Spinner } from "@/components/ui";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EndTripModal, StartTripModal } from "@/components/trip-modals";
 import { TripReplay } from "@/components/TripReplay";
+import { TripFinanceCard } from "@/components/finance/TripFinanceCard";
 import { useGpsTracker } from "@/lib/useGpsTracker";
 import { useTrip, useTripAction, useTripRoute } from "@/lib/queries";
 import { apiError } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { canFinance } from "@/lib/rbac";
 import { cn, formatDate, formatNumber } from "@/lib/utils";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -38,6 +41,10 @@ export default function TripDetailPage() {
   const router = useRouter();
   const { data: t, isLoading, isError } = useTrip(id);
   const route = useTripRoute(id);
+  const { me } = useAuth();
+  // Carte Finance : `view_trip_cost` uniquement (jamais demandeur ni chauffeur) ; l'API
+  // refuse les autres, ce garde évite d'afficher une carte vide ou d'émettre la requête.
+  const seesCost = canFinance(me, "view_trip_cost");
   const [modal, setModal] = useState<ModalState>(null);
   const [toast, setToast] = useState("");
 
@@ -225,6 +232,9 @@ export default function TripDetailPage() {
           )}
         </CardBody>
       </Card>
+
+      {/* Finance (spec 13) : barème, coût réel, dépenses, ajustements */}
+      {seesCost && <TripFinanceCard tripId={t.id} />}
 
       {/* Relecture d'itinéraire (trace GPS rejouable) — hors courses simplement planifiées */}
       {t.status !== "scheduled" && <TripReplay tripId={t.id} />}

@@ -38,6 +38,23 @@ app.conf.beat_schedule = {
         "task": "apps.vehicles.tasks.check_vehicle_compliance",
         "schedule": crontab(hour="6,14", minute=30),
     },
+    # Alertes critiques : poussées aux gestionnaires plutôt qu'attendues sur une page.
+    # Toutes les 30 min : un « retour sans véhicule » doit être connu avant l'heure du départ.
+    "push-critical-alerts": {
+        "task": "apps.analytics.tasks.push_critical_alerts",
+        "schedule": crontab(minute="*/30"),
+    },
+    # Coût kilométrique estimé des courses planifiées : rattrapage de ce qui échappe aux
+    # points d'accroche (itinéraire calculé ailleurs, replanification). Idempotent.
+    "refresh-trip-pricing": {
+        "task": "apps.finance.tasks.refresh_trip_pricing",
+        "schedule": crontab(minute="*/15"),
+    },
+    # F3 : seuils budgétaires franchis (une notification par seuil et par ligne).
+    "check-budget-alerts": {
+        "task": "apps.finance.tasks.check_budget_alerts",
+        "schedule": crontab(minute="*/30"),
+    },
     # Occupation & kilométrage à vide : matérialisation nocturne des 2 derniers jours
     # (la veille peut encore recevoir des clôtures tardives). La période « aujourd'hui »
     # reste calculée à la volée par l'API — cf. décision D4 (hybride batch + live).

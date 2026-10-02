@@ -67,8 +67,9 @@ class MaintenanceRecord(TenantScopedModel):
     est automatiquement celle de la course (cf. save()).
     """
 
+    # PROTECT : l'historique de maintenance (et son coût) survit au véhicule.
     vehicle = models.ForeignKey(
-        "vehicles.Vehicle", on_delete=models.CASCADE,
+        "vehicles.Vehicle", on_delete=models.PROTECT,
         related_name="maintenance_records", verbose_name="véhicule",
     )
     maintenance_type = models.ForeignKey(

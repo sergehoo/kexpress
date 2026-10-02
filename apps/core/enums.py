@@ -143,13 +143,74 @@ class MaintenanceNature(models.TextChoices):
 
 
 class ExpenseCategory(models.TextChoices):
+    # Recouvrent une table dédiée (plein, recharge, maintenance, assurance) : une dépense de
+    # ces catégories n'est admise que RATTACHÉE à son enregistrement source, et n'est alors
+    # pas recomptée (D2, cf. `apps.expenses.models.OVERLAPPING_CATEGORIES`).
     FUEL = "fuel", "Carburant"
     MAINTENANCE = "maintenance", "Maintenance"
     INSURANCE = "insurance", "Assurance"
+    # Dépenses directes propres à `Expense`.
     TOLL = "toll", "Péage"
+    PARKING = "parking", "Stationnement"
+    WASHING = "washing", "Lavage"
+    ROAD_FEES = "road_fees", "Frais de route"
+    ALLOWANCE = "allowance", "Indemnités"
+    LODGING = "lodging", "Hébergement"
+    REPAIR = "repair", "Réparation en mission"
     FINE = "fine", "Amende"
     UNEXPECTED = "unexpected", "Imprévu"
     OTHER = "other", "Autre"
+
+
+class ExpenseStatus(models.TextChoices):
+    """Circuit d'une dépense (F2). Seules VALIDÉE et PAYÉE sont comptées dans les coûts."""
+
+    DRAFT = "draft", "Brouillon"
+    SUBMITTED = "submitted", "Soumise"
+    TO_VALIDATE = "to_validate", "À valider"
+    VALIDATED = "validated", "Validée"
+    PAID = "paid", "Payée"
+    REJECTED = "rejected", "Rejetée"
+    CANCELLED = "cancelled", "Annulée"
+
+
+class AttachmentKind(models.TextChoices):
+    INVOICE = "invoice", "Facture"
+    RECEIPT = "receipt", "Reçu"
+    FUEL_TICKET = "fuel_ticket", "Ticket carburant"
+    TOLL_TICKET = "toll_ticket", "Ticket de péage"
+    PARKING = "parking", "Stationnement"
+    GARAGE_INVOICE = "garage_invoice", "Facture garage"
+    CHARGING = "charging", "Recharge électrique"
+    OTHER = "other", "Autre"
+
+
+class PaymentMethod(models.TextChoices):
+    TRANSFER = "transfer", "Virement"
+    CHECK = "check", "Chèque"
+    CASH = "cash", "Espèces"
+    MOBILE_MONEY = "mobile_money", "Mobile money"
+    CARD = "card", "Carte"
+    OTHER = "other", "Autre"
+
+
+class ExpenseSource(models.TextChoices):
+    """Enregistrement source d'une dépense (D2). Une dépense rattachée à une source est une
+    PIÈCE (facture, reçu) de cette source : le coût est compté une fois, par la source."""
+
+    NONE = "", "Dépense autonome"
+    FUEL_LOG = "fuel_log", "Plein de carburant"
+    ELECTRIC_CHARGE = "electric_charge", "Recharge électrique"
+    MAINTENANCE = "maintenance", "Maintenance"
+    INSURANCE = "insurance", "Assurance"
+    INSPECTION = "inspection", "Visite technique"
+    REVISION = "revision", "Révision"
+    VEHICLE_CHARGE = "vehicle_charge", "Charge véhicule"
+    #: Référence externe (n° de facture…) : la dépense reste comptée, elle n'a pas de double.
+    OTHER = "other", "Autre référence"
+    #: Dépense antérieure à D2 d'une catégorie qui recouvre une table dédiée : à reprendre,
+    #: exclue des coûts pour ne pas compter deux fois (visible dans le suivi Finance).
+    LEGACY = "legacy", "Reprise à faire"
 
 
 class AlertSeverity(models.TextChoices):
@@ -194,6 +255,11 @@ class NotificationType(models.TextChoices):
     EXPENSE_ADDED = "expense_added", "Dépense ajoutée"
     FUEL_DECLARED = "fuel_declared", "Plein de carburant déclaré"
     FUEL_ANOMALY = "fuel_anomaly", "Consommation carburant anormale"
+    # Alerte opérationnelle poussée (§19) : détectée par la surveillance, pas par un geste
+    # utilisateur. Une alerte critique ne doit pas attendre que quelqu'un ouvre une page.
+    OPERATIONAL_ALERT = "operational_alert", "Alerte opérationnelle"
+    # F3 — seuil de consommation d'une ligne budgétaire franchi (80 / 90 / 100 %…).
+    BUDGET_ALERT = "budget_alert", "Alerte budgétaire"
     FUEL_PRICE_UPDATED = "fuel_price_updated", "Prix carburant mis à jour"
     FUEL_BUDGET_EXCEEDED = "fuel_budget_exceeded", "Budget carburant dépassé"
     MAINTENANCE_DECLARED = "maintenance_declared", "Panne / maintenance déclarée"

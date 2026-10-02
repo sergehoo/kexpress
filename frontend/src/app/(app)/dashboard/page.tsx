@@ -81,6 +81,9 @@ export default function DashboardPage() {
 
   // Prévision maintenance : réservée aux gestionnaires / finance.
   const canForecast = !!me && (me.has_company_scope || ["fleet_manager", "subsidiary_admin", "finance"].includes(me.role));
+  // L'API ne sert aucun montant aux profils sans droit financier (§8) : on n'affiche donc pas
+  // de sections de coûts vides pour eux.
+  const showCosts = data?.costs_visible !== false;
   const forecast = useMaintenanceForecast(canForecast);
 
   const axis = theme === "dark" ? "#9fb0c9" : "#64748b";
@@ -164,7 +167,7 @@ export default function DashboardPage() {
           </Section>
 
           {/* ============ COÛT TOTAL FLOTTE ============ */}
-          <Section title="Coût total flotte">
+          {showCosts && <Section title="Coût total flotte">
             <div className="grid gap-4 lg:grid-cols-5">
               <Card className="lg:col-span-2">
                 <CardBody>
@@ -216,7 +219,7 @@ export default function DashboardPage() {
                 </CardBody>
               </Card>
             </div>
-          </Section>
+          </Section>}
 
           {/* ============ COURBES ============ */}
           <Section title="Évolution sur la période">
@@ -233,7 +236,7 @@ export default function DashboardPage() {
                 </BarChart>
               </ChartCard>
 
-              <ChartCard title="Carburant : litres et coût">
+              <ChartCard title={showCosts ? "Carburant : litres et coût" : "Carburant : litres"}>
                 <LineChart data={data.series} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                   <XAxis dataKey="label" tick={{ fontSize: 10, fill: axis }} axisLine={false} tickLine={false} />
                   <YAxis yAxisId="l" tick={{ fontSize: 11, fill: axis }} axisLine={false} tickLine={false} />
@@ -241,7 +244,7 @@ export default function DashboardPage() {
                   <Tooltip contentStyle={tooltipStyle} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line yAxisId="l" type="monotone" dataKey="fuel_l" name="Litres" stroke="#10b981" strokeWidth={2} dot={false} />
-                  <Line yAxisId="c" type="monotone" dataKey="fuel_cost" name="Coût (XOF)" stroke="#f97316" strokeWidth={2} dot={false} />
+                  {showCosts && <Line yAxisId="c" type="monotone" dataKey="fuel_cost" name="Coût (XOF)" stroke="#f97316" strokeWidth={2} dot={false} />}
                 </LineChart>
               </ChartCard>
 
@@ -266,7 +269,7 @@ export default function DashboardPage() {
           {canForecast && <OccupancySection params={params} axis={axis} grid={grid} tooltipStyle={tooltipStyle} />}
 
           {/* ============ FILIALES & TOPS ============ */}
-          <Section title="Coûts par filiale & tops">
+          {showCosts && <Section title="Coûts par filiale & tops">
             <div className="grid gap-6 lg:grid-cols-2">
               {data.scope === "company" && data.by_subsidiary.length > 0 && (
                 <Card className="lg:col-span-2">
@@ -307,12 +310,14 @@ export default function DashboardPage() {
               <TopList title="Top véhicules coûteux" rows={data.top_vehicles_cost.map((v) => ({ label: v.registration, value: `${formatNumber(v.cost)} XOF` }))} />
               <TopList title="Top courses coûteuses" rows={data.top_trips_cost.map((t) => ({ label: t.destination, value: `${formatNumber(t.cost)} XOF`, href: `/trips/${t.trip_id}` }))} />
             </div>
-          </Section>
+          </Section>}
 
           {/* ============ MAINTENANCE ============ */}
           <Section title="Maintenance & indisponibilité">
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              <Kpi label="Coût maintenance" value={formatNumber(data.maintenance.total_cost)} icon={Wrench} tone="bg-amber-500/10 text-amber-600" sub={`${data.maintenance.count} intervention(s)`} />
+              {showCosts
+                ? <Kpi label="Coût maintenance" value={formatNumber(data.maintenance.total_cost)} icon={Wrench} tone="bg-amber-500/10 text-amber-600" sub={`${data.maintenance.count} intervention(s)`} />
+                : <Kpi label="Interventions" value={data.maintenance.count} icon={Wrench} tone="bg-amber-500/10 text-amber-600" />}
               <Kpi label="Pannes déclarées" value={data.maintenance.breakdown_count} icon={AlertTriangle} tone="bg-rose-500/10 text-rose-600" sub={`préventive ${data.maintenance.preventive_count} · corrective ${data.maintenance.corrective_count}`} />
               <Kpi label="Indisponibilité" value={`${formatNumber(data.maintenance.downtime_total_h)} h`} icon={Timer} tone="bg-violet-500/10 text-violet-600" sub={`moy. ${formatNumber(data.maintenance.downtime_avg_h)} h · flotte ${data.maintenance.immobilization_rate}%`} />
               <Kpi label="Annulées pour panne" value={data.maintenance.cancelled_due_to_breakdown} icon={XCircle} tone="bg-rose-500/10 text-rose-600" />
@@ -339,7 +344,7 @@ export default function DashboardPage() {
                   )}
                 </CardBody>
               </Card>
-              <TopList title="Maintenance : véhicules coûteux" rows={data.maintenance.top_cost_vehicles.map((v) => ({ label: v.registration, value: `${formatNumber(v.cost)} XOF` }))} />
+              {showCosts && <TopList title="Maintenance : véhicules coûteux" rows={data.maintenance.top_cost_vehicles.map((v) => ({ label: v.registration, value: `${formatNumber(v.cost)} XOF` }))} />}
               <TopList title="Indisponibilité par véhicule" rows={data.maintenance.top_downtime_vehicles.map((v) => ({ label: v.registration, value: `${formatNumber(v.hours)} h` }))} />
             </div>
 
@@ -423,13 +428,13 @@ export default function DashboardPage() {
                 tone="bg-rose-500/10 text-rose-600"
                 sub={`${data.compliance.revisions_due} à venir (≤ 2 000 km)`}
               />
-              <Kpi
+              {showCosts && <Kpi
                 label="Coûts annuels"
                 value={formatNumber(data.compliance.annual_insurance_cost + data.compliance.annual_inspection_cost + data.compliance.annual_revision_cost)}
                 icon={Coins}
                 tone="bg-brand-500/10 text-brand-600"
                 sub="assurance + visite + révision"
-              />
+              />}
             </div>
           </Section>
         </>

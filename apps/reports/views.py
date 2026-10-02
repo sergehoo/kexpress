@@ -11,6 +11,9 @@ from apps.reports.exporters import to_csv, to_pdf, to_xlsx
 
 EXT = {"csv": "csv", "xlsx": "xlsx", "pdf": "pdf"}
 
+#: Rapports qui portent des montants : réservés à ceux qui voient les coûts à l'écran.
+COST_REPORTS = {"expenses", "maintenance"}
+
 
 class ReportExportView(APIView):
     permission_classes = [IsAuthenticated]
@@ -24,6 +27,14 @@ class ReportExportView(APIView):
 
         if rtype not in REPORT_TYPES or fmt not in EXT:
             return HttpResponse("Type ou format de rapport invalide.", status=400)
+
+        from apps.finance.permissions import EXPORT_EXPENSES, EXPORT_FINANCIAL_REPORTS, can
+
+        # Même droit que l'export du module dépenses : les deux routes ne doivent pas diverger.
+        if rtype == "expenses" and not can(request.user, EXPORT_EXPENSES):
+            return HttpResponse("Export des dépenses réservé aux profils habilités.", status=403)
+        if rtype in COST_REPORTS and not can(request.user, EXPORT_FINANCIAL_REPORTS):
+            return HttpResponse("Rapport réservé aux gestionnaires et à la finance.", status=403)
 
         # Filtre périodique optionnel (?start=YYYY-MM-DD&end=YYYY-MM-DD)
         from datetime import date

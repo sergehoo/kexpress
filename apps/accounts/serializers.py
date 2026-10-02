@@ -58,9 +58,11 @@ class EmployeeWriteSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
     def create(self, validated_data):
-        password = validated_data.pop("password", "") or "demo1234"
+        """Le compte naît SANS mot de passe utilisable : son titulaire le définit lui-même
+        par son invitation (aucun mot de passe par défaut, aucun connu de l'administrateur)."""
+        validated_data.pop("password", None)
         user = User(**validated_data)
-        user.set_password(password)
+        user.set_unusable_password()
         user.save()
         return user
 
@@ -69,6 +71,9 @@ class EmployeeWriteSerializer(serializers.ModelSerializer):
         for k, v in validated_data.items():
             setattr(instance, k, v)
         if password:
+            from apps.accounts.api_views import check_password_strength
+
+            check_password_strength(password, instance, field="password")
             instance.set_password(password)
         instance.save()
         return instance
@@ -77,5 +82,15 @@ class EmployeeWriteSerializer(serializers.ModelSerializer):
 class MeSerializer(UserSerializer):
     """Profil de l'utilisateur courant (lecture seule)."""
 
+    # Permissions `finance.*` effectives : le frontend n'affiche que ce que l'API servira.
+    # L'API reste la seule barrière — ce champ ne sert qu'à ne pas afficher d'écran vide.
+    finance_permissions = serializers.SerializerMethodField()
+
     class Meta(UserSerializer.Meta):
-        read_only_fields = UserSerializer.Meta.fields
+        fields = [*UserSerializer.Meta.fields, "finance_permissions"]
+        read_only_fields = fields
+
+    def get_finance_permissions(self, obj) -> list[str]:
+        from apps.finance.permissions import granted
+
+        return granted(obj)

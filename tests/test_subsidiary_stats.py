@@ -35,7 +35,8 @@ def ctx(db):
     Trip.objects.create(subsidiary=a, reservation=res, requester=requester, vehicle=v1,
                         destination="Bouaké", status=TripStatus.IN_PROGRESS, distance_km=Decimal("120.0"))
     FuelLog.objects.create(subsidiary=a, vehicle=v1, date=now.date(), liters=Decimal("40"), amount=Decimal("26000"))
-    Expense.objects.create(subsidiary=a, label="Péage", category="other", amount=Decimal("5000"), date=now.date())
+    Expense.objects.create(subsidiary=a, label="Péage", category="other", amount=Decimal("5000"), date=now.date(),
+                           status="validated")  # seule une dépense validée est un coût (F2)
     client = APIClient()
     client.force_authenticate(admin)
     return dict(company=company, a=a, b=b, admin=admin, requester=requester, client=client)

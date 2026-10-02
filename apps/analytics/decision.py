@@ -86,7 +86,40 @@ def _estimated_fuel_cost(liters_by_fuel: dict) -> float:
     return round(total, 0)
 
 
+def redact_costs(payload: dict) -> dict:
+    """Retire tout montant d'un tableau de bord servi à un profil sans droit financier.
+
+    La FORME est conservée (valeurs nulles, listes vides) : l'écran d'un chef de service ne
+    doit pas planter ; il ne doit simplement recevoir aucun coût (§8 — la barrière est l'API).
+    """
+    payload["fuel"].update(estimated_cost=None, real_cost=None)
+    payload["cost"] = {key: None for key in payload["cost"]} | {"detail": []}
+    for row in payload["series"]:
+        row.update(fuel_cost=None, cost=None)
+    for row in payload["by_subsidiary"]:
+        row.update(fuel_cost=None, expenses=None, maintenance=None, total_cost=None)
+    payload["top_vehicles_cost"] = []
+    payload["top_trips_cost"] = []
+    kpis = payload["maintenance"]
+    kpis.update(total_cost=None, preventive_cost=None, corrective_cost=None, top_cost_vehicles=[])
+    for row in kpis["top_breakdowns"]:
+        row["cost"] = None
+    payload["compliance"].update(annual_insurance_cost=None, annual_inspection_cost=None,
+                                 annual_revision_cost=None)
+    payload["costs_visible"] = False
+    return payload
+
+
 def decision_stats(user, params) -> dict:
+    from apps.finance.permissions import VIEW_EXPENSES, can
+
+    payload = _decision_stats(user, params)
+    payload["costs_visible"] = True
+    # `can` et non `can_see_costs` : une exception accordée par groupe Django doit compter.
+    return payload if can(user, VIEW_EXPENSES) else redact_costs(payload)
+
+
+def _decision_stats(user, params) -> dict:
     start, end, period = resolve_period(params)
     qs = scoped(user, params.get("subsidiary"))
 
@@ -164,10 +197,23 @@ def decision_stats(user, params) -> dict:
     fuel_cost_real = _f(fuel.aggregate(s=Sum("amount"))["s"])
     fuel_cost_estimated = _estimated_fuel_cost(est_by_fuel)
 
-    # --- Coût total flotte = dépenses générales + maintenance + carburant ----
+    # --- Coût total flotte = dépenses + maintenance + énergie (carburant ET électricité) ----
+    # Chaque coût une seule fois : `expenses` n'a que les dépenses comptables (D2), la
+    # maintenance seulement TERMINÉE (une intervention planifiée ou annulée n'a rien coûté),
+    # et les recharges électriques, longtemps oubliées, entrent dans le total.
     general_cost = _f(expenses.aggregate(s=Sum("amount"))["s"])
-    maint_cost = _f(maintenance.aggregate(s=Sum("cost"))["s"])
-    total_cost = general_cost + maint_cost + fuel_cost_real
+    maint_cost = _f(maintenance.filter(status="completed").aggregate(s=Sum("cost"))["s"])
+    charges = qs["charges"].filter(date__range=(start, end))
+    if vehicle_filter:
+        charges = charges.filter(vehicle_id=vehicle_filter)
+    electricity_cost = _f(charges.aggregate(s=Sum("amount"))["s"])
+    # Ajustements approuvés sur la période (date de décision) : corrections et dépenses
+    # tardives, comptées une seule fois — par eux.
+    adjustments = qs["adjustments"].filter(decided_at__date__range=(start, end))
+    if vehicle_filter:
+        adjustments = adjustments.filter(vehicle_id=vehicle_filter)
+    adjustments_cost = _f(adjustments.aggregate(s=Sum("amount"))["s"])
+    total_cost = general_cost + maint_cost + fuel_cost_real + electricity_cost + adjustments_cost
     completed = done_trips.count()
 
     exp_by_cat = {
@@ -186,12 +232,12 @@ def decision_stats(user, params) -> dict:
 
     insurance_cost = exp_by_cat.get("insurance", 0) + _f(
         InsurancePolicy.objects.filter(
-            vehicle__in=qs["vehicles"], start_date__range=(start, end)
+            vehicle__in=qs["owned_vehicles"], start_date__range=(start, end)
         ).aggregate(s=Sum("cost"))["s"]
     )
     inspection_cost = _f(
         TechnicalInspection.objects.filter(
-            vehicle__in=qs["vehicles"], last_date__range=(start, end)
+            vehicle__in=qs["owned_vehicles"], last_date__range=(start, end)
         ).aggregate(s=Sum("cost"))["s"]
     )
 
@@ -234,7 +280,7 @@ def decision_stats(user, params) -> dict:
 
     # --- Évolution / répartition par filiale (périmètre entreprise) -----------
     by_subsidiary = []
-    if user.is_superuser or user.has_company_scope:
+    if user.is_superuser or user.has_group_read_scope:
         names = {}
         for label, qs_p, field in (
             ("fuel", fuel, "amount"), ("expenses", expenses, "amount"), ("maintenance", maintenance, "cost"),
@@ -314,7 +360,9 @@ def decision_stats(user, params) -> dict:
         ).exists():
             impacted += 1
 
-    vehicles_all = qs["vehicles"]
+    # Immobilisation, conformité et coûts annuels portent sur le parc POSSÉDÉ : la flotte
+    # mutualisée y aurait mêlé les primes et les échéances des filiales sœurs.
+    vehicles_all = qs["owned_vehicles"]
     n_vehicles = vehicles_all.count()
     immobilized_now = vehicles_all.filter(status__in=["maintenance", "out_of_service"]).count()
 
@@ -420,6 +468,8 @@ def decision_stats(user, params) -> dict:
             "total": round(total_cost, 0),
             "general": round(general_cost, 0),
             "fuel": round(fuel_cost_real, 0),
+            "electricity": round(electricity_cost, 0),
+            "adjustments": round(adjustments_cost, 0),
             "maintenance": round(maint_cost, 0),
             "per_trip": round(total_cost / completed, 0) if completed else None,
             "per_km": round(total_cost / total_km, 0) if total_km else None,
@@ -431,6 +481,6 @@ def decision_stats(user, params) -> dict:
         "top_trips_cost": top_trips_cost,
         "maintenance": maintenance_kpis,
         "compliance": compliance,
-        "scope": "company" if (user.is_superuser or user.has_company_scope) else "subsidiary",
+        "scope": "company" if (user.is_superuser or user.has_group_read_scope) else "subsidiary",
         "subsidiary_name": user.subsidiary.name if user.subsidiary_id else None,
     }

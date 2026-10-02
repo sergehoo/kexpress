@@ -32,7 +32,7 @@ import { api, apiError } from "@/lib/api";
 import { useFleetLive } from "@/lib/useFleetLive";
 import { useGpsTracker } from "@/lib/useGpsTracker";
 import { useTripTracking } from "@/lib/useTripTracking";
-import { useActiveTrip, useDriverMissions, useNearbyVehicles, useTripRoute } from "@/lib/queries";
+import { useActiveTrip, useDriverMissions, useNearbyVehicles, useSubsidiaries, useTripRoute } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
 import { currentMission, googleMapsUrl, wazeUrl } from "@/lib/driver";
 import { DriverMissionPanel, DriverNoMissionPanel } from "@/components/DriverMissionPanel";
@@ -57,7 +57,12 @@ export default function MapPage() {
   const { data: track, connected: trackConnected } = useTripTracking(activeTrip?.id);
   const trackingMode = Boolean(activeTrip && track);
   // Le chauffeur ne consomme pas les positions de flotte : on n'ouvre pas le WS flotte pour lui.
-  const { positions: fleetPositions } = useFleetLive(undefined, !trackingMode && !isDriver);
+  // On attend de CONNAÎTRE l'utilisateur avant d'ouvrir : au premier rendu `me` est encore
+  // nul, donc `isDriver` vaut faux — sans cette garde on ouvrait une connexion aussitôt
+  // refermée dès que le profil (ou le suivi de course) arrivait.
+  const { positions: fleetPositions } = useFleetLive(
+    undefined, Boolean(me) && !trackingMode && !isDriver,
+  );
   // GPS réel : l'appareil du demandeur alimente le tracking pendant la course.
   const gps = useGpsTracker(activeTrip?.id, activeTrip?.status === "in_progress");
 
@@ -107,8 +112,11 @@ export default function MapPage() {
   const [form, setForm] = useState({
     date: today, time: "08:00", purpose: "", passengers: 1,
     needs_driver: true, priority: "normal",
-    trip_type: "one_way", return_date: today, return_time: "17:00",
+    trip_type: "one_way", return_date: today, return_time: "17:00", subsidiary: "",
   });
+  // Un compte groupe n'a pas de filiale propre : il doit dire pour laquelle il réserve.
+  const pickSubsidiary = !!me?.has_company_scope && !me?.subsidiary;
+  const { data: subsidiaries } = useSubsidiaries();
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const isRoundTrip = form.trip_type === "round_trip";
 
@@ -192,6 +200,7 @@ export default function MapPage() {
     setError("");
     if (!origin || !destination) { setError("Définissez un point de départ et une destination."); return; }
     if (!form.purpose) { setError("Précisez le motif de la course."); return; }
+    if (pickSubsidiary && !form.subsidiary) { setError("Choisissez la filiale concernée."); return; }
     const dep = new Date(`${form.date}T${form.time}:00`);
     const legMin = (estimate ? estimate.duration_min + 30 : 60);
     // Aller-retour : départ du retour précisé par l'usager ; la fenêtre se termine après
@@ -212,6 +221,7 @@ export default function MapPage() {
         return_time: returnAt ? returnAt.toISOString() : undefined,
         purpose: form.purpose, passengers: form.passengers, needs_driver: form.needs_driver,
         priority: form.priority, submit,
+        subsidiary: pickSubsidiary ? form.subsidiary : undefined,
       });
       setReserved({ id: data.id, status: data.status_display });
     } catch (e) { setError(apiError(e)); } finally { setReserving(false); }
@@ -375,6 +385,14 @@ export default function MapPage() {
             )}
 
             <div className="mt-2"><Input placeholder="Motif de la course *" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} /></div>
+            {pickSubsidiary && (
+              <div className="mt-2">
+                <Select value={form.subsidiary} onChange={(e) => set("subsidiary", e.target.value)} aria-label="Filiale concernée">
+                  <option value="">Filiale concernée *</option>
+                  {(subsidiaries ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </Select>
+              </div>
+            )}
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div className="relative"><Users className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" /><Input type="number" min={1} value={form.passengers} onChange={(e) => set("passengers", Number(e.target.value))} className="pl-9" /></div>
               <Select value={form.priority} onChange={(e) => set("priority", e.target.value)}>

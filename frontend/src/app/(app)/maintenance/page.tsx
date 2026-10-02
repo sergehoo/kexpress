@@ -8,6 +8,7 @@ import { StatChips } from "@/components/StatChips";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { RowActions } from "@/components/RowActions";
+import { AdjustmentProposalDialog } from "@/components/finance/AdjustmentProposalDialog";
 import {
   useBreakdownTypes,
   useEmployees,
@@ -20,6 +21,7 @@ import {
 import { useCrud } from "@/lib/crud";
 import { useAuth } from "@/lib/auth";
 import { apiError } from "@/lib/api";
+import { adjustmentProposal, type AdjustmentProposal } from "@/lib/financeF2";
 import type { MaintenanceRecord } from "@/lib/types";
 import { formatDate, formatNumber } from "@/lib/utils";
 
@@ -44,6 +46,7 @@ export default function MaintenancePage() {
   const [nature, setNature] = useState("");
   const [modal, setModal] = useState<ModalState>(null);
   const [error, setError] = useState("");
+  const [proposal, setProposal] = useState<AdjustmentProposal | null>(null);
 
   const params: Record<string, string> = { page_size: "100" };
   if (status) params.status = status;
@@ -103,7 +106,11 @@ export default function MaintenancePage() {
       if (values[k] === "") values[k] = null;
     }
     if (values.cost === "" || values.cost == null) delete values.cost;
-    const opts = { onSuccess: () => setModal(null), onError: (e: unknown) => setError(apiError(e)) };
+    // Mois clos / coût figé (409 + proposition) : on propose l'ajustement au lieu d'une impasse.
+    const opts = { onSuccess: () => setModal(null), onError: (e: unknown) => {
+      setError(apiError(e));
+      setProposal(adjustmentProposal(e));
+    } };
     if (modal?.mode === "edit") crud.update.mutate({ id: modal.row.id, body: values }, opts);
     else crud.create.mutate(values, opts);
   }
@@ -215,6 +222,10 @@ export default function MaintenancePage() {
           onClose={() => setModal(null)}
           onSubmit={handleSubmit}
         />
+      )}
+      {proposal && (
+        <AdjustmentProposalDialog proposal={proposal} onClose={() => setProposal(null)}
+                                  onCreated={() => setModal(null)} />
       )}
     </div>
   );

@@ -3,7 +3,9 @@ from rest_framework.routers import DefaultRouter
 from django.urls import path
 
 from apps.dispatch.views import (
+    DispatchAnticipationView,
     DispatchBoardView,
+    MutualisationPotentialView,
     DispatchSuggestionViewSet,
     MissionViewSet,
 )
@@ -14,4 +16,6 @@ router.register("dispatch-suggestions", DispatchSuggestionViewSet, basename="dis
 
 urlpatterns = router.urls + [
     path("dispatch/board/", DispatchBoardView.as_view(), name="dispatch-board"),
+    path("dispatch/potential/", MutualisationPotentialView.as_view(), name="dispatch-potential"),
+    path("dispatch/anticipation/", DispatchAnticipationView.as_view(), name="dispatch-anticipation"),
 ]

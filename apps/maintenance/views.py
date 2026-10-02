@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.mixins import TenantScopedViewSetMixin
+from apps.finance.permissions import MANAGE_EXPENSES, VIEW_EXPENSES, FinancePermission
 from apps.maintenance.models import BreakdownType, MaintenanceRecord, MaintenanceType
 from apps.maintenance.serializers import (
     BreakdownTypeSerializer,
@@ -24,10 +25,12 @@ class MaintenanceForecastView(APIView):
         if not (u.is_superuser or u.role in MANAGER_ROLES):
             return Response({"detail": "Accès réservé aux gestionnaires."}, status=403)
 
+        from apps.analytics.scope import scoped
         from apps.maintenance.forecast import fleet_forecast
-        from apps.vehicles.models import Vehicle
 
-        rows = fleet_forecast(Vehicle.objects.all())
+        # La maintenance d'un véhicule revient à sa filiale propriétaire : la prévision
+        # porte sur le parc possédé, pas sur la flotte mutualisée.
+        rows = fleet_forecast(scoped(u)["owned_vehicles"])
         return Response({
             "count": len(rows),
             "results": rows,
@@ -60,7 +63,9 @@ class MaintenanceRecordViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
         "vehicle", "maintenance_type", "breakdown_type", "trip", "validated_by", "subsidiary"
     )
     serializer_class = MaintenanceRecordSerializer
-    permission_classes = [IsAuthenticated]
+    # Coûts de main-d'œuvre et de pièces : réservé aux profils habilités (§8).
+    permission_classes = [IsAuthenticated, FinancePermission]
+    read_perm, write_perm = VIEW_EXPENSES, MANAGE_EXPENSES
     filterset_fields = ["status", "nature", "vehicle", "subsidiary", "maintenance_type", "breakdown_type"]
     search_fields = ["vehicle__registration", "provider"]
     ordering_fields = ["scheduled_date", "performed_date", "created_at", "cost"]
@@ -71,7 +76,7 @@ class MaintenanceRecordViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
 
         recipients = managers_of(rec.subsidiary_id)
         if rec.cost:
-            recipients += finance_users()
+            recipients += finance_users(rec.subsidiary_id)
         lines = [
             f"Véhicule : {rec.vehicle.registration}",
             f"Filiale : {rec.subsidiary.name}",
@@ -89,7 +94,7 @@ class MaintenanceRecordViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
                     link="/maintenance", severity=severity)
 
     def perform_create(self, serializer):
-        rec = serializer.save()
+        rec = serializer.save(**self.tenant_save_kwargs(serializer))
         from apps.core.enums import NotificationType
 
         is_breakdown = bool(rec.breakdown_type_id) or rec.nature in ("corrective", "urgent")
@@ -109,7 +114,7 @@ class MaintenanceRecordViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
         before = self.get_object()
         was_done = before.status == "completed"
         was_down = bool(before.downtime_start and not before.downtime_end)
-        rec = serializer.save()
+        rec = serializer.save(**self.tenant_save_kwargs(serializer))
         from apps.core.enums import NotificationType
 
         if rec.status == "completed" and not was_done:

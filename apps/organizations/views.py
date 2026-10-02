@@ -4,10 +4,11 @@ from django.db.models import Count, Sum
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.enums import RoleChoices
 from apps.organizations.models import Company, Subsidiary
 from apps.organizations.serializers import SubsidiarySerializer
 
@@ -71,8 +72,13 @@ def subsidiary_stats(sub, user) -> dict:
     if costs["can_see_costs"]:
         f = float(fuel.aggregate(s=Sum("amount"))["s"] or 0)
         m = float(MaintenanceRecord.objects.filter(subsidiary=sub, scheduled_date__gte=month_start).aggregate(s=Sum("cost"))["s"] or 0)
-        e = float(Expense.objects.filter(subsidiary=sub, date__gte=month_start).aggregate(s=Sum("amount"))["s"] or 0)
-        costs.update(fuel=f, maintenance=m, expenses=e, total=f + m + e)
+        e = float(Expense.objects.countable().filter(subsidiary=sub, date__gte=month_start).aggregate(s=Sum("amount"))["s"] or 0)
+        from apps.finance.models import FinancialAdjustment
+
+        a = float(FinancialAdjustment.objects.filter(
+            subsidiary=sub, status=FinancialAdjustment.APPROVED, decided_at__date__gte=month_start,
+        ).aggregate(s=Sum("amount"))["s"] or 0)
+        costs.update(fuel=f, maintenance=m, expenses=e, adjustments=a, total=f + m + e + a)
 
     alerts = {
         "immobilized": vehicles["maintenance"] + vehicles["out_of_service"],
@@ -141,9 +147,12 @@ class SubsidiaryViewSet(viewsets.ModelViewSet):
         return Response({"subsidiary": SubsidiarySerializer(sub).data, **subsidiary_stats(sub, request.user)})
 
     def _check_write(self):
+        from apps.finance.permissions import is_auditor
+
         u = self.request.user
-        if not (u.is_superuser or u.has_company_scope):
-            raise PermissionDenied("Gestion des filiales réservée au périmètre entreprise.")
+        # L'auditeur a la LECTURE du périmètre entreprise, jamais l'écriture (D7).
+        if is_auditor(u) or not (u.is_superuser or u.role in (RoleChoices.SUPER_ADMIN, RoleChoices.COMPANY_ADMIN)):
+            raise PermissionDenied("Gestion des filiales réservée aux administrateurs entreprise.")
 
     def perform_create(self, serializer):
         self._check_write()
@@ -155,5 +164,24 @@ class SubsidiaryViewSet(viewsets.ModelViewSet):
         serializer.save()
 
     def perform_destroy(self, instance):
+        """Une filiale qui porte des données (comptes, parc, courses, coûts, budgets…) ne se
+        supprime pas : on la désactive. Sinon ses comptes perdraient leur filiale — un
+        financier deviendrait financier GROUPE — et son historique partirait en cascade."""
+        from django.db.models import ProtectedError
+        from django.db.models.deletion import Collector
+
         self._check_write()
+        collector = Collector(using=instance._state.db or "default")
+        try:
+            collector.collect([instance])
+        except ProtectedError:
+            raise ValidationError({"detail": "Cette filiale porte des données : désactivez-la plutôt."})
+        def present(rows):
+            return rows.exists() if hasattr(rows, "exists") else bool(rows)
+
+        linked = (any(model is not Subsidiary and objs for model, objs in collector.data.items())
+                  or any(present(qs) for qs in collector.fast_deletes)
+                  or any(present(rows) for batch in collector.field_updates.values() for rows in batch))
+        if linked:
+            raise ValidationError({"detail": "Cette filiale porte des données : désactivez-la plutôt."})
         instance.delete()

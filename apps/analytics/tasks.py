@@ -86,3 +86,67 @@ def recompute_metrics(days_back: int = 1, day: str | None = None) -> dict:
 
     logger.info("recompute_metrics: %s ligne(s) sur %s jour(s)", written, len(days))
     return {"days": [d.isoformat() for d in days], "vehicles_written": written}
+
+
+#: Sévérités poussées vers les gestionnaires. Les alertes « info » (opportunités) restent
+#: consultables sur la page : les pousser noierait les vraies urgences.
+PUSHED_SEVERITIES = ("critical",)
+
+#: Délai avant de re-notifier une alerte identique. Sans lui, « ce véhicule roule beaucoup à
+#: vide » repartirait chaque nuit et l'ensemble finirait en bruit de fond ignoré.
+ALERT_COOLDOWN_HOURS = 24
+
+
+@shared_task
+def push_critical_alerts(cooldown_hours: int = ALERT_COOLDOWN_HOURS) -> dict:
+    """Pousse les alertes critiques aux gestionnaires de chaque filiale (§19).
+
+    Les détecteurs ne s'exécutaient qu'à l'ouverture de la page d'alertes : un « retour sans
+    véhicule dans 2 h » attendait donc que quelqu'un pense à regarder. Cette tâche les
+    exécute et notifie, filiale par filiale, en évitant le doublon.
+    """
+    from apps.analytics.detectors import run_detectors
+    from apps.analytics.scope import scope_for_subsidiary
+    from apps.core.enums import NotificationType
+    from apps.notifications.events import managers_of
+    from apps.notifications.models import Notification
+    from apps.notifications.services import notify_many
+    from apps.organizations.models import Subsidiary
+
+    since = timezone.now() - timedelta(hours=cooldown_hours)
+    pushed = skipped = 0
+
+    for subsidiary in Subsidiary.objects.filter(is_active=True):
+        recipients = managers_of(subsidiary.pk)
+        if not recipients:
+            continue
+        try:
+            alerts = run_detectors(scope_for_subsidiary(subsidiary.pk))
+        except Exception:  # noqa: BLE001 — une filiale en échec n'empêche pas les autres
+            logger.warning("push_critical_alerts: filiale %s en échec", subsidiary.pk,
+                           exc_info=True)
+            continue
+
+        for alert in alerts:
+            if alert["severity"] not in PUSHED_SEVERITIES:
+                continue
+            # Déduplication sur le TITRE, qui identifie la ressource concernée (véhicule,
+            # course). Deux occurrences du même problème dans la fenêtre de silence ne
+            # produisent qu'une notification.
+            already = Notification.objects.filter(
+                notification_type=NotificationType.OPERATIONAL_ALERT,
+                title=alert["title"], created_at__gte=since,
+                recipient__in=recipients,
+            ).exists()
+            if already:
+                skipped += 1
+                continue
+            notify_many(
+                recipients, NotificationType.OPERATIONAL_ALERT,
+                title=alert["title"], message=alert["detail"],
+                link=alert.get("link") or "/alerts", severity="critical",
+            )
+            pushed += 1
+
+    logger.info("push_critical_alerts: %s poussée(s), %s en silence.", pushed, skipped)
+    return {"pushed": pushed, "skipped": skipped}

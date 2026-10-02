@@ -12,6 +12,10 @@ import { Button, Card, CardBody, CardHeader, CardTitle, EmptyState, Spinner } fr
 import { StatusBadge } from "@/components/StatusBadge";
 import { Tabs } from "@/components/Tabs";
 import { EntityForm, type Field } from "@/components/EntityForm";
+import { SecureFileLink } from "@/components/SecureFileLink";
+import { VehicleFinanceTab } from "@/components/finance/VehicleFinanceTab";
+import { useAuth } from "@/lib/auth";
+import { canFinance } from "@/lib/rbac";
 import { searchInsuranceCompanies, searchInspectionCenters } from "@/lib/references";
 import {
   useMaintenance,
@@ -34,6 +38,7 @@ export default function VehicleDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { data: v, isLoading, isError } = useVehicle(id);
+  const { me } = useAuth();
   const insurances = useVehicleInsurances(id);
   const inspections = useVehicleInspections(id);
   const revisions = useVehicleRevisions(id);
@@ -280,12 +285,17 @@ export default function VehicleDetailPage() {
                           <p className="font-medium text-ink">{doc.doc_type_display}{doc.number ? ` · ${doc.number}` : ""}</p>
                           {doc.expiry_date && <p className="text-[11px] text-muted">Expire le {formatDate(doc.expiry_date)}</p>}
                         </div>
-                        {doc.file && <a href={doc.file} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-brand-600 hover:underline">Voir</a>}
+                        {doc.file && <SecureFileLink url={doc.file} />}
                       </li>
                     ))}
                   </ul>
                 ),
               },
+              // Coûts réels : réservés aux profils habilités (l'API refuse les autres).
+              ...(canFinance(me, "view_vehicle_cost") ? [{
+                key: "finance", label: "Finance",
+                content: <VehicleFinanceTab vehicleId={v.id} canWrite={canFinance(me, "manage_expenses")} />,
+              }] : []),
               {
                 key: "analytics", label: "Analytics",
                 content: (
