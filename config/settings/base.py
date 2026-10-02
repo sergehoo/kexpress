@@ -405,6 +405,10 @@ AUTH_COOKIE_DOMAIN = env("AUTH_COOKIE_DOMAIN", default=None)
 #: Mode SSO : preuve de MFA attendue dans le jeton Keycloak pour les rôles à MFA renforcée.
 OIDC_MFA_AMR_VALUES = env.list("OIDC_MFA_AMR_VALUES", default=["otp", "mfa", "webauthn"])
 OIDC_MFA_ACR_VALUES = env.list("OIDC_MFA_ACR_VALUES", default=["gold", "mfa", "2"])
+# Keycloak sans preuve de second facteur (pas d'OTP configuré, ni amr/acr) : un code email
+# K-Express, une fois par session SSO, en tient lieu pour les rôles à MFA renforcée. À passer à
+# False une fois l'OTP Keycloak en place (le second facteur est alors exigé du SSO seul).
+OIDC_MFA_EMAIL_FALLBACK = env.bool("OIDC_MFA_EMAIL_FALLBACK", default=True)
 
 # Seuils de rappel révision en %% de l'intervalle du véhicule (admin/env)
 REVISION_ALERT_PCTS = env("REVISION_ALERT_PCTS", default="20,10,5")

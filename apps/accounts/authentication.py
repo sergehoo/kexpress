@@ -231,6 +231,8 @@ def _provision_from_shield(claims: dict, sub: str, email: str):
 
 MFA_REQUIRED = {"detail": "Votre compte exige une authentification renforcée (MFA) : reconnectez-vous avec "
                           "votre second facteur.", "code": "mfa_required"}
+MFA_EMAIL_REQUIRED = {"detail": "Votre rôle exige un second facteur : saisissez le code reçu par email.",
+                      "code": "mfa_email_otp_required"}
 DEVICE_VERIFICATION_REQUIRED = {"detail": "Vérification de cet appareil requise : saisissez le code reçu par email.",
                                 "code": "device_verification_required"}
 
@@ -245,7 +247,26 @@ def has_mfa_proof(claims: dict) -> bool:
     return bool(amr_ok or acr_ok)
 
 
-def _check_session_rules(user, claims: dict) -> None:
+def email_otp_since(request, user, since) -> bool:
+    """Second facteur de repli : l'appareil de la requête a été vérifié par un code email
+    K-Express APRÈS l'authentification SSO en cours (`auth_time`) — un code par session."""
+    from datetime import datetime, timezone as dt_timezone
+
+    from apps.accounts import devices
+
+    if request is None or since is None:
+        return False
+    device = devices.device_from_request(request, user)
+    if not devices.is_verified(device, user) or device.verified_at is None:
+        return False
+    try:
+        moment = datetime.fromtimestamp(float(since), tz=dt_timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return device.verified_at >= moment
+
+
+def _check_session_rules(user, claims: dict, request=None, *, mfa_pending_ok: bool = False) -> None:
     from apps.accounts.devices import requires_mfa
     from apps.accounts.sessions import REVOKED_MESSAGE, issued_before_revocation
 
@@ -255,7 +276,12 @@ def _check_session_rules(user, claims: dict) -> None:
     if issued_before_revocation(user, reference):
         raise exceptions.AuthenticationFailed({"detail": REVOKED_MESSAGE, "code": "token_revoked"})
     if requires_mfa(user) and not has_mfa_proof(claims):
-        raise exceptions.AuthenticationFailed(MFA_REQUIRED)
+        if not getattr(settings, "OIDC_MFA_EMAIL_FALLBACK", True):
+            raise exceptions.AuthenticationFailed(MFA_REQUIRED)
+        # Keycloak n'atteste pas de second facteur : le code email K-Express en tient lieu, une
+        # fois par session SSO. Les routes de vérification restent ouvertes pour le saisir.
+        if not (mfa_pending_ok or email_otp_since(request, user, reference)):
+            raise exceptions.AuthenticationFailed(MFA_EMAIL_REQUIRED)
 
 
 def _mark_activated(user) -> None:
@@ -267,12 +293,12 @@ def _mark_activated(user) -> None:
         User.objects.filter(pk=user.pk, activated_at__isnull=True).update(activated_at=user.activated_at)
 
 
-def authenticate_keycloak_token(token: str):
+def authenticate_keycloak_token(token: str, request=None, *, mfa_pending_ok: bool = False):
     """Valide un jeton et renvoie l'utilisateur (utilisé aussi par le WebSocket) : signature,
     émetteur, audience, révocation du compte, MFA des rôles sensibles."""
     claims = decode_keycloak_token(token)
     user = get_or_provision_user(claims)
-    _check_session_rules(user, claims)
+    _check_session_rules(user, claims, request, mfa_pending_ok=mfa_pending_ok)
     _mark_activated(user)
     return user
 
@@ -312,7 +338,7 @@ class KeycloakAuthentication(authentication.BaseAuthentication):
             # Jeton local (SimpleJWT) : authentificateur suivant, qui ne l'accepte en mode SSO
             # que pour l'accès de secours des super-administrateurs (`local_credentials_allowed`).
             return None
-        user = authenticate_keycloak_token(token)
+        user = authenticate_keycloak_token(token, request, mfa_pending_ok=_device_exempt(request))
         if getattr(settings, "AUTH_DEVICE_VERIFICATION", True) and not _device_exempt(request):
             from apps.accounts import devices
 

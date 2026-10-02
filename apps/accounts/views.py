@@ -522,8 +522,27 @@ class DeviceStatusView(APIView):
             "verified": devices.is_verified(device, request.user),
             "trusted": devices.is_trusted(device, request.user),
             "mfa_role": devices.requires_mfa(request.user),
+            "mfa_pending": _sso_mfa_pending(request),
             "email_hint": otp_mod.mask_email(request.user.email),
         })
+
+
+def _sso_mfa_pending(request) -> bool:
+    """Session SSO d'un rôle à MFA renforcée sans second facteur attesté par Keycloak ni code
+    email saisi depuis la connexion : le code email reste à saisir."""
+    from apps.accounts import authentication as kc
+    from apps.accounts import devices
+
+    if not (getattr(settings, "OIDC_ENABLED", False) and getattr(settings, "OIDC_MFA_EMAIL_FALLBACK", True)
+            and devices.requires_mfa(request.user) and isinstance(request.auth, str)):
+        return False
+    try:
+        claims = kc.decode_keycloak_token(request.auth)
+    except Exception:
+        return False
+    if kc.has_mfa_proof(claims):
+        return False
+    return not kc.email_otp_since(request, request.user, claims.get("auth_time") or claims.get("iat"))
 
 
 class DeviceChallengeView(APIView):
@@ -645,7 +664,10 @@ class ActivationStartView(_PublicAuthView):
 
             logging.getLogger(__name__).exception("Activation : démarrage en erreur.")
         otp_mod.uniform_delay(started)
-        return Response({"detail": activation.GENERIC_START}, status=202)
+        # Durées identiques pour toutes les adresses : elles ne révèlent rien de l'éligibilité.
+        return Response({"detail": activation.GENERIC_START,
+                         "expires_in": settings.AUTH_OTP_TTL_SECONDS,
+                         "resend_after": settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS}, status=202)
 
 
 class ActivationVerifyView(_PublicAuthView):

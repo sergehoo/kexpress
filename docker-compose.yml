@@ -212,6 +212,7 @@ services:
       AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
       OIDC_MFA_AMR_VALUES: ${OIDC_MFA_AMR_VALUES:-otp,mfa,webauthn}
       OIDC_MFA_ACR_VALUES: ${OIDC_MFA_ACR_VALUES:-gold,mfa,2}
+      OIDC_MFA_EMAIL_FALLBACK: ${OIDC_MFA_EMAIL_FALLBACK:-True}
 
       # Keycloak Admin API — provisioning des comptes depuis K-Express (client
       # confidentiel à service account ; secret jamais exposé au frontend).

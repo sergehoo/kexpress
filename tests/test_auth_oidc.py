@@ -167,7 +167,8 @@ def test_a_device_cookie_of_another_account_does_not_verify(keys, sso_employee, 
 
 
 @pytest.mark.parametrize("role", [RoleChoices.FINANCE, RoleChoices.SUBSIDIARY_ADMIN])
-def test_mfa_roles_need_a_mfa_proof_in_the_keycloak_token(keys, sub_a, mailoutbox, role):
+def test_mfa_roles_need_a_mfa_proof_in_the_keycloak_token(keys, sub_a, mailoutbox, role, settings):
+    settings.OIDC_MFA_EMAIL_FALLBACK = False  # mode strict : le second facteur vient du SSO seul
     user = User.objects.create_user("fin.sso@kaydan.ci", None, role=role, subsidiary=sub_a)
     User.objects.filter(pk=user.pk).update(keycloak_sub="kc-fin")
     plain = _client(kc_token(keys, sub="kc-fin", email="fin.sso@kaydan.ci", amr=["pwd"], acr="1"))
@@ -180,6 +181,28 @@ def test_mfa_roles_need_a_mfa_proof_in_the_keycloak_token(keys, sub_a, mailoutbo
     by_acr = _client(kc_token(keys, sub="kc-fin", email="fin.sso@kaydan.ci", acr="gold"))
     by_acr.cookies = strong.cookies
     assert by_acr.get("/api/auth/me/").status_code == 200
+
+
+def test_without_keycloak_otp_an_email_code_per_sso_session_is_the_second_factor(keys, sub_a, mailoutbox):
+    user = User.objects.create_user("adm2.sso@kaydan.ci", None, role=RoleChoices.SUBSIDIARY_ADMIN, subsidiary=sub_a)
+    User.objects.filter(pk=user.pk).update(keycloak_sub="kc-adm2")
+    first = int(time.time()) - 60
+    client = _client(kc_token(keys, sub="kc-adm2", email="adm2.sso@kaydan.ci", amr=["pwd"], auth_time=first))
+    refused = client.get("/api/auth/me/")
+    assert refused.status_code == 401 and refused.json()["code"] == "mfa_email_otp_required"
+    status = client.get("/api/auth/device/status/").json()
+    assert status["mfa_pending"] is True
+    assert _verify_device(client, mailoutbox, trust=True).status_code == 200
+    assert client.get("/api/auth/me/").status_code == 200
+    assert client.get("/api/auth/device/status/").json()["mfa_pending"] is False
+    # Nouvelle session SSO (connexion ultérieure) : l'appareil de confiance ne dispense pas du code.
+    later = _client(kc_token(keys, sub="kc-adm2", email="adm2.sso@kaydan.ci", amr=["pwd"],
+                             auth_time=int(time.time()) + 5))
+    later.cookies = client.cookies
+    again = later.get("/api/auth/me/")
+    assert again.status_code == 401 and again.json()["code"] == "mfa_email_otp_required"
+    # Un employé sans rôle sensible n'est pas concerné.
+    assert not auth_mod.has_mfa_proof({"amr": ["pwd"]})
 
 
 def test_mfa_is_also_enforced_for_websocket_tokens(keys, sub_a):
@@ -357,7 +380,10 @@ def test_websocket_requires_a_verified_device_and_mfa_like_the_api(keys, sso_emp
     assert cookie["path"] == "/"  # envoyé aussi à la poignée de main /ws/…
     assert authenticate_websocket(token, {settings.AUTH_DEVICE_COOKIE: cookie.value}).pk == sso_employee.pk
     User.objects.filter(pk=sso_employee.pk).update(role=RoleChoices.FINANCE)
-    assert authenticate_websocket(token, {settings.AUTH_DEVICE_COOKIE: cookie.value}) is None  # MFA exigée
+    # Repli : le code email saisi pendant cette session SSO vaut second facteur…
+    assert authenticate_websocket(token, {settings.AUTH_DEVICE_COOKIE: cookie.value}).pk == sso_employee.pk
+    settings.OIDC_MFA_EMAIL_FALLBACK = False  # … mode strict : le SSO seul doit l'attester
+    assert authenticate_websocket(token, {settings.AUTH_DEVICE_COOKIE: cookie.value}) is None
 
 
 

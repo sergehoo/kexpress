@@ -87,6 +87,13 @@ def shield(monkeypatch, sub_a):
     return state
 
 
+
+def _start_body():
+    from django.conf import settings
+
+    return {"detail": activation.GENERIC_START, "expires_in": settings.AUTH_OTP_TTL_SECONDS,
+            "resend_after": settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS}
+
 def _client():
     return APIClient(REMOTE_ADDR="10.20.0.1")
 
@@ -124,7 +131,7 @@ def test_eligible_and_unknown_emails_get_identical_responses(shield, mailoutbox)
     eligible = _start(EMAIL)
     unknown = _start("inconnu@kaydan.ci")
     assert eligible.status_code == unknown.status_code == 202
-    assert eligible.json() == unknown.json() == {"detail": activation.GENERIC_START}
+    assert eligible.json() == unknown.json() == _start_body()
     assert len(mailoutbox) == 1 and mailoutbox[0].to == [EMAIL]  # rien pour l'inconnu
     assert EmailOTP.objects.count() == 1
     assert EMAIL not in str(EmailOTP.objects.values().first())  # empreinte, jamais l'email en clair
@@ -134,7 +141,7 @@ def test_stale_or_absent_shield_sends_nothing_and_creates_nothing(shield, monkey
     shield.add()
     monkeypatch.setattr(activation, "lookup_eligible", lambda email: None)  # données périmées / Shield absent
     response = _start(EMAIL)
-    assert response.status_code == 202 and response.json() == {"detail": activation.GENERIC_START}
+    assert response.status_code == 202 and response.json() == _start_body()
     assert mailoutbox == [] and EmailOTP.objects.count() == 0 and not User.objects.filter(email=EMAIL).exists()
 
 
@@ -152,7 +159,7 @@ def test_shield_failure_is_never_exposed(monkeypatch, mailoutbox):
     monkeypatch.setitem(sys.modules, "apps.shield.eligibility", fake)
     assert activation.lookup_eligible(EMAIL) is None
     response = _start(EMAIL)
-    assert response.status_code == 202 and response.json() == {"detail": activation.GENERIC_START}
+    assert response.status_code == 202 and response.json() == _start_body()
     assert mailoutbox == [] and EmailOTP.objects.count() == 0
 
 
@@ -172,7 +179,7 @@ def test_already_activated_account_gets_a_notice_not_a_code(shield, mailoutbox, 
     emp = shield.add(email=requester_a.email)
     emp.user = requester_a  # compte lié, mot de passe déjà choisi
     response = _start(requester_a.email)
-    assert response.status_code == 202 and response.json() == {"detail": activation.GENERIC_START}
+    assert response.status_code == 202 and response.json() == _start_body()
     assert len(mailoutbox) == 1 and "déjà activé" in mailoutbox[0].subject
     assert not CODE_RE.search(mailoutbox[0].body)
     assert EmailOTP.objects.count() == 0
@@ -605,7 +612,7 @@ def test_codes_are_never_written_to_logs_when_no_real_email_backend(shield, sett
     settings.EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
     shield.add()
     response = _start(EMAIL)
-    assert response.status_code == 202 and response.json() == {"detail": activation.GENERIC_START}
+    assert response.status_code == 202 and response.json() == _start_body()
     assert not CODE_RE.search(capsys.readouterr().out)
     assert EmailOTP.objects.count() == 0  # aucun code n'est même émis
     errors = [m for m in run_checks(include_deployment_checks=True) if m.id == "accounts.E010"]

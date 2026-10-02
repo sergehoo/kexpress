@@ -392,7 +392,7 @@ def authenticate_websocket(token: str, cookies: dict | None = None):
 
         if kc_auth._issued_by_keycloak(token):
             try:
-                user = kc_auth.authenticate_keycloak_token(token)
+                user = kc_auth.authenticate_keycloak_token(token, SimpleNamespace(COOKIES=cookies or {}))
             except Exception:
                 return None
             if getattr(settings, "AUTH_DEVICE_VERIFICATION", True):

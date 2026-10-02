@@ -17,6 +17,7 @@ export default function DeviceVerificationPage() {
   const { loading, pending, refreshMe, logout } = useAuth();
   const [state, setState] = useState<"checking" | "idle" | "sent">("checking");
   const [emailHint, setEmailHint] = useState("");
+  const [mfa, setMfa] = useState(false);
   const [code, setCode] = useState("");
   const [trust, setTrust] = useState(false);
   const [error, setError] = useState("");
@@ -36,7 +37,8 @@ export default function DeviceVerificationPage() {
     deviceStatus()
       .then(async (s) => {
         setEmailHint(s.email_hint);
-        if (s.verified || !s.verification_required) {
+        setMfa(!!s.mfa_pending);
+        if (!s.mfa_pending && (s.verified || !s.verification_required)) {
           const me = await refreshMe();
           router.replace(homeFor(me?.role ?? ""));
         } else {
@@ -107,8 +109,9 @@ export default function DeviceVerificationPage() {
           {state === "idle" && (
             <div className="space-y-5">
               <p className="text-sm text-white/75">
-                Cet appareil n&apos;est pas encore reconnu. Pour protéger votre compte, un code de vérification va être
-                envoyé à votre adresse email professionnelle.
+                {mfa
+                  ? "Votre rôle exige un second facteur à chaque connexion : un code va être envoyé à votre adresse email professionnelle."
+                  : "Cet appareil n'est pas encore reconnu. Pour protéger votre compte, un code de vérification va être envoyé à votre adresse email professionnelle."}
               </p>
               <Button className="h-11 w-full" onClick={send} disabled={busy} aria-busy={busy}>
                 {busy ? <Spinner className="h-4 w-4 border-2 border-white/40 border-t-white" /> : <Mail className="h-4 w-4" />}

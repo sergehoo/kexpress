@@ -142,7 +142,7 @@ api.interceptors.response.use(
     const code = errorCode(error);
     // Mode SSO : jeton valide mais appareil à vérifier / MFA exigée — un rafraîchissement n'y
     // changerait rien, l'interface prend le relais.
-    if (status === 401 && code === "device_verification_required") {
+    if (status === 401 && (code === "device_verification_required" || code === "mfa_email_otp_required")) {
       if (typeof window !== "undefined") window.dispatchEvent(new Event(DEVICE_VERIFICATION_EVENT));
       return Promise.reject(error);
     }
@@ -236,9 +236,11 @@ export async function serverLogout(all = false): Promise<void> {
 
 // --- Activation (première connexion) ------------------------------------------------------------
 
-export async function activationStart(email: string): Promise<string> {
-  const { data } = await api.post<{ detail: string }>("/auth/activation/start/", { email });
-  return data.detail;
+export interface ActivationStartResult { detail: string; expires_in: number; resend_after: number }
+
+export async function activationStart(email: string): Promise<ActivationStartResult> {
+  const { data } = await api.post<Partial<ActivationStartResult>>("/auth/activation/start/", { email });
+  return { detail: data.detail ?? "", expires_in: data.expires_in ?? 600, resend_after: data.resend_after ?? 60 };
 }
 
 export async function activationVerify(email: string, code: string): Promise<string> {
@@ -297,6 +299,8 @@ export interface DeviceStatus {
   verified: boolean;
   trusted: boolean;
   mfa_role: boolean;
+  /** Rôle à MFA renforcée connecté par SSO sans second facteur attesté : code email à saisir. */
+  mfa_pending?: boolean;
   email_hint: string;
 }
 

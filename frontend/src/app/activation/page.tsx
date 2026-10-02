@@ -39,6 +39,28 @@ export default function ActivationPage() {
   const [busy, setBusy] = useState(false);
   const [loginHint, setLoginHint] = useState("");
   const focusRef = useRef<HTMLInputElement>(null);
+  // Horloge du code : validité restante et délai avant un nouvel envoi (durées du serveur).
+  const [expiresAt, setExpiresAt] = useState(0);
+  const [resendAt, setResendAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const [resent, setResent] = useState("");
+
+  useEffect(() => {
+    if (step !== "code") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [step]);
+
+  function armClock(r: { expires_in: number; resend_after: number }) {
+    const t = Date.now();
+    setNow(t);
+    setExpiresAt(t + r.expires_in * 1000);
+    setResendAt(t + r.resend_after * 1000);
+  }
+
+  const remaining = Math.max(0, Math.ceil((expiresAt - now) / 1000));
+  const resendIn = Math.max(0, Math.ceil((resendAt - now) / 1000));
+  const clock = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
 
   useEffect(() => {
     focusRef.current?.focus();
@@ -49,7 +71,10 @@ export default function ActivationPage() {
     setError("");
     setBusy(true);
     try {
-      setInfo(await activationStart(email.trim()));
+      const r = await activationStart(email.trim());
+      setInfo(r.detail);
+      armClock(r);
+      setResent("");
       setStep("code");
       setCode("");
     } catch (err) {
@@ -75,11 +100,18 @@ export default function ActivationPage() {
   }
 
   async function resend() {
+    if (resendIn > 0) return;
     setError("");
+    setBusy(true);
     try {
-      setInfo(await activationStart(email.trim()));
+      const r = await activationStart(email.trim());
+      armClock(r);
+      setResent(`Nouvel envoi demandé à ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}. `
+        + "Vérifiez aussi vos courriers indésirables ; le code reçu précédemment reste valable.");
     } catch (err) {
       setError(apiError(err, "Renvoi impossible pour le moment."));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -165,6 +197,10 @@ export default function ActivationPage() {
           {step === "code" && (
             <form onSubmit={submitCode} className="space-y-5" noValidate>
               {info && <p className="text-sm text-white/75">{info}</p>}
+              <p className={`text-xs ${remaining > 0 ? "text-white/60" : "text-amber-300"}`} aria-live="polite">
+                {remaining > 0 ? `Code valable encore ${clock}.` : "Code expiré : demandez un nouveau code."}
+              </p>
+              {resent && <p className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100" role="status">{resent}</p>}
               <div>
                 <Label htmlFor="act-code" className="text-white/80">Code à {ACTIVATION_CODE_LENGTH} chiffres</Label>
                 <div className="relative">
@@ -185,8 +221,9 @@ export default function ActivationPage() {
                         className="inline-flex items-center gap-1 text-white/60 hover:text-white">
                   <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> Modifier l&apos;adresse
                 </button>
-                <button type="button" onClick={resend} className="text-white/60 underline-offset-4 hover:text-white hover:underline">
-                  Renvoyer le code
+                <button type="button" onClick={resend} disabled={busy || resendIn > 0}
+                        className="text-white/60 underline-offset-4 hover:text-white hover:underline disabled:cursor-not-allowed disabled:text-white/35 disabled:no-underline">
+                  {resendIn > 0 ? `Renvoyer le code (${resendIn} s)` : "Renvoyer le code"}
                 </button>
               </div>
             </form>

@@ -40,8 +40,9 @@ from apps.accounts.models import ActivationTicket, OTPPurpose, User
 
 logger = logging.getLogger("apps.accounts.activation")
 
-GENERIC_START = ("Si cette adresse correspond à un employé autorisé, un code d'activation vient d'y être "
-                 "envoyé. Il est valable quelques minutes.")
+GENERIC_START = ("Si cette adresse correspond à un employé autorisé dont le compte n'est pas encore activé, "
+                 "un code d'activation vient d'y être envoyé. Un compte déjà activé reçoit à la place un "
+                 "email l'invitant à se connecter.")
 GENERIC_VERIFY = "Code invalide ou expiré."
 GENERIC_TICKET = "Session d'activation invalide ou expirée : recommencez l'activation."
 GENERIC_CONFLICT = ("Votre compte ne peut pas être activé automatiquement : il nécessite une vérification "
