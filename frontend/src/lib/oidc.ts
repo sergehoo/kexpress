@@ -19,6 +19,10 @@ export const OIDC_CLIENT_ID = process.env.NEXT_PUBLIC_OIDC_CLIENT_ID ?? "kexpres
 export const OIDC_ENABLED = OIDC_AUTHORITY.length > 0;
 /** Connexion locale (mot de passe) proposée en secours. Désactivable. */
 export const LOCAL_LOGIN_ENABLED = process.env.NEXT_PUBLIC_LOCAL_LOGIN !== "false";
+/** Fournisseur d'identité d'ACTIVATION déclaré dans K-access (alias Keycloak) : « Première
+ *  connexion » passe par lui (`kc_idp_hint`) — email + code, sans mot de passe — et Keycloak ouvre
+ *  la session SSO. Vide : parcours historique (email, code, mot de passe). */
+export const OIDC_ACTIVATION_IDP = process.env.NEXT_PUBLIC_OIDC_ACTIVATION_IDP ?? "";
 /** Valeur `acr_values` demandée pour une authentification renforcée (step-up), si configurée. */
 export const OIDC_MFA_ACR = process.env.NEXT_PUBLIC_OIDC_MFA_ACR ?? "";
 
@@ -103,6 +107,18 @@ export async function oidcLogin(returnTo?: string, opts: { loginHint?: string; m
     state: { returnTo: returnTo ?? "/" },
     login_hint: opts.loginHint || undefined,
     ...(opts.mfa ? { prompt: "login", ...(OIDC_MFA_ACR ? { acr_values: OIDC_MFA_ACR } : {}) } : {}),
+  });
+}
+
+/** Première connexion : Keycloak renvoie directement vers le fournisseur d'activation
+ *  (email + code), puis ouvre la session K-access et revient sur /auth/callback. */
+export async function oidcActivate(returnTo?: string): Promise<void> {
+  const mgr = oidc();
+  if (!mgr || !OIDC_ACTIVATION_IDP) return;
+  await mgr.signinRedirect({
+    state: { returnTo: returnTo ?? "/" },
+    prompt: "login",
+    extraQueryParams: { kc_idp_hint: OIDC_ACTIVATION_IDP },
   });
 }
 

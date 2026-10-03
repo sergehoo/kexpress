@@ -222,6 +222,13 @@ services:
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
       KEYCLOAK_WEB_CLIENT_ID: ${KEYCLOAK_WEB_CLIENT_ID:-kexpress-web}
       KEYCLOAK_ACTION_REDIRECT_URI: ${KEYCLOAK_ACTION_REDIRECT_URI:-}
+      # Première connexion sans mot de passe : fournisseur d'activation déclaré dans K-access.
+      ACTIVATION_IDP_ENABLED: ${ACTIVATION_IDP_ENABLED:-False}
+      ACTIVATION_IDP_ISSUER: ${ACTIVATION_IDP_ISSUER:-}
+      ACTIVATION_IDP_CLIENT_ID: ${ACTIVATION_IDP_CLIENT_ID:-k-access-broker}
+      ACTIVATION_IDP_CLIENT_SECRET: ${ACTIVATION_IDP_CLIENT_SECRET:-}
+      ACTIVATION_IDP_REDIRECT_URIS: ${ACTIVATION_IDP_REDIRECT_URIS:-}
+      ACTIVATION_IDP_SIGNING_KEY: ${ACTIVATION_IDP_SIGNING_KEY:-}
 
       # Kaydan Shield (référentiel RH) — compte de SERVICE en lecture seule, sans MFA
       # (cf. docs/SHIELD.md). Valeurs numériques / booléennes : jamais vides (sinon échec
@@ -393,6 +400,7 @@ services:
         NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE requis}
         NEXT_PUBLIC_OIDC_AUTHORITY: ${NEXT_PUBLIC_OIDC_AUTHORITY:-}
         NEXT_PUBLIC_OIDC_CLIENT_ID: ${NEXT_PUBLIC_OIDC_CLIENT_ID:-kexpress-web}
+        NEXT_PUBLIC_OIDC_ACTIVATION_IDP: ${NEXT_PUBLIC_OIDC_ACTIVATION_IDP:-}
         NEXT_PUBLIC_OIDC_MFA_ACR: ${NEXT_PUBLIC_OIDC_MFA_ACR:-}
         NEXT_PUBLIC_LOCAL_LOGIN: ${NEXT_PUBLIC_LOCAL_LOGIN:-true}
         # Fonds de carte : clé CARTO (navigateur, restreinte par domaine) et satellite optionnel.

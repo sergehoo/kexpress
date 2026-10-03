@@ -70,7 +70,13 @@ def login_code(*, code: str, minutes: int, first_name: str = "", device_label: s
 
 
 def activation_code(*, code: str, minutes: int, first_name: str = "") -> RenderedEmail:
-    """Activation d'un compte collaborateur (code à 8 chiffres, aucun mot de passe avant)."""
+    """Activation d'un compte collaborateur (code à usage unique, aucun mot de passe avant).
+    Parcours sans mot de passe (fournisseur d'activation K-access) : aucune étape de mot de passe."""
+    from apps.accounts.activation import passwordless_mode
+
+    instruction = ("Saisissez ce code sur la page d'activation K-Express : votre session s'ouvre aussitôt, "
+                   "sans mot de passe." if passwordless_mode() else
+                   "Saisissez ce code sur la page d'activation K-Express, puis choisissez votre mot de passe.")
     validity = _minutes_label(minutes)
     return render("otp", {
         "variant": variant("security"),
@@ -83,7 +89,7 @@ def activation_code(*, code: str, minutes: int, first_name: str = "") -> Rendere
         "requested_at": _requested_at(),
         "code": code,
         "code_label": "Votre code d'activation",
-        "instruction": "Saisissez ce code sur la page d'activation K-Express, puis choisissez votre mot de passe.",
+        "instruction": instruction,
         "validity": validity,
         "security_tip": _SECURITY_TIP,
         "not_you": ("Vous n'êtes pas à l'origine de cette demande ? Ignorez simplement ce message : "

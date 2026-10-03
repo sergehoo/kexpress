@@ -316,6 +316,37 @@ def get_user(kc_id: str) -> dict | None:
     return data if isinstance(data, dict) and data.get("id") else None
 
 
+def credential_types(kc_id: str) -> set[str]:
+    """Types de credentials du compte K-access (password, otp, webauthn…). `KeycloakAdminError`
+    si injoignable."""
+    _s, data, _h = _api("GET", f"/users/{urllib.parse.quote(kc_id)}/credentials")
+    return {str(c.get("type")) for c in (data or []) if isinstance(c, dict) and c.get("type")}
+
+
+def has_password(kc_id: str) -> bool:
+    return "password" in credential_types(kc_id)
+
+
+def federated_identities(kc_id: str) -> list[dict]:
+    _s, data, _h = _api("GET", f"/users/{urllib.parse.quote(kc_id)}/federated-identity")
+    return [d for d in (data or []) if isinstance(d, dict)]
+
+
+def link_federated_identity(kc_id: str, alias: str, user_id: str, username: str) -> None:
+    """Lie D'AVANCE l'identité du fournisseur `alias` (sujet `user_id`) à CE compte K-access :
+    Keycloak connecte alors ce compte précis au retour du courtage, sans rapprochement par email.
+    Idempotent ; un lien existant vers un AUTRE sujet est une erreur (`KeycloakConflict`)."""
+    path = f"/users/{urllib.parse.quote(kc_id)}/federated-identity/{urllib.parse.quote(alias)}"
+    try:
+        _api("POST", path, body={"identityProvider": alias, "userId": user_id, "userName": username})
+    except KeycloakAdminError as exc:
+        if exc.status != 409:
+            raise
+        current = next((f for f in federated_identities(kc_id) if f.get("identityProvider") == alias), None)
+        if not current or str(current.get("userId")) != str(user_id):
+            raise KeycloakConflict("Identité d'activation déjà liée à un autre sujet.", status=409)
+
+
 def create_user_strict(user, *, email_verified: bool = False) -> str:
     """Crée le compte Keycloak de `user` et renvoie son identifiant.
 

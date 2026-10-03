@@ -69,7 +69,7 @@ def test_login_code_email_is_multipart_with_the_code_in_both_versions(db, reques
 
 
 def test_activation_and_already_active_emails(db, settings):
-    settings.AUTH_OTP_TTL_SECONDS = 900
+    settings.AUTH_ACTIVATION_OTP_TTL_SECONDS = 900  # durée propre aux codes d'activation
     assert otp.send_activation_code("nouveau@kaydan.test", "90417256", "") is True
     activation = mail.outbox[-1]
     _assert_multipart_with_inline_logo(activation)

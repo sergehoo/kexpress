@@ -7,9 +7,9 @@ des modèles Shield. Keycloak n'est pas joignable : l'API d'administration est s
 Invariants :
 1. réponses publiques non énumérantes (même statut, même corps, aucun email pour un non
    éligible ; Shield absent ou périmé → aucun OTP) ;
-2. OTP (8 chiffres) à usage unique, de courte durée, à tentatives limitées (invalidé au
-   plafond) et verrou CUMULATIF sur 24 h (alerte) ; renvoi soumis à un délai qui n'invalide
-   jamais le code déjà reçu ; emails plafonnés par jour ; débit limité ;
+2. OTP (6 chiffres, 5 minutes) à usage unique, à tentatives limitées (invalidé au plafond)
+   et verrou CUMULATIF sur 24 h (alerte) ; renvoi soumis à un délai, le nouveau code invalidant
+   l'ancien ; emails plafonnés par jour ; débit limité ;
 3. ticket d'activation à usage unique et signé ; éligibilité revérifiée à la finalisation ;
 4. conflit de provisionnement → 409 générique (vérification par l'administrateur), rien modifié ;
 5. mode local : mot de passe Django validé, appareil de confiance, session (jeton d'accès dans
@@ -38,8 +38,8 @@ pytestmark = pytest.mark.django_db
 
 STRONG = "Kx-Activation-Robuste-2026!"
 EMAIL = "awa.kone@kaydan.ci"
-CODE_RE = re.compile(r"\b(\d{8})\b")  # codes d'activation : 8 chiffres
-BAD = "00000000"
+CODE_RE = re.compile(r"\b(\d{6})\b")  # codes d'activation : 6 chiffres
+BAD = "000000"
 
 
 class FakeConflict(Exception):
@@ -92,7 +92,7 @@ def shield(monkeypatch, sub_a):
 def _start_body():
     from django.conf import settings
 
-    return {"detail": activation.GENERIC_START, "expires_in": settings.AUTH_OTP_TTL_SECONDS,
+    return {"detail": activation.GENERIC_START, "expires_in": settings.AUTH_ACTIVATION_OTP_TTL_SECONDS,
             "resend_after": settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS}
 
 
@@ -231,9 +231,8 @@ def test_expired_code_is_refused(shield, mailoutbox):
     assert _verify(EMAIL, _last_code(mailoutbox)).status_code == 400
 
 
-def test_resend_respects_the_cooldown_and_keeps_the_code_already_received_valid(shield, mailoutbox):
-    """Revue n° 15 : n'importe qui peut relancer l'activation d'une adresse ; ce renvoi ne doit
-    pas rendre caduc le code que le titulaire est en train de saisir."""
+def test_resend_respects_the_cooldown_and_invalidates_the_previous_code(shield, mailoutbox):
+    """Renvoi soumis au délai ; le nouveau code invalide l'ancien (seul le dernier reçu vaut)."""
     shield.add()
     _start(EMAIL)
     first = _last_code(mailoutbox)
@@ -245,17 +244,21 @@ def test_resend_respects_the_cooldown_and_keeps_the_code_already_received_valid(
     second = _last_code(mailoutbox)
     otp = EmailOTP.objects.get()
     assert otp.sent_count == 2
-    assert _verify(EMAIL, first).status_code == 200  # le code reçu en premier vaut toujours
     if first != second:
-        assert _verify(EMAIL, second).status_code == 400  # OTP consommé : usage unique
+        assert _verify(EMAIL, first).status_code == 400  # l'ancien code ne vaut plus
+    assert _verify(EMAIL, second).status_code == 200
+    assert _verify(EMAIL, second).status_code == 400  # usage unique
 
 
-def test_activation_codes_are_eight_digits(shield, mailoutbox):
+def test_activation_codes_are_six_digits_valid_five_minutes(shield, mailoutbox):
     shield.add()
     _start(EMAIL)
     code = _last_code(mailoutbox)
-    assert len(code) == 8
-    assert _verify(EMAIL, code[:6]).status_code == 400  # un code de connexion (6) ne passe pas
+    assert len(code) == 6
+    otp = EmailOTP.objects.get()
+    assert timedelta(minutes=4) < otp.expires_at - otp.created_at <= timedelta(minutes=5)
+    assert "5 minutes" in mailoutbox[-1].body
+    assert _verify(EMAIL, code[:5]).status_code == 400
 
 
 def test_activation_emails_are_capped_per_day(shield, mailoutbox, settings):
@@ -473,7 +476,7 @@ def test_sso_password_policy_refusal_is_generic_and_retryable(shield, mailoutbox
     refused = _complete(ticket, "Kx-Court-26!x")  # validé par Django, refusé par la politique Keycloak
     assert refused.status_code == 400 and refused.json() == {"detail": activation.GENERIC_SSO_PASSWORD}
     assert User.objects.get(email=EMAIL).activated_at is None
-    keycloak.existing["kc-0001"] = {"id": "kc-0001"}
+    keycloak.existing["kc-0001"] = {"id": "kc-0001", "email": EMAIL}
     ok = _complete(ticket)
     assert ok.status_code == 200 and keycloak.created == [(EMAIL, True)]  # pas de second compte SSO
     assert keycloak.passwords == [("kc-0001", STRONG)]

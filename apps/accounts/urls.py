@@ -22,6 +22,14 @@ urlpatterns = [
     path("activation/start/", views.ActivationStartView.as_view(), name="activation-start"),
     path("activation/verify/", views.ActivationVerifyView.as_view(), name="activation-verify"),
     path("activation/complete/", views.ActivationCompleteView.as_view(), name="activation-complete"),
+    # Activation SANS mot de passe : fournisseur d'identité amont déclaré dans K-access.
+    path("activation/idp/complete/", views.ActivationIdpCompleteView.as_view(), name="activation-idp-complete"),
+    path("activation/idp/.well-known/openid-configuration", views.ActivationIdpDiscoveryView.as_view(),
+         name="activation-idp-discovery"),
+    path("activation/idp/jwks", views.ActivationIdpJwksView.as_view(), name="activation-idp-jwks"),
+    path("activation/idp/authorize", views.ActivationIdpAuthorizeView.as_view(), name="activation-idp-authorize"),
+    path("activation/idp/token", views.ActivationIdpTokenView.as_view(), name="activation-idp-token"),
+    path("activation/idp/userinfo", views.ActivationIdpUserinfoView.as_view(), name="activation-idp-userinfo"),
     # Appareils reconnus.
     path("devices/", views.DeviceListView.as_view(), name="devices"),
     path("devices/revoke-all/", views.DeviceRevokeAllView.as_view(), name="devices-revoke-all"),

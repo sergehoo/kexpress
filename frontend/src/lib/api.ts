@@ -249,6 +249,15 @@ export async function activationVerify(email: string, code: string): Promise<{ t
   return { ticket: data.ticket, existingSso: !!data.existing_sso_account };
 }
 
+/** Parcours sans mot de passe : preuve OTP (ou ticket pour réessayer) → URL de retour vers
+ *  K-access, qui ouvre la session SSO. */
+export async function activationIdpComplete(
+  req: string, proof: { email: string; code: string } | { ticket: string },
+): Promise<{ redirect: string }> {
+  const { data } = await api.post<{ redirect: string }>("/auth/activation/idp/complete/", { req, ...proof });
+  return data;
+}
+
 export type ActivationResult =
   | { sso: true; login_hint: string; detail: string }
   | ({ sso?: false } & SessionOpened);

@@ -48,7 +48,10 @@ _CHALLENGE_SALT = "apps.accounts.otp.challenge"
 
 # --- Réglages (les valeurs AUTH_* sont définies dans config/settings/base.py) -------------
 
-def ttl() -> timedelta:
+def ttl(purpose: str | None = None) -> timedelta:
+    """Validité d'un code ; l'activation (aucun mot de passe ne la précède) a la sienne, plus courte."""
+    if purpose == OTPPurpose.ACTIVATION:
+        return timedelta(seconds=int(getattr(settings, "AUTH_ACTIVATION_OTP_TTL_SECONDS", 300)))
     return timedelta(seconds=int(getattr(settings, "AUTH_OTP_TTL_SECONDS", 600)))
 
 
@@ -81,9 +84,10 @@ def max_activation_emails_per_day() -> int:
 
 
 def code_length(purpose: str) -> int:
-    """Activation : aucun mot de passe ne précède le code, il est donc plus long."""
+    """Activation : 6 chiffres par défaut (`AUTH_ACTIVATION_CODE_LENGTH`, 12 au plus) ; la
+    devinette reste bornée par les essais par code, les plafonds d'envoi et le verrou cumulatif."""
     if purpose == OTPPurpose.ACTIVATION:
-        return min(12, max(CODE_LENGTH, int(getattr(settings, "AUTH_ACTIVATION_CODE_LENGTH", 8))))
+        return min(12, max(CODE_LENGTH, int(getattr(settings, "AUTH_ACTIVATION_CODE_LENGTH", 6))))
     return CODE_LENGTH
 
 
@@ -195,7 +199,7 @@ def issue(purpose: str, *, user=None, email_hash_value: str = "", shield_employe
     code = generate_code(code_length(purpose))
     otp = EmailOTP(purpose=purpose, user=user, email_hash=email_hash_value,
                    shield_employee_id=str(shield_employee_id or ""), context=context or {},
-                   expires_at=now + ttl(), max_attempts=max_attempts(), sent_count=1, last_sent_at=now)
+                   expires_at=now + ttl(purpose), max_attempts=max_attempts(), sent_count=1, last_sent_at=now)
     otp.code_hash = _code_hash(otp.pk, code)
     challenge = None
     if with_challenge:
@@ -212,10 +216,11 @@ def can_resend(otp: EmailOTP) -> bool:
 
 
 def resend(otp: EmailOTP) -> str | None:
-    """Nouveau code pour le MÊME OTP si le délai de renvoi est écoulé. Le code déjà envoyé
-    RESTE valable (jusqu'à l'expiration de l'OTP) : relancer l'envoi — n'importe qui peut le
-    faire pour une adresse d'activation — ne rend jamais caduc le code que le titulaire a reçu.
-    Les tentatives restent communes à tous les codes de l'OTP. None si le renvoi est refusé."""
+    """Nouveau code pour le MÊME OTP si le délai de renvoi est écoulé. Connexion : le code déjà
+    envoyé reste valable jusqu'à l'expiration. Activation : le nouveau code INVALIDE l'ancien
+    (seul le dernier reçu vaut) ; le délai de renvoi et les plafonds d'envoi bornent l'usage
+    qu'un tiers pourrait en faire. Les tentatives restent communes à tous les codes de l'OTP.
+    None si le renvoi est refusé."""
     with transaction.atomic():
         locked = EmailOTP.objects.select_for_update().filter(pk=otp.pk).first()
         if locked is None or not can_resend(locked):
@@ -226,10 +231,13 @@ def resend(otp: EmailOTP) -> str | None:
         code = generate_code(code_length(locked.purpose))
         now = timezone.now()
         context = dict(locked.context or {})
-        context["prev"] = (list(context.get("prev") or []) + [locked.code_hash])[-max_sends_per_otp():]
+        if locked.purpose == OTPPurpose.ACTIVATION:
+            context.pop("prev", None)
+        else:
+            context["prev"] = (list(context.get("prev") or []) + [locked.code_hash])[-max_sends_per_otp():]
         locked.context = context
         locked.code_hash = _code_hash(locked.pk, code)
-        locked.expires_at = now + ttl()
+        locked.expires_at = now + ttl(locked.purpose)
         locked.sent_count += 1
         locked.last_sent_at = now
         locked.save(update_fields=["context", "code_hash", "expires_at", "sent_count", "last_sent_at"])
@@ -389,8 +397,8 @@ def deliver(subject: str, body: str, recipient: str, html: str | None = None) ->
     return True
 
 
-def _minutes() -> int:
-    return max(1, int(ttl().total_seconds() // 60))
+def _minutes(purpose: str | None = None) -> int:
+    return max(1, int(ttl(purpose).total_seconds() // 60))
 
 
 def _deliver_rendered(rendered, recipient: str) -> bool:
@@ -400,7 +408,8 @@ def _deliver_rendered(rendered, recipient: str) -> bool:
 def send_activation_code(email: str, code: str, first_name: str = "") -> bool:
     from apps.core.emails import catalog
 
-    return _deliver_rendered(catalog.activation_code(code=code, minutes=_minutes(), first_name=first_name), email)
+    return _deliver_rendered(catalog.activation_code(code=code, minutes=_minutes(OTPPurpose.ACTIVATION),
+                                                      first_name=first_name), email)
 
 
 def send_login_code(user, code: str, device_label: str = "") -> bool:

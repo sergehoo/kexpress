@@ -650,6 +650,7 @@ class ActivationStartView(_PublicAuthView):
 
         from apps.accounts import activation
         from apps.accounts import otp as otp_mod
+        from apps.accounts.models import OTPPurpose
 
         started = time.monotonic()
         email = otp_mod.normalize_email(_data(request).get("email"))
@@ -666,7 +667,7 @@ class ActivationStartView(_PublicAuthView):
         otp_mod.uniform_delay(started)
         # Durées identiques pour toutes les adresses : elles ne révèlent rien de l'éligibilité.
         return Response({"detail": activation.GENERIC_START,
-                         "expires_in": settings.AUTH_OTP_TTL_SECONDS,
+                         "expires_in": int(otp_mod.ttl(OTPPurpose.ACTIVATION).total_seconds()),
                          "resend_after": settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS}, status=202)
 
 
@@ -717,6 +718,179 @@ class ActivationCompleteView(_PublicAuthView):
                                        existing=devices.device_from_request(request, user))
         return session_response(user, device=device, device_raw=raw, remember_me=remember_me, mfa=True,
                                 body={"detail": "Compte activé : bienvenue sur K-Express."})
+
+
+# =====================================================================================
+# Activation SANS mot de passe : fournisseur d'identité amont de K-access
+# =====================================================================================
+
+
+class _IdpView(APIView):
+    """Points de terminaison OIDC du fournisseur d'activation (cf. `activation_idp`) : publics,
+    sans session ni CSRF ; 404 tant que le fournisseur n'est pas configuré."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def initial(self, request, *args, **kwargs):
+        from apps.accounts import activation_idp as idp
+
+        if not idp.enabled():
+            raise exceptions.NotFound()
+        super().initial(request, *args, **kwargs)
+
+    @staticmethod
+    def oauth_error(exc):
+        body = {"error": exc.error}
+        if exc.description:
+            body["error_description"] = exc.description
+        response = Response(body, status=exc.status)
+        if exc.status == 401:
+            response["WWW-Authenticate"] = 'Basic realm="kexpress-activation"'
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class ActivationIdpDiscoveryView(_IdpView):
+    def get(self, request):
+        from apps.accounts import activation_idp as idp
+
+        return Response(idp.discovery(request))
+
+
+class ActivationIdpJwksView(_IdpView):
+    def get(self, request):
+        from apps.accounts import activation_idp as idp
+
+        return Response(idp.jwks())
+
+
+class ActivationIdpAuthorizeView(_IdpView):
+    """Demande de Keycloak → page d'activation du front (`/activation?req=…`)."""
+
+    def get(self, request):
+        from django.http import HttpResponseRedirect
+
+        from apps.accounts import activation_idp as idp
+
+        try:
+            return HttpResponseRedirect(idp.authorize(request.query_params))
+        except idp.IdpError as exc:
+            return self.oauth_error(exc)
+
+
+class _IdpTokenThrottle(IpCeilingThrottle):
+    """Débit des échanges de code : un seul appelant (Keycloak) pour toutes les activations ;
+    l'échange est déjà protégé par le secret du client (`ACTIVATION_IDP_TOKEN_RATE`)."""
+
+    scope = "activation_idp_token"
+
+    def get_rate(self):
+        return getattr(settings, "ACTIVATION_IDP_TOKEN_RATE", "600/min")
+
+
+class ActivationIdpTokenView(_IdpView):
+    """Échange du code par Keycloak (client confidentiel, secret) → `id_token` signé."""
+
+    throttle_classes = [_IdpTokenThrottle]
+
+    def post(self, request):
+        from apps.accounts import activation_idp as idp
+
+        try:
+            body = idp.exchange(request, _data(request))
+        except idp.IdpError as exc:
+            return self.oauth_error(exc)
+        response = Response(body)
+        response["Cache-Control"] = "no-store"
+        response["Pragma"] = "no-cache"
+        return response
+
+
+class ActivationIdpUserinfoView(_IdpView):
+    def get(self, request):
+        from apps.accounts import activation_idp as idp
+
+        try:
+            return Response(idp.userinfo(request))
+        except idp.IdpError as exc:
+            return self.oauth_error(exc)
+
+    post = get
+
+
+class ActivationIdpCompleteView(_PublicAuthView):
+    """`{req, email, code}` (ou `{req, ticket}` pour réessayer après une indisponibilité de
+    K-access) → compte K-access créé ou lié SANS mot de passe et `{redirect}` : retour vers
+    Keycloak avec un code d'autorisation, Keycloak ouvrant la session SSO. L'appareil est
+    reconnu (l'OTP vient de prouver la possession de la boîte mail)."""
+
+    throttle_scope = "otp_verify"
+
+    def throttle_account(self, request):
+        from apps.accounts import activation
+
+        data = _data(request)
+        reference = activation.ticket_reference(data.get("ticket"))
+        if reference:
+            return f"ticket-{reference}"
+        return super().throttle_account(request)
+
+    def post(self, request):
+        from apps.accounts import activation, devices
+        from apps.accounts import activation_idp as idp
+        from apps.accounts import otp as otp_mod
+        from apps.accounts.sessions import session_expiry
+        from apps.core.enums import AuditAction
+
+        data = _data(request)
+        if not (idp.enabled() and activation.passwordless_mode()):
+            return Response({"detail": activation.GENERIC_UNAVAILABLE}, status=503)
+        payload = idp.load_request(data.get("req"))
+        if payload is None:
+            return Response({"detail": "Session d'activation expirée : relancez « Première connexion » depuis "
+                                       "la page de connexion.", "code": "activation_request_expired"}, status=400)
+        ticket = data.get("ticket")
+        if not ticket:
+            # Budget d'échecs PAR ADRESSE IP, toutes adresses email confondues : borne la devinette
+            # répartie sur de nombreux comptes (chaque compte a déjà ses propres essais et verrou).
+            from django.core.cache import cache
+
+            ip_key = f"kx:activation:ipfail:{IpCeilingThrottle().get_ident(request)}"
+            budget = int(getattr(settings, "AUTH_ACTIVATION_IP_FAILURES_PER_HOUR", 30))
+            if int(cache.get(ip_key, 0)) >= budget:
+                return Response({"detail": activation.GENERIC_VERIFY}, status=400)
+            try:
+                ticket = activation.verify(data.get("email"), data.get("code"))
+            except activation.ActivationError:
+                if cache.add(ip_key, 1, timeout=3600) is False:
+                    try:
+                        if cache.incr(ip_key) == budget:
+                            import logging
+
+                            logging.getLogger(__name__).error(
+                                "ALERTE SÉCURITÉ : %s codes d'activation faux en 1 h depuis une même adresse IP.",
+                                budget)
+                    except ValueError:
+                        cache.set(ip_key, 1, timeout=3600)
+                email = otp_mod.normalize_email(data.get("email"))
+                _audit(None, AuditAction.ACCESS, request=request, action="activation_code_rejected",
+                       email_hash=otp_mod.email_hash(email)[:16] if email else "")
+                return Response({"detail": activation.GENERIC_VERIFY}, status=400)
+        try:
+            user = activation.complete_passwordless(ticket)
+        except activation.ActivationError as exc:
+            body = {"detail": str(exc)}
+            if exc.status == 503:
+                body["ticket"] = ticket  # même preuve OTP, nouvel essai sans nouveau code
+            return Response(body, status=exc.status)
+        redirect = idp.issue_code(user, payload)
+        _audit(user, AuditAction.LOGIN, request=request, action="activation_passwordless", via="k-access")
+        device, raw = devices.register(request, user, trusted=True, session_expires_at=session_expiry(False),
+                                       existing=devices.device_from_request(request, user))
+        response = Response({"redirect": redirect})
+        devices.set_cookie(response, device, raw, persistent=True)
+        return response
 
 
 # =====================================================================================

@@ -57,7 +57,10 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 /** Pages qui ouvrent elles-mêmes la session (retours Keycloak) : pas de restauration ici. */
-const NO_RESTORE_PREFIXES = ["/auth/callback", "/auth/silent-callback"];
+// Pas de restauration sur l'activation : page publique, souvent AU MILIEU d'un courtage K-access
+// (fournisseur d'activation). Un renouvellement silencieux y ouvrirait une seconde session
+// d'authentification Keycloak qui écraserait celle en cours (« cookie_not_found » au retour).
+const NO_RESTORE_PREFIXES = ["/auth/callback", "/auth/silent-callback", "/activation"];
 
 function inIframe(): boolean {
   try {

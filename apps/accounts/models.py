@@ -289,6 +289,32 @@ class ActivationTicket(models.Model):
         return f"Ticket d'activation {self.created_at:%Y-%m-%d %H:%M}"
 
 
+class ActivationAuthorization(models.Model):
+    """Code d'autorisation OIDC émis par le fournisseur d'identité d'activation
+    (`apps.accounts.activation_idp`) après la preuve OTP : à usage unique, ~1 minute, lié au
+    client K-access, à son URI de retour, au `nonce` et au défi PKCE. Seule l'empreinte du code
+    est stockée."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code_hash = models.CharField("empreinte du code", max_length=64, unique=True)
+    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE, related_name="+")
+    client_id = models.CharField("client", max_length=255)
+    redirect_uri = models.CharField("URI de retour", max_length=1000)
+    nonce = models.CharField("nonce", max_length=255, blank=True)
+    code_challenge = models.CharField("défi PKCE", max_length=128, blank=True)
+    created_at = models.DateTimeField("créé le", auto_now_add=True)
+    expires_at = models.DateTimeField("expire le")
+    used_at = models.DateTimeField("utilisé le", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "autorisation d'activation"
+        verbose_name_plural = "autorisations d'activation"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Autorisation d'activation {self.created_at:%Y-%m-%d %H:%M}"
+
+
 class TrustedDevice(models.Model):
     """Appareil (navigateur) connu d'un compte.
 

@@ -397,6 +397,22 @@ SHIELD_MAX_STALENESS_HOURS = env.int("SHIELD_MAX_STALENESS_HOURS", default=26)
 AUTH_OTP_TTL_SECONDS = env.int("AUTH_OTP_TTL_SECONDS", default=600)
 AUTH_OTP_MAX_ATTEMPTS = env.int("AUTH_OTP_MAX_ATTEMPTS", default=5)
 AUTH_OTP_RESEND_COOLDOWN_SECONDS = env.int("AUTH_OTP_RESEND_COOLDOWN_SECONDS", default=60)
+# Activation (première connexion) : code à 6 chiffres valable 5 minutes ; un renvoi invalide le
+# code précédent.
+AUTH_ACTIVATION_OTP_TTL_SECONDS = env.int("AUTH_ACTIVATION_OTP_TTL_SECONDS", default=300)
+AUTH_ACTIVATION_CODE_LENGTH = env.int("AUTH_ACTIVATION_CODE_LENGTH", default=6)
+# Fournisseur d'identité d'ACTIVATION, déclaré dans K-access (Keycloak) comme fournisseur amont
+# masqué : K-Express y prouve la possession de l'adresse (OTP) et Keycloak ouvre la session SSO.
+ACTIVATION_IDP_ENABLED = env.bool("ACTIVATION_IDP_ENABLED", default=False)
+ACTIVATION_IDP_ISSUER = env("ACTIVATION_IDP_ISSUER", default="")
+ACTIVATION_IDP_CLIENT_ID = env("ACTIVATION_IDP_CLIENT_ID", default="k-access-broker")
+ACTIVATION_IDP_CLIENT_SECRET = env("ACTIVATION_IDP_CLIENT_SECRET", default="")
+ACTIVATION_IDP_REDIRECT_URIS = env.list("ACTIVATION_IDP_REDIRECT_URIS", default=[])
+ACTIVATION_IDP_SIGNING_KEY = env("ACTIVATION_IDP_SIGNING_KEY", default="")
+ACTIVATION_IDP_ALIAS = env("ACTIVATION_IDP_ALIAS", default="kexpress-activation")
+ACTIVATION_IDP_TOKEN_RATE = env("ACTIVATION_IDP_TOKEN_RATE", default="600/min")
+# Codes d'activation faux tolérés par adresse IP et par heure (toutes adresses email confondues).
+AUTH_ACTIVATION_IP_FAILURES_PER_HOUR = env.int("AUTH_ACTIVATION_IP_FAILURES_PER_HOUR", default=30)
 #: Vérification par OTP d'un appareil INCONNU après le mot de passe.
 AUTH_DEVICE_VERIFICATION = env.bool("AUTH_DEVICE_VERIFICATION", default=True)
 AUTH_DEVICE_TRUST_DAYS = env.int("AUTH_DEVICE_TRUST_DAYS", default=30)
