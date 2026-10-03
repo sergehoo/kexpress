@@ -683,7 +683,8 @@ class ActivationVerifyView(_PublicAuthView):
             ticket = activation.verify(data.get("email"), data.get("code"))
         except activation.ActivationError:
             return Response({"detail": activation.GENERIC_VERIFY}, status=400)
-        return Response({"ticket": ticket, "expires_in": int(activation.ticket_ttl().total_seconds())})
+        return Response({"ticket": ticket, "expires_in": int(activation.ticket_ttl().total_seconds()),
+                         "existing_sso_account": activation.existing_sso_account(data.get("email") or "")})
 
 
 class ActivationCompleteView(_PublicAuthView):

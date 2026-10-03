@@ -243,9 +243,10 @@ export async function activationStart(email: string): Promise<ActivationStartRes
   return { detail: data.detail ?? "", expires_in: data.expires_in ?? 600, resend_after: data.resend_after ?? 60 };
 }
 
-export async function activationVerify(email: string, code: string): Promise<string> {
-  const { data } = await api.post<{ ticket: string }>("/auth/activation/verify/", { email, code });
-  return data.ticket;
+export async function activationVerify(email: string, code: string): Promise<{ ticket: string; existingSso: boolean }> {
+  const { data } = await api.post<{ ticket: string; existing_sso_account?: boolean }>(
+    "/auth/activation/verify/", { email, code });
+  return { ticket: data.ticket, existingSso: !!data.existing_sso_account };
 }
 
 export type ActivationResult =

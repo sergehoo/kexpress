@@ -167,52 +167,34 @@ export default function FleetControlPage() {
       <div className={cn("grid gap-4", !expanded && "lg:grid-cols-[22rem_1fr]")}>
         {!expanded && (
           <Card className="order-2 flex max-h-[70vh] flex-col lg:order-1">
-            {/* Onglets */}
-            <div className="flex border-b border-line">
-              <button
-                onClick={() => setTab("vehicles")}
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors",
-                  tab === "vehicles" ? "border-b-2 border-brand-500 text-brand-600" : "text-muted hover:text-ink",
-                )}
-              >
-                <Car className="h-3.5 w-3.5" /> Véhicules ({positions.length})
-              </button>
-              <button
-                onClick={() => setTab("requests")}
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors",
-                  tab === "requests" ? "border-b-2 border-brand-500 text-brand-600" : "text-muted hover:text-ink",
-                )}
-              >
-                <ClipboardList className="h-3.5 w-3.5" /> Demandes
-                {requests.length > 0 && (
-                  <span className="rounded-full bg-brand-500 px-1.5 text-[10px] font-bold text-white">{requests.length}</span>
-                )}
-              </button>
-              <button
-                onClick={() => setTab("alerts")}
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors",
-                  tab === "alerts" ? "border-b-2 border-brand-500 text-brand-600" : "text-muted hover:text-ink",
-                )}
-              >
-                <OctagonAlert className="h-3.5 w-3.5" /> Anomalies
-                {alertCount > 0 && (
-                  <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-bold text-white">{alertCount}</span>
-                )}
-              </button>
-              {canSeeFuel && (
+            {/* Onglets : icône au-dessus du libellé, largeur égale — tient dans le panneau étroit. */}
+            <div className="grid border-b border-line"
+                 style={{ gridTemplateColumns: `repeat(${canSeeFuel ? 4 : 3}, minmax(0, 1fr))` }}>
+              {([
+                { key: "vehicles" as const, icon: Car, label: "Véhicules", count: positions.length, tone: "bg-surface2 text-muted" },
+                { key: "requests" as const, icon: ClipboardList, label: "Demandes", count: requests.length, tone: "bg-brand-500 text-white" },
+                { key: "alerts" as const, icon: OctagonAlert, label: "Anomalies", count: alertCount, tone: "bg-rose-500 text-white" },
+                ...(canSeeFuel ? [{ key: "fuel", icon: Fuel, label: "Carburant", count: 0, tone: "" } as const] : []),
+              ] satisfies { key: typeof tab; icon: typeof Car; label: string; count: number; tone: string }[])
+                .map(({ key, icon: Icon, label, count, tone }) => (
                 <button
-                  onClick={() => setTab("fuel")}
+                  key={key}
+                  onClick={() => setTab(key)}
+                  aria-pressed={tab === key}
                   className={cn(
-                    "flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors",
-                    tab === "fuel" ? "border-b-2 border-brand-500 text-brand-600" : "text-muted hover:text-ink",
+                    "flex min-w-0 flex-col items-center gap-1 border-b-2 px-1 py-2 text-[11px] font-semibold transition-colors",
+                    tab === key ? "border-brand-500 text-brand-600" : "border-transparent text-muted hover:text-ink",
                   )}
                 >
-                  <Fuel className="h-3.5 w-3.5" /> Carburant
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                  <span className="flex max-w-full items-center gap-1 whitespace-nowrap">
+                    <span className="truncate">{label}</span>
+                    {count > 0 && (
+                      <span className={cn("rounded-full px-1.5 text-[10px] font-bold leading-4", tone)}>{count}</span>
+                    )}
+                  </span>
                 </button>
-              )}
+              ))}
             </div>
 
             {tab === "vehicles" ? (

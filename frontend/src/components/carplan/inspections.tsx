@@ -13,7 +13,7 @@ import {
 } from "@/lib/carplan";
 import { cn, formatNumber } from "@/lib/utils";
 
-import { FormError, formatDateTime, km, Notice, SecureImage, Textarea, ToneBadge } from "./shared";
+import { FormError, formatDateTime, km, Notice, PhotoLightbox, SecureImage, Textarea, ToneBadge } from "./shared";
 
 const CONDITIONS = Object.entries(CONDITION_LABEL) as [Condition, string][];
 const CONDITION_TONE: Record<Condition, "green" | "amber" | "red"> = { good: "green", fair: "amber", poor: "red" };
@@ -296,6 +296,7 @@ export function InspectionCard({ inspection, as, canSign, canAddPhoto, defaultOp
   const [file, setFile] = useState<File | null>(null);
   const [zone, setZone] = useState("");
   const [caption, setCaption] = useState("");
+  const [viewing, setViewing] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const i = inspection;
 
@@ -421,11 +422,20 @@ export function InspectionCard({ inspection, as, canSign, canAddPhoto, defaultOp
 
           <div>
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Photos ({i.photos.length})</p>
+            {viewing !== null && (
+              <PhotoLightbox
+                photos={i.photos.map((p) => ({
+                  url: p.image, alt: p.caption || p.zone || "Photo d'état des lieux",
+                  caption: [p.zone, p.caption].filter(Boolean).join(" — ") || undefined,
+                }))}
+                index={viewing} onIndex={setViewing} onClose={() => setViewing(null)} />
+            )}
             {i.photos.length === 0 ? <p className="text-xs text-muted">Aucune photo.</p> : (
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-                {i.photos.map((p) => (
+                {i.photos.map((p, index) => (
                   <figure key={p.id} className="space-y-1">
-                    <SecureImage url={p.image} alt={p.caption || p.zone || "Photo d'état des lieux"} className="aspect-square w-full" />
+                    <SecureImage url={p.image} alt={p.caption || p.zone || "Photo d'état des lieux"} className="aspect-square w-full"
+                                 onOpen={() => setViewing(index)} />
                     {(p.zone || p.caption) && (
                       <figcaption className="truncate text-[10px] text-muted" title={[p.zone, p.caption].filter(Boolean).join(" — ")}>
                         {[p.zone, p.caption].filter(Boolean).join(" — ")}

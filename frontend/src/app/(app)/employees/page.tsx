@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Search } from "lucide-react";
+import Link from "next/link";
+import { Info, Plus, Search } from "lucide-react";
 
 import { Button, Card, CardBody, EmptyState, Input, Select, Spinner } from "@/components/ui";
 import { EntityForm, type Field } from "@/components/EntityForm";
@@ -9,6 +10,7 @@ import { RowActions } from "@/components/RowActions";
 import { useEmployees, useSubsidiaries } from "@/lib/queries";
 import { useCrud } from "@/lib/crud";
 import { useAuth } from "@/lib/auth";
+import { canAccessPage } from "@/lib/rbac";
 import { apiError } from "@/lib/api";
 import type { Employee } from "@/lib/types";
 
@@ -65,6 +67,16 @@ export default function EmployeesPage() {
 
   return (
     <div className="space-y-5">
+      <p className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5 text-xs text-muted">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span>
+          Comptes K-Express. Un employé du référentiel RH (Kaydan Shield) apparaît ici dès qu&apos;il active son compte
+          (page « Activez votre compte ») ou se connecte avec K-access.
+          {canAccessPage(me ?? { role: "" }, "/hr-sync") && (
+            <> Fiches, éligibilité et rapprochements : <Link href="/hr-sync" className="font-medium text-brand-600 hover:underline">Synchronisation RH</Link>.</>
+          )}
+        </span>
+      </p>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />

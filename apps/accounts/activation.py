@@ -33,6 +33,7 @@ from django.conf import settings
 from django.core import signing
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounts import otp as otp_mod
@@ -298,6 +299,44 @@ def _wait_for_link(user: User, linked) -> bool:
         time.sleep(0.25)
 
 
+def _adoptable_sso_account(user: User, log) -> str:
+    """Compte K-access déjà existant à l'adresse que l'employé vient de prouver par OTP : repris
+    seulement s'il porte EXACTEMENT cet email, est actif, et n'est relié à aucun autre compte
+    K-Express. Le mot de passe choisi le remplace et ses sessions sont fermées (un éventuel
+    usurpateur, qui aurait créé ce compte à l'adresse d'autrui, en perd l'accès). Sinon 409."""
+    from apps.accounts import keycloak_admin as kc
+
+    try:
+        existing = kc.get_user_by_email(user.email)
+    except kc.KeycloakAdminError:
+        log("activation", "error", "Recherche du compte K-access existant impossible.")
+        raise ActivationError(GENERIC_UNAVAILABLE, status=503)
+    kc_id = (existing or {}).get("id")
+    if not kc_id or str(existing.get("email") or "").strip().lower() != user.email.lower():
+        log("activation", "error", "Conflit Keycloak sans compte de même adresse (rapprochement manuel).")
+        raise ActivationError(GENERIC_CONFLICT, status=409)
+    if existing.get("enabled") is False:
+        log("activation", "error", "Compte Keycloak désactivé : activation refusée.")
+        raise ActivationError(GENERIC_CONFLICT, status=409)
+    if User.objects.filter(Q(keycloak_sub=kc_id) | Q(keycloak_id=kc_id)).exclude(pk=user.pk).exists():
+        log("activation", "error", "Compte Keycloak déjà relié à un autre compte K-Express.")
+        raise ActivationError(GENERIC_CONFLICT, status=409)
+    return kc_id
+
+
+def existing_sso_account(email: str) -> bool:
+    """Après preuve OTP seulement : l'employé a-t-il déjà un compte K-access à cette adresse ?
+    (l'écran le prévient que son mot de passe K-access sera remplacé)."""
+    from apps.accounts import keycloak_admin as kc
+
+    if not (sso_mode() and getattr(settings, "KEYCLOAK_ADMIN_ENABLED", False)):
+        return False
+    try:
+        return kc.get_user_by_email(otp_mod.normalize_email(email)) is not None
+    except Exception:
+        return False
+
+
 def _activate_sso(user: User, password: str) -> None:
     from apps.accounts import keycloak_admin as kc
     from apps.accounts.models import KeycloakSyncLog, KeycloakSyncStatus
@@ -314,6 +353,7 @@ def _activate_sso(user: User, password: str) -> None:
         # synchro) n'en est PAS un : jamais de mot de passe fixé sur un compte non lié.
         return bool(u.keycloak_id and u.keycloak_sub == u.keycloak_id)
 
+    adopted = False
     try:
         if user.keycloak_id and not linked(user):
             log("activation", "error", "Compte Keycloak associé sans lien vérifié (rapprochement manuel).")
@@ -333,11 +373,11 @@ def _activate_sso(user: User, password: str) -> None:
             try:
                 kc_id = kc.create_user_strict(user, email_verified=True)
             except kc.KeycloakConflict:
-                if not _wait_for_link(user, linked):
-                    # Un compte SSO porte déjà cette adresse sans être lié : jamais d'adoption.
-                    log("activation", "error", "Compte Keycloak existant non lié (rapprochement manuel).")
-                    raise ActivationError(GENERIC_CONFLICT, status=409)
-                kc_id = user.keycloak_id  # créé entre-temps par la synchro K-Express (lien sûr)
+                if _wait_for_link(user, linked):
+                    kc_id = user.keycloak_id  # créé entre-temps par la synchro K-Express (lien sûr)
+                else:
+                    kc_id = _adoptable_sso_account(user, log)
+                    adopted = True
         if not linked(user):
             fields = {"keycloak_id": kc_id, "keycloak_username": user.email,
                       "keycloak_synced_at": timezone.now(), "keycloak_sync_status": KeycloakSyncStatus.SYNCED,
@@ -345,7 +385,7 @@ def _activate_sso(user: User, password: str) -> None:
             if user.keycloak_sub and user.keycloak_sub != kc_id:
                 log("activation", "error", "Identifiant SSO différent déjà lié à ce compte.")
                 raise ActivationError(GENERIC_CONFLICT, status=409)
-            fields["keycloak_sub"] = kc_id  # compte CRÉÉ ici : lien sûr
+            fields["keycloak_sub"] = kc_id  # compte créé ici, ou repris après preuve OTP de l'adresse
             try:
                 with transaction.atomic():
                     User.objects.filter(pk=user.pk).update(**fields)
@@ -370,6 +410,10 @@ def _activate_sso(user: User, password: str) -> None:
         except kc.KeycloakAccountDisabled:
             log("activation", "error", "Compte Keycloak désactivé : activation refusée.")
             raise ActivationError(GENERIC_CONFLICT, status=409)
+        if adopted:
+            # Le mot de passe précédent ne vaut plus : toute session ouverte avec lui est fermée.
+            kc.logout_all_sessions(kc_id)
+            log("activation", "ok", "Compte K-access existant repris après preuve OTP de l'adresse")
     except kc.KeycloakAdminError as exc:
         log("activation", "error", str(exc))
         raise ActivationError(GENERIC_UNAVAILABLE, status=503)

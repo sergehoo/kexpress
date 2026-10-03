@@ -15,7 +15,8 @@ Invariants :
 5. mode local : mot de passe Django validé, appareil de confiance, session (jeton d'accès dans
    le corps, rafraîchissement en cookie HttpOnly) — un employé standard lit ensuite ses
    réservations ;
-6. mode SSO : compte Keycloak créé/retrouvé PAR IDENTIFIANT (jamais adopté par email), mot de
+6. mode SSO : compte Keycloak créé, retrouvé PAR IDENTIFIANT, ou — compte K-access existant à l'adresse
+   prouvée par OTP — repris (mot de passe remplacé, sessions fermées ; jamais s'il est désactivé ou lié ailleurs), mot de
    passe fixé par l'API (temporary=false), refus de politique → message générique, réponse
    `{sso, login_hint}` sans session locale.
 """
@@ -93,6 +94,7 @@ def _start_body():
 
     return {"detail": activation.GENERIC_START, "expires_in": settings.AUTH_OTP_TTL_SECONDS,
             "resend_after": settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS}
+
 
 def _client():
     return APIClient(REMOTE_ADDR="10.20.0.1")
@@ -429,7 +431,7 @@ def keycloak(monkeypatch, settings):
     settings.OIDC_ENABLED = True
     settings.KEYCLOAK_ADMIN_ENABLED = True
     settings.AUTH_KEYCLOAK_LINK_WAIT_SECONDS = 0.3  # attente du lien écrit par une synchro concurrente
-    calls = SimpleNamespace(created=[], passwords=[], confirmed=[], roles=[], existing={})
+    calls = SimpleNamespace(created=[], passwords=[], confirmed=[], roles=[], existing={}, by_email={}, logouts=[])
 
     def create_user_strict(user, *, email_verified=False):
         calls.created.append((user.email, email_verified))
@@ -445,7 +447,8 @@ def keycloak(monkeypatch, settings):
     monkeypatch.setattr(kc, "confirm_email", lambda kc_id: calls.confirmed.append(kc_id))
     monkeypatch.setattr(kc, "_sync_realm_role", lambda kc_id, role: calls.roles.append((kc_id, role)))
     monkeypatch.setattr(kc, "get_user", lambda kc_id: calls.existing.get(kc_id))
-    monkeypatch.setattr(kc, "get_user_by_email", lambda email: pytest.fail("jamais de recherche par email"))
+    monkeypatch.setattr(kc, "get_user_by_email", lambda email: calls.by_email.get(email))
+    monkeypatch.setattr(kc, "logout_all_sessions", lambda kc_id: calls.logouts.append(kc_id))
     return calls
 
 
@@ -476,15 +479,46 @@ def test_sso_password_policy_refusal_is_generic_and_retryable(shield, mailoutbox
     assert keycloak.passwords == [("kc-0001", STRONG)]
 
 
-def test_sso_existing_unlinked_keycloak_account_is_never_adopted(shield, mailoutbox, keycloak, monkeypatch):
+def _conflict(monkeypatch):
     def conflict(user, *, email_verified=False):
         raise kc.KeycloakConflict("existe", status=409)
 
     monkeypatch.setattr(kc, "create_user_strict", conflict)
+
+
+def test_existing_kaccess_account_is_taken_over_only_by_the_proven_mailbox(shield, mailoutbox, keycloak, monkeypatch):
+    """Employé qui a déjà un compte K-access : après la preuve OTP de son adresse, le compte est
+    repris — mot de passe remplacé par celui qu'il choisit, sessions K-access fermées."""
+    _conflict(monkeypatch)
+    keycloak.by_email[EMAIL] = {"id": "kc-old", "email": EMAIL, "enabled": True}
+    shield.add()
+    assert _start(EMAIL).status_code == 202
+    verified = _verify(EMAIL, _last_code(mailoutbox))
+    assert verified.status_code == 200 and verified.json()["existing_sso_account"] is True
+    response = _complete(verified.json()["ticket"])
+    assert response.status_code == 200, response.content
+    assert keycloak.passwords == [("kc-old", STRONG)] and keycloak.logouts == ["kc-old"]
+    assert keycloak.confirmed == ["kc-old"]
+    user = User.objects.get(email=EMAIL)
+    assert user.keycloak_sub == "kc-old" == user.keycloak_id and user.activated_at is not None
+
+
+@pytest.mark.parametrize("case", ["disabled", "other_email", "linked_elsewhere", "absent"])
+def test_existing_kaccess_account_is_never_taken_over_when_unsafe(shield, mailoutbox, keycloak, monkeypatch, case,
+                                                                  sub_a):
+    _conflict(monkeypatch)
+    if case == "disabled":
+        keycloak.by_email[EMAIL] = {"id": "kc-old", "email": EMAIL, "enabled": False}
+    elif case == "other_email":
+        keycloak.by_email[EMAIL] = {"id": "kc-old", "email": "autre@kaydan.ci", "enabled": True}
+    elif case == "linked_elsewhere":
+        keycloak.by_email[EMAIL] = {"id": "kc-old", "email": EMAIL, "enabled": True}
+        other = User.objects.create_user("deja.lie@kaydan.ci", None, role="requester", subsidiary=sub_a)
+        User.objects.filter(pk=other.pk).update(keycloak_sub="kc-old", keycloak_id="kc-old")
     shield.add()
     response = _complete(_ticket(mailoutbox))
     assert response.status_code == 409 and response.json() == {"detail": activation.GENERIC_CONFLICT}
-    assert keycloak.passwords == []
+    assert keycloak.passwords == [] and keycloak.logouts == []
     assert User.objects.get(email=EMAIL).activated_at is None
 
 

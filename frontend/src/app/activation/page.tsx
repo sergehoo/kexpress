@@ -38,6 +38,7 @@ export default function ActivationPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loginHint, setLoginHint] = useState("");
+  const [existingSso, setExistingSso] = useState(false);
   const focusRef = useRef<HTMLInputElement>(null);
   // Horloge du code : validité restante et délai avant un nouvel envoi (durées du serveur).
   const [expiresAt, setExpiresAt] = useState(0);
@@ -89,7 +90,9 @@ export default function ActivationPage() {
     setError("");
     setBusy(true);
     try {
-      setTicket(await activationVerify(email.trim(), code));
+      const verified = await activationVerify(email.trim(), code);
+      setTicket(verified.ticket);
+      setExistingSso(verified.existingSso);
       setStep("password");
     } catch (err) {
       setError(apiError(err, "Code invalide ou expiré."));
@@ -231,6 +234,12 @@ export default function ActivationPage() {
 
           {step === "password" && (
             <form onSubmit={submitPassword} className="space-y-4" noValidate>
+              {existingSso && (
+                <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100" role="note">
+                  Vous avez déjà un compte K-access : le mot de passe choisi ici le remplacera pour toutes les
+                  applications Kaydan, et vos sessions K-access ouvertes seront fermées.
+                </p>
+              )}
               <p className="text-sm text-white/75">
                 {ssoEnabled
                   ? "Choisissez le mot de passe de votre compte K-access (connexion unique)."

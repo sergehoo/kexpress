@@ -1,7 +1,7 @@
 "use client";
 
-import { forwardRef, useEffect, useState } from "react";
-import { AlertTriangle, ImageOff, X } from "lucide-react";
+import { forwardRef, useCallback, useEffect, useState } from "react";
+import { AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, ImageOff, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { Spinner } from "@/components/ui";
@@ -195,7 +195,7 @@ export function Drawer({ open, onClose, title, subtitle, children }: {
 }) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
@@ -227,7 +227,9 @@ export function Drawer({ open, onClose, title, subtitle, children }: {
 
 /** Vignette d'un fichier protégé (URL signée + session) : récupérée par l'API, affichée en URL
  *  objet ; un clic l'ouvre en grand. Jamais d'URL publique. */
-export function SecureImage({ url, alt, className }: { url: string | null; alt: string; className?: string }) {
+export function SecureImage({ url, alt, className, onOpen }: {
+  url: string | null; alt: string; className?: string; onOpen?: () => void;
+}) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -256,10 +258,154 @@ export function SecureImage({ url, alt, className }: { url: string | null; alt: 
   }
   if (!src) return <div className={box}><Spinner className="h-4 w-4" /></div>;
   return (
-    <button type="button" className={box} onClick={() => { void openSecureFile(url).catch(() => undefined); }}
-            title="Ouvrir en grand">
+    <button type="button" className={cn(box, "cursor-zoom-in")}
+            onClick={() => (onOpen ? onOpen() : void openSecureFile(url).catch(() => undefined))}
+            title="Agrandir la photo">
       {/* eslint-disable-next-line @next/next/no-img-element -- URL objet locale, pas d'optimisation possible */}
       <img src={src} alt={alt} className="h-full w-full object-cover" />
     </button>
+  );
+}
+
+
+// --- Visionneuse de photos ---------------------------------------------------------------------
+
+export type LightboxPhoto = { url: string | null; alt: string; caption?: string };
+
+const ZOOMS = [1, 1.5, 2, 3, 4];
+
+/** Photo en grand dans la page : zoom (boutons, double-clic, molette avec Ctrl, touches + / −),
+ *  photo précédente / suivante (flèches), fermeture (Échap, clic sur le fond). */
+export function PhotoLightbox({ photos, index, onIndex, onClose }: {
+  photos: LightboxPhoto[]; index: number; onIndex: (i: number) => void; onClose: () => void;
+}) {
+  const photo = photos[index];
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [zoom, setZoom] = useState(0);
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const [viewport, setViewport] = useState({ w: 1024, h: 768 });
+
+  useEffect(() => {
+    const measure = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  useEffect(() => {
+    if (!photo?.url) { setFailed(true); return; }
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setSrc(null); setFailed(false); setZoom(0); setNatural(null);
+    api.get<Blob>(photo.url, { responseType: "blob" })
+      .then(({ data }) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(data);
+        setSrc(objectUrl);
+      })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [photo?.url]);
+
+  const step = useCallback((delta: number) => {
+    if (photos.length > 1) onIndex((index + delta + photos.length) % photos.length);
+  }, [index, onIndex, photos.length]);
+  const zoomBy = useCallback((delta: number) => {
+    setZoom((z) => Math.min(ZOOMS.length - 1, Math.max(0, z + delta)));
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const actions: Record<string, () => void> = {
+        Escape: onClose, ArrowLeft: () => step(-1), ArrowRight: () => step(1),
+        "+": () => zoomBy(1), "=": () => zoomBy(1), "-": () => zoomBy(-1),
+      };
+      const action = actions[e.key];
+      if (!action) return;
+      // Capturée avant le panneau parent : Échap ferme la photo, pas l'attribution.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      action();
+    };
+    window.addEventListener("keydown", onKey, true);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose, step, zoomBy]);
+
+  if (!photo) return null;
+  const fit = natural ? Math.min((viewport.w * 0.92) / natural.w, (viewport.h * 0.8) / natural.h, 1) : 1;
+  const width = natural ? Math.round(natural.w * fit * ZOOMS[zoom]) : undefined;
+  const zoomed = zoom > 0;
+  const control = "flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-30";
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label={photo.alt} className="fixed inset-0 z-[1300] flex flex-col bg-black/95 backdrop-blur-sm"
+         onClick={(e) => { e.stopPropagation(); onClose(); }}>
+      <div className="flex items-center gap-2 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
+        <span className="min-w-0 flex-1 truncate text-sm">
+          {photos.length > 1 && <span className="mr-2 text-white/60">{index + 1} / {photos.length}</span>}
+          {photo.caption || photo.alt}
+        </span>
+        <button type="button" className={control} onClick={() => zoomBy(-1)} disabled={!zoomed} aria-label="Dézoomer">
+          <ZoomOut className="h-4 w-4" />
+        </button>
+        <span className="w-12 text-center text-xs tabular-nums text-white/70">{Math.round(ZOOMS[zoom] * 100)} %</span>
+        <button type="button" className={control} onClick={() => zoomBy(1)} disabled={zoom === ZOOMS.length - 1}
+                aria-label="Zoomer">
+          <ZoomIn className="h-4 w-4" />
+        </button>
+        {photo.url && (
+          <button type="button" className={control} aria-label="Ouvrir dans un nouvel onglet" title="Ouvrir dans un nouvel onglet"
+                  onClick={() => void openSecureFile(photo.url as string).catch(() => undefined)}>
+            <ExternalLink className="h-4 w-4" />
+          </button>
+        )}
+        <button type="button" className={control} onClick={onClose} aria-label="Fermer"><X className="h-5 w-5" /></button>
+      </div>
+      <div className={cn("relative flex-1", zoomed ? "overflow-auto" : "flex items-center justify-center overflow-hidden")}>
+        {failed ? (
+          <div className="flex h-full items-center justify-center text-sm text-white/70" onClick={(e) => e.stopPropagation()}>
+            <ImageOff className="mr-2 h-5 w-5" /> Image indisponible
+          </div>
+        ) : !src ? (
+          <div className="flex h-full items-center justify-center"><Spinner className="h-6 w-6" /></div>
+        ) : (
+          <div className={cn(zoomed && "flex min-h-full min-w-full items-center justify-center p-4")}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- URL objet locale */}
+            <img src={src} alt={photo.alt} draggable={false}
+                 onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+                 onClick={(e) => e.stopPropagation()}
+                 onDoubleClick={() => setZoom((z) => (z === 0 ? 2 : 0))}
+                 onWheel={(e) => { if (e.ctrlKey) { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1 : -1); } }}
+                 style={width ? { width, maxWidth: "none" } : undefined}
+                 className={cn("shrink-0 select-none rounded-md shadow-2xl",
+                                zoomed ? "cursor-zoom-out" : "max-h-[80vh] max-w-[92vw] cursor-zoom-in")} />
+          </div>
+        )}
+        {photos.length > 1 && (
+          <>
+            <button type="button" className={cn(control, "absolute left-3 top-1/2 -translate-y-1/2")} aria-label="Photo précédente"
+                    onClick={(e) => { e.stopPropagation(); step(-1); }}>
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button type="button" className={cn(control, "absolute right-3 top-1/2 -translate-y-1/2")} aria-label="Photo suivante"
+                    onClick={(e) => { e.stopPropagation(); step(1); }}>
+              <ChevronRight className="h-5 w-5" />
+            </button>
+          </>
+        )}
+      </div>
+      <p className="px-4 pb-3 text-center text-[11px] text-white/50">
+        Double-clic pour zoomer · Ctrl + molette · ← → pour naviguer · Échap pour fermer
+      </p>
+    </div>
   );
 }
