@@ -7,6 +7,7 @@ action attendue**, avec le lien direct vers la fiche.
 from __future__ import annotations
 
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.core.enums import AlertSeverity, NotificationType, RoleChoices
 from apps.notifications.services import notify, notify_many
@@ -136,4 +137,22 @@ def notify_driver_assigned(reservation):
         message=driver_assignment_body(reservation),
         # Deep-link vers l'espace chauffeur (mission-first), pas le détail réservation.
         link="/map",
+    )
+
+
+def notify_driver_unassigned(driver, reservation, *, leg_label: str = ""):
+    """Chauffeur REMPLACÉ sur une course : il est prévenu qu'elle sort de son planning."""
+    if not (driver and driver.user_id):
+        return None
+    dep = timezone.localtime(reservation.departure_time) if reservation.departure_time else None
+    when = f" prévue le {dep:%d/%m/%Y à %H:%M}" if dep else ""
+    what = leg_label or "La course"
+    return notify(
+        driver.user,
+        NotificationType.RESERVATION_UPDATED,
+        title=f"Course retirée de votre planning — {reservation.destination}",
+        message=f"{what} vers {reservation.destination}{when} a été confiée à un autre chauffeur. "
+                "Vous n'avez plus à l'assurer.",
+        link="/driver",
+        severity=AlertSeverity.WARNING,
     )

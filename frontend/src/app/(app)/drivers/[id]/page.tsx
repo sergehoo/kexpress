@@ -15,6 +15,7 @@ import { StatChips } from "@/components/StatChips";
 import { Tabs } from "@/components/Tabs";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { SecureFileLink } from "@/components/SecureFileLink";
+import { DocumentForm, DRIVER_DOC_TYPES } from "@/components/DocumentForm";
 import { useTrips } from "@/lib/queries";
 import { useCrud } from "@/lib/crud";
 import { api, apiError } from "@/lib/api";
@@ -26,13 +27,6 @@ type Evaluation = { id: string; score: number; comment: string; evaluator_name: 
 type Incident = { id: string; occurred_at: string; severity: string; severity_display: string; description: string };
 type DriverDoc = { id: string; doc_type: string; doc_type_display: string; number: string; issue_date: string | null; expiry_date: string | null; file: string | null };
 
-const DOC_TYPES = [
-  { value: "license", label: "Permis de conduire" },
-  { value: "id_card", label: "Pièce d'identité" },
-  { value: "contract", label: "Contrat" },
-  { value: "medical", label: "Certificat médical" },
-  { value: "other", label: "Autre" },
-];
 const SEVERITIES = [
   { value: "minor", label: "Mineur" },
   { value: "moderate", label: "Modéré" },
@@ -277,20 +271,7 @@ function PerformanceTab({ driverId, rating }: { driverId: string; rating: string
 
 function DocumentsTab({ driverId }: { driverId: string }) {
   const { data, isLoading } = useSubList<DriverDoc>("driver-documents", driverId);
-  const crud = useCrud("driver-documents", ["driver-documents"]);
   const [open, setOpen] = useState(false);
-  const [error, setError] = useState("");
-  const fields: Field[] = [
-    { name: "doc_type", label: "Type", type: "select", required: true, options: DOC_TYPES },
-    { name: "number", label: "Numéro" },
-    { name: "issue_date", label: "Date d'émission", type: "date" },
-    { name: "expiry_date", label: "Date d'expiration", type: "date" },
-  ];
-  async function submit(values: Record<string, unknown>) {
-    setError("");
-    try { await crud.create.mutateAsync({ ...values, driver: driverId }); setOpen(false); }
-    catch (e) { setError(apiError(e)); }
-  }
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
@@ -314,8 +295,8 @@ function DocumentsTab({ driverId }: { driverId: string }) {
           ))}
         </ul>
       )}
-      <EntityForm open={open} title="Nouveau document" fields={fields} onClose={() => setOpen(false)}
-        onSubmit={submit} submitting={crud.create.isPending} error={error} />
+      <DocumentForm open={open} onClose={() => setOpen(false)} resource="driver-documents"
+        parentField="driver" parentId={driverId} types={DRIVER_DOC_TYPES} />
     </div>
   );
 }

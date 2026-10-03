@@ -63,3 +63,14 @@ class DriverDocumentSerializer(serializers.ModelSerializer):
         model = DriverDocument
         fields = ["id", "driver", "doc_type", "doc_type_display", "number",
                   "issue_date", "expiry_date", "file", "created_at"]
+
+    def validate_file(self, upload):
+        from apps.vehicles.document_files import validate_document_upload
+
+        return validate_document_upload(upload)
+
+    def validate(self, attrs):
+        issue, expiry = attrs.get("issue_date"), attrs.get("expiry_date")
+        if issue and expiry and expiry < issue:
+            raise serializers.ValidationError({"expiry_date": "L'expiration précède la date d'émission."})
+        return attrs

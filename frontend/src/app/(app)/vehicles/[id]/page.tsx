@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -13,9 +14,10 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Tabs } from "@/components/Tabs";
 import { EntityForm, type Field } from "@/components/EntityForm";
 import { SecureFileLink } from "@/components/SecureFileLink";
+import { DocumentForm, VEHICLE_DOC_TYPES } from "@/components/DocumentForm";
 import { VehicleFinanceTab } from "@/components/finance/VehicleFinanceTab";
 import { useAuth } from "@/lib/auth";
-import { canFinance } from "@/lib/rbac";
+import { canFinance, canManageFleet } from "@/lib/rbac";
 import { searchInsuranceCompanies, searchInspectionCenters } from "@/lib/references";
 import {
   useMaintenance,
@@ -26,7 +28,7 @@ import {
   useVehicleRevisions,
 } from "@/lib/queries";
 import { useCrud } from "@/lib/crud";
-import { apiError } from "@/lib/api";
+import { api, apiError } from "@/lib/api";
 import { cn, formatDate, formatNumber } from "@/lib/utils";
 
 type FormKind = "insurance" | "inspection" | "revision" | null;
@@ -71,6 +73,8 @@ export default function VehicleDetailPage() {
   }
 
   const c = v.compliance;
+  // Pièces obligatoires manquantes sans rien de bloquant : dossier incomplet, pas « non conforme ».
+  const incomplete = !!c && !c.compliant && c.blocking === false;
   const isElectric = v.fuel_type === "electric";
 
   const FORMS: Record<Exclude<FormKind, null>, { title: string; fields: Field[]; crud: ReturnType<typeof useCrud> }> = {
@@ -134,14 +138,18 @@ export default function VehicleDetailPage() {
       {/* Bandeau conformité (global, hors onglets) */}
       <div className={cn(
         "flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3",
-        c?.compliant ? "border-emerald-500/30 bg-emerald-500/5" : "border-rose-500/30 bg-rose-500/5",
+        c?.compliant ? "border-emerald-500/30 bg-emerald-500/5"
+          : incomplete ? "border-amber-500/30 bg-amber-500/5" : "border-rose-500/30 bg-rose-500/5",
       )}>
-        {c?.compliant ? <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-500" /> : <AlertTriangle className="h-5 w-5 shrink-0 text-rose-500" />}
+        {c?.compliant ? <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-500" />
+          : <AlertTriangle className={cn("h-5 w-5 shrink-0", incomplete ? "text-amber-500" : "text-rose-500")} />}
         <div className="min-w-0 flex-1">
-          <p className={cn("text-sm font-semibold", c?.compliant ? "text-emerald-600" : "text-rose-600")}>
-            {c?.compliant ? "Véhicule conforme — affectable aux courses" : "Véhicule NON CONFORME — affectation bloquée"}
+          <p className={cn("text-sm font-semibold", c?.compliant ? "text-emerald-600" : incomplete ? "text-amber-600" : "text-rose-600")}>
+            {c?.compliant ? "Véhicule conforme — affectable aux courses"
+              : incomplete ? "Dossier incomplet — pièces obligatoires à renseigner"
+              : "Véhicule NON CONFORME — affectation bloquée"}
           </p>
-          {!c?.compliant && <p className="text-xs text-rose-500/90">{(c?.issues ?? []).map((i) => i.label).join(" · ")}</p>}
+          {!c?.compliant && <p className={cn("text-xs", incomplete ? "text-amber-600/90" : "text-rose-500/90")}>{(c?.issues ?? []).map((i) => i.label).join(" · ")}</p>}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
           <span>Assurance : <b className="text-ink">{c?.insurance_expiry ? `${formatDate(c.insurance_expiry)} (J${c.insurance_days_left != null && c.insurance_days_left >= 0 ? "-" : "+"}${Math.abs(c?.insurance_days_left ?? 0)})` : "non renseignée"}</b></span>
@@ -274,22 +282,8 @@ export default function VehicleDetailPage() {
               },
               {
                 key: "documents", label: "Documents",
-                content: !(v.documents?.length) ? (
-                  <EmptyState title="Aucun document" />
-                ) : (
-                  <ul className="divide-y divide-line">
-                    {v.documents.map((doc) => (
-                      <li key={doc.id} className="flex items-center gap-3 py-2.5 text-sm">
-                        <FileText className="h-4 w-4 shrink-0 text-faint" />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-ink">{doc.doc_type_display}{doc.number ? ` · ${doc.number}` : ""}</p>
-                          {doc.expiry_date && <p className="text-[11px] text-muted">Expire le {formatDate(doc.expiry_date)}</p>}
-                        </div>
-                        {doc.file && <SecureFileLink url={doc.file} />}
-                      </li>
-                    ))}
-                  </ul>
-                ),
+                content: <VehicleDocumentsTab vehicleId={v.id} embedded={v.documents ?? []}
+                  canManage={canManageFleet(me?.role) && (me?.role === "super_admin" || me?.role === "company_admin" || me?.subsidiary === v.subsidiary)} />,
               },
               // Coûts réels : réservés aux profils habilités (l'API refuse les autres).
               ...(canFinance(me, "view_vehicle_cost") ? [{
@@ -384,5 +378,52 @@ function TrackingCard({
         )}
       </CardBody>
     </Card>
+  );
+}
+
+
+type VehicleDoc = { id: string; doc_type: string; doc_type_display: string; number: string; issue_date: string | null; expiry_date: string | null; file: string | null };
+
+/** Documents du véhicule : la filiale propriétaire les gère (ajout avec pièce) ; les autres
+ *  profils voient la liste sans les fichiers (règle serveur). */
+function VehicleDocumentsTab({ vehicleId, embedded, canManage }: { vehicleId: string; embedded: VehicleDoc[]; canManage: boolean }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ["vehicle-documents", vehicleId],
+    enabled: canManage,
+    queryFn: async () => {
+      const { data } = await api.get("/vehicle-documents/", { params: { vehicle: vehicleId, page_size: 100 } });
+      return (data.results ?? data) as VehicleDoc[];
+    },
+  });
+  const docs = canManage ? data ?? [] : embedded;
+  return (
+    <div className="space-y-3">
+      {canManage && (
+        <div className="flex justify-end">
+          <Button size="sm" onClick={() => setOpen(true)}><Plus className="h-4 w-4" /> Ajouter</Button>
+        </div>
+      )}
+      {canManage && isLoading ? <Spinner className="mx-auto my-6 h-6 w-6" /> : !docs.length ? (
+        <EmptyState title="Aucun document" />
+      ) : (
+        <ul className="divide-y divide-line">
+          {docs.map((doc) => (
+            <li key={doc.id} className="flex items-center gap-3 py-2.5 text-sm">
+              <FileText className="h-4 w-4 shrink-0 text-faint" />
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-ink">{doc.doc_type_display}{doc.number ? ` · ${doc.number}` : ""}</p>
+                {doc.expiry_date && <p className="text-[11px] text-muted">Expire le {formatDate(doc.expiry_date)}</p>}
+              </div>
+              {doc.file && <SecureFileLink url={doc.file} />}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canManage && (
+        <DocumentForm open={open} onClose={() => setOpen(false)} resource="vehicle-documents"
+          parentField="vehicle" parentId={vehicleId} types={VEHICLE_DOC_TYPES} />
+      )}
+    </div>
   );
 }

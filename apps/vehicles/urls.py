@@ -5,6 +5,7 @@ from apps.vehicles.views import (
     InsuranceCompanyViewSet,
     InsurancePolicyViewSet,
     TechnicalInspectionViewSet,
+    VehicleDocumentViewSet,
     VehicleBrandViewSet,
     VehicleModelViewSet,
     VehicleRevisionViewSet,
@@ -13,6 +14,7 @@ from apps.vehicles.views import (
 
 router = DefaultRouter()
 router.register("vehicles", VehicleViewSet, basename="vehicle")
+router.register("vehicle-documents", VehicleDocumentViewSet, basename="vehicle-document")
 router.register("vehicle-insurances", InsurancePolicyViewSet, basename="vehicle-insurance")
 router.register("vehicle-inspections", TechnicalInspectionViewSet, basename="vehicle-inspection")
 router.register("vehicle-revisions", VehicleRevisionViewSet, basename="vehicle-revision")

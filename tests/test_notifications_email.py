@@ -6,6 +6,8 @@ from apps.notifications.models import EmailLog, Notification, NotificationPrefer
 from apps.notifications.services import notify, send_email_for
 from apps.reservations import services as reservation_services
 
+pytestmark = pytest.mark.usefixtures("deliver_on_commit")
+
 
 def test_notify_traces_email_log(db, requester_a):
     notify(requester_a, NotificationType.OTHER, title="Test", message="Bonjour")

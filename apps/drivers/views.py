@@ -127,3 +127,40 @@ class DriverDocumentViewSet(_HrScopedMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filterset_fields = ["driver", "doc_type"]
     ordering_fields = ["expiry_date", "created_at"]
+
+    # Permis, CNI, certificat médical : pièces personnelles. Les gestionnaires de la filiale
+    # employeuse les gèrent ; le chauffeur consulte les siennes ; l'auditeur lit ; aucun autre
+    # profil de la filiale (demandeur, collègue chauffeur) ne les voit ni ne les modifie.
+
+    def get_queryset(self):
+        from apps.core.enums import RoleChoices
+        from apps.vehicles.document_files import document_managers
+
+        user = self.request.user
+        qs = super().get_queryset()
+        if user.is_superuser or user.role in (*document_managers(), RoleChoices.AUDITOR):
+            return qs
+        return DriverDocument.objects.select_related("driver").filter(driver__user=user)
+
+    def _check_driver_subsidiary(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        from apps.vehicles.document_files import document_managers
+
+        user = self.request.user
+        if not (user.is_superuser or user.role in document_managers()):
+            raise PermissionDenied("Le dossier documentaire d'un chauffeur est géré par la gestion de flotte.")
+        super()._check_driver_subsidiary(serializer)
+
+    def perform_destroy(self, instance):
+        from rest_framework.exceptions import PermissionDenied
+
+        from apps.vehicles.document_files import document_managers
+
+        user = self.request.user
+        if not (user.is_superuser or user.role in document_managers()):
+            raise PermissionDenied("Le dossier documentaire d'un chauffeur est géré par la gestion de flotte.")
+        if not (user.is_superuser or getattr(user, "has_company_scope", False)) \
+                and instance.driver.subsidiary_id != user.subsidiary_id:
+            raise PermissionDenied("Le dossier d'un chauffeur est géré par sa filiale employeuse.")
+        super().perform_destroy(instance)

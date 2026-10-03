@@ -22,7 +22,7 @@ from apps.core.enums import (
     ValidationLevel,
     VehicleStatus,
 )
-from apps.notifications.events import notify_driver_assigned, reservation_event
+from apps.notifications.events import notify_driver_assigned, notify_driver_unassigned, reservation_event
 from apps.notifications.services import notify, notify_many
 from apps.reservations import workflow
 from apps.reservations.models import Reservation, ReservationValidation
@@ -226,6 +226,7 @@ def assign_driver(reservation: Reservation, driver, actor) -> Reservation:
     driver = lock_row(driver)
     workflow.check_driver_assignable(driver, reservation)
 
+    previous = reservation.driver if reservation.driver_id and reservation.driver_id != driver.pk else None
     reservation.driver = driver
     reservation.status = ReservationStatus.DRIVER_ASSIGNED
     reservation.save(update_fields=["driver", "status", "updated_at"])
@@ -244,6 +245,7 @@ def assign_driver(reservation: Reservation, driver, actor) -> Reservation:
     )
     # #8 — Notification dédiée au chauffeur affecté (interne + email + push).
     notify_driver_assigned(reservation)
+    notify_driver_unassigned(previous, reservation)
     audit.record(actor, AuditAction.UPDATE, reservation,
                  changes={"action": "assign_driver", "driver": driver.full_name})
     return reservation

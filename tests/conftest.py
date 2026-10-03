@@ -110,3 +110,12 @@ def reservation(sub_a, requester_a):
         trip_date=dep.date(), departure_time=dep, estimated_return=dep + timedelta(hours=3),
         destination="Aéroport", purpose="Mission", passengers=3, needs_driver=True,
     )
+
+
+@pytest.fixture
+def deliver_on_commit(monkeypatch):
+    """`notify()` livre push et email à la VALIDATION de la transaction ; un test pytest-django
+    est une transaction jamais validée : ce fixture exécute ces envois immédiatement."""
+    from django.db import transaction
+
+    monkeypatch.setattr(transaction, "on_commit", lambda func, using=None, robust=False: func())

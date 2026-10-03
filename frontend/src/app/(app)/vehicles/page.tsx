@@ -16,7 +16,7 @@ import { useCrud } from "@/lib/crud";
 import { useAuth } from "@/lib/auth";
 import { apiError } from "@/lib/api";
 import type { Vehicle } from "@/lib/types";
-import { formatNumber } from "@/lib/utils";
+import { cn, formatNumber } from "@/lib/utils";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Tous les statuts" },
@@ -180,10 +180,11 @@ export default function VehiclesPage() {
                         ) : (
                           <div>
                             <span
-                              className="inline-flex items-center rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-600"
+                              className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                                v.compliance?.blocking === false ? "bg-amber-500/10 text-amber-600" : "bg-rose-500/10 text-rose-600")}
                               title={(v.compliance?.issues ?? []).map((i) => i.label).join(" · ")}
                             >
-                              ✕ Non conforme
+                              {v.compliance?.blocking === false ? "! Dossier incomplet" : "✕ Non conforme"}
                             </span>
                             <p className="mt-0.5 max-w-[16rem] truncate text-[10px] text-rose-500/80">
                               {(v.compliance?.issues ?? []).map((i) => i.label).join(" · ")}

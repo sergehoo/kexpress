@@ -50,17 +50,26 @@ class FuelType(models.TextChoices):
 
 
 class VehicleDocumentType(models.TextChoices):
+    REGISTRATION = "registration", "Carte grise"
     INSURANCE = "insurance", "Assurance"
     TECHNICAL_INSPECTION = "technical_inspection", "Visite technique"
-    REGISTRATION = "registration", "Carte grise"
+    VIGNETTE = "vignette", "Vignette"
+    TRANSPORT_AUTHORIZATION = "transport_authorization", "Autorisation de transport"
+    LEASE_CONTRACT = "lease_contract", "Contrat de location / leasing"
+    ACQUISITION_INVOICE = "acquisition_invoice", "Facture d'acquisition"
     OTHER = "other", "Autre"
 
 
 class DriverDocumentType(models.TextChoices):
+    """Dossier documentaire d'un chauffeur — pièces personnelles : gestionnaires de la filiale
+    employeuse et chauffeur lui-même seulement (`apps.drivers.views.DriverDocumentViewSet`)."""
+
     LICENSE = "license", "Permis de conduire"
-    ID_CARD = "id_card", "Pièce d'identité"
-    CONTRACT = "contract", "Contrat"
+    ID_CARD = "id_card", "Carte nationale d'identité (CNI)"
+    TRAINING = "training", "Attestation de formation"
     MEDICAL = "medical", "Certificat médical"
+    HABILITATION = "habilitation", "Habilitation professionnelle"
+    CONTRACT = "contract", "Contrat"
     OTHER = "other", "Autre"
 
 
@@ -276,6 +285,8 @@ class NotificationType(models.TextChoices):
     MILEAGE_READING_DUE = "mileage_reading_due", "Relevé kilométrique attendu"
     # Plans d'entretien prédictifs : préavis, alerte, urgence, dépassement, rythme en hausse.
     MAINTENANCE_FORECAST = "maintenance_forecast", "Entretien à prévoir (prévision)"
+    # Document de véhicule ou de chauffeur à renouveler (J-30, J-15, J-7, échéance).
+    DOCUMENT_EXPIRING = "document_expiring", "Document proche expiration"
     OTHER = "other", "Autre"
 
 

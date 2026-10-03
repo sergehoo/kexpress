@@ -163,6 +163,15 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 # Durée de validité (s) des URL signées des fichiers téléversés (`apps.core.secure_files`).
 SECURE_FILE_URL_TTL = env.int("SECURE_FILE_URL_TTL", default=600)
+# Documents véhicule / chauffeur : taille maximale d'une pièce (contenu contrôlé : PDF, JPEG, PNG, WEBP).
+DOCUMENT_UPLOAD_MAX_BYTES = env.int("DOCUMENT_UPLOAD_MAX_BYTES", default=10 * 1024 * 1024)
+# Pièces obligatoires d'un véhicule ; une pièce manquante empêche de le déclarer conforme et ne
+# bloque l'affectation que si VEHICLE_MISSING_DOCUMENTS_BLOCK est activé.
+VEHICLE_MANDATORY_DOCUMENTS = tuple(env.list(
+    "VEHICLE_MANDATORY_DOCUMENTS", default=["insurance", "technical_inspection", "registration"]))
+VEHICLE_MISSING_DOCUMENTS_BLOCK = env.bool("VEHICLE_MISSING_DOCUMENTS_BLOCK", default=False)
+# Rappel avant départ (chauffeur et demandeur), en minutes.
+DEPARTURE_REMINDER_MINUTES = env.int("DEPARTURE_REMINDER_MINUTES", default=60)
 # Capacité normative mensuelle par défaut d'un véhicule (km) : base de la mesure de
 # sous-utilisation (D4) quand son acquisition ne la précise pas.
 FINANCE_NORMATIVE_MONTHLY_KM = env.int("FINANCE_NORMATIVE_MONTHLY_KM", default=2000)

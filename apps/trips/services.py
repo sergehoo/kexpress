@@ -355,6 +355,7 @@ def assign_driver_to_trip(trip, driver, actor, *, allow_grouped: bool = False) -
     driver = lock_row(driver)  # sérialise les affectations concurrentes de CE chauffeur
     if not getattr(driver, "is_available", True):
         raise WorkflowError("Ce chauffeur n'est pas disponible.")
+    previous = trip.driver if trip.driver_id and trip.driver_id != driver.pk else None
     trip.driver = driver
     conflict = trip_time_conflicts(trip, field="driver").first()
     if conflict:
@@ -369,9 +370,13 @@ def assign_driver_to_trip(trip, driver, actor, *, allow_grouped: bool = False) -
         notify_many(
             [driver.user], NotificationType.DRIVER_ASSIGNED,
             title=f"Vous êtes affecté — {_leg_label(trip)} vers {trip.destination}",
-            message=f"Départ prévu : {trip.planned_departure_at:%d/%m %H:%M}" if trip.planned_departure_at else "",
+            message=_driver_leg_body(trip),
             link="/map", severity="info",
         )
+    if previous is not None:
+        from apps.notifications.events import notify_driver_unassigned
+
+        notify_driver_unassigned(previous, trip.reservation, leg_label=_leg_label(trip))
     audit.record(actor, AuditAction.UPDATE, trip,
                  changes={"action": "assign_driver_to_trip", "leg": trip.leg, "driver": driver.full_name})
     return trip
@@ -489,6 +494,18 @@ def _leg_label(trip) -> str:
     from apps.core.enums import TripType
 
     return trip.get_leg_display() if trip.reservation.trip_type == TripType.ROUND_TRIP else "Course"
+
+
+def _driver_leg_body(trip) -> str:
+    """Détails d'une course pour le chauffeur affecté (date locale, trajet, véhicule)."""
+    dep = timezone.localtime(trip.planned_departure_at) if trip.planned_departure_at else None
+    lines = [f"Départ prévu : {dep:%d/%m/%Y à %H:%M}" if dep else "Départ : horaire à confirmer",
+             f"Destination : {trip.destination}"]
+    if trip.vehicle_id:
+        lines.append(f"Véhicule : {trip.vehicle.registration}")
+    res = trip.reservation
+    lines.append(f"Demandeur : {res.requester.get_full_name() or res.requester.email}")
+    return "\n".join(lines)
 
 
 def trip_event(trip, notification_type, *, title, next_action="", severity="info", include_driver=True):

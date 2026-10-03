@@ -17,6 +17,8 @@ from apps.notifications.models import EmailLog, EmailTemplate
 from apps.notifications.services import email_kind, notify, send_email_for
 from apps.notifications.visibility import MASK, budget_link
 
+pytestmark = pytest.mark.usefixtures("deliver_on_commit")
+
 AMOUNT_MESSAGE = "Plein déclaré pour 1234-AB-01\nMontant : 45 000 XOF\nStation : Riviera"
 
 

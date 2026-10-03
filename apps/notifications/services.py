@@ -1,6 +1,8 @@
 """Helpers de création de notifications (interne + push + email, traçés)."""
 from __future__ import annotations
 
+from django.db import transaction
+
 from apps.core.enums import AlertSeverity, NotificationChannel, NotificationType
 from apps.notifications.models import Notification
 
@@ -131,6 +133,26 @@ def send_email_for(notification, *, force: bool = False):
     return log
 
 
+def _deliver(notification) -> None:
+    """Push (même contenu masqué que l'email) puis email tracé — jamais bloquants."""
+    recipient, link = notification.recipient, notification.link
+    pref = _preferences(recipient, notification.notification_type)
+    # Un incident de masquage n'envoie rien plutôt qu'un texte brut.
+    if pref is None or pref.push:
+        try:
+            from apps.notifications.push import push_enabled, send_push
+
+            if push_enabled():
+                push_title, push_body = readable_content(notification, recipient)
+                send_push(recipient, title=push_title, body=push_body, link=link or "/notifications")
+        except Exception:
+            pass
+    try:
+        send_email_for(notification)
+    except Exception:
+        pass
+
+
 def notify(
     recipient,
     notification_type: str = NotificationType.OTHER,
@@ -157,25 +179,9 @@ def notify(
         message=message,
         link=link,
     )
-    pref = _preferences(recipient, notification_type)
-
-    # Web Push (meilleur effort, jamais bloquant) : même contenu masqué que l'email. Un incident
-    # de masquage n'envoie rien plutôt qu'un texte brut.
-    if pref is None or pref.push:
-        try:
-            from apps.notifications.push import push_enabled, send_push
-
-            if push_enabled():
-                push_title, push_body = readable_content(notification, recipient)
-                send_push(recipient, title=push_title, body=push_body, link=link or "/notifications")
-        except Exception:
-            pass
-
-    # Email (tracé, jamais bloquant)
-    try:
-        send_email_for(notification)
-    except Exception:
-        pass
+    # Push et email partent APRÈS la validation de la transaction appelante : une opération
+    # annulée (erreur, conflit, retour arrière) n'envoie rien. Hors transaction : immédiat.
+    transaction.on_commit(lambda: _deliver(notification), robust=True)
     return notification
 
 

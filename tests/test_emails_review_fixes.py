@@ -24,6 +24,8 @@ from apps.notifications import services as notification_services
 from apps.notifications.services import notify
 from apps.notifications.visibility import MASK, budget_link
 
+pytestmark = pytest.mark.usefixtures("deliver_on_commit")
+
 CODE = "663399"
 TOKEN_LINK = "https://kexpress.example/auth/setup-password?uid=MQ&token=d5x-SECRET0token0abcdef"
 

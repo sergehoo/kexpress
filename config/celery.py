@@ -13,10 +13,15 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
 app.conf.beat_schedule = {
-    # Expirations (assurance, visite technique, permis) + maintenances dues : 2× / jour
+    # Documents véhicule / chauffeur et permis (J-30, J-15, J-7, échéance) : 2× / jour
     "check-expirations": {
         "task": "apps.notifications.tasks.check_expirations",
         "schedule": crontab(hour="7,15", minute=0),
+    },
+    # Rappel avant départ (chauffeur + demandeur) : toutes les 5 minutes
+    "send-departure-reminders": {
+        "task": "apps.notifications.tasks.send_departure_reminders",
+        "schedule": 300.0,
     },
     # Courses en retard : toutes les 5 minutes
     "check-late-trips": {

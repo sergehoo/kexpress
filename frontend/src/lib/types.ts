@@ -35,7 +35,10 @@ export interface Paginated<T> {
 
 export interface VehicleCompliance {
   compliant: boolean;
-  issues: { code: string; label: string }[];
+  /** Une non-conformité bloque l'affectation (pièce expirée, révision dépassée…). */
+  blocking: boolean;
+  issues: { code: string; label: string; blocking?: boolean }[];
+  missing_documents: string[];
   insurance_expiry: string | null;
   insurance_days_left: number | null;
   inspection_next_date: string | null;

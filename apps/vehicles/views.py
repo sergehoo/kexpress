@@ -7,6 +7,7 @@ from apps.vehicles.models import (
     InsuranceCompany,
     InsurancePolicy,
     TechnicalInspection,
+    VehicleDocument,
     Vehicle,
     VehicleBrand,
     VehicleModel,
@@ -17,6 +18,7 @@ from apps.vehicles.serializers import (
     InsuranceCompanySerializer,
     InsurancePolicySerializer,
     TechnicalInspectionSerializer,
+    VehicleDocumentSerializer,
     VehicleBrandSerializer,
     VehicleModelSerializer,
     VehicleRevisionSerializer,
@@ -88,6 +90,31 @@ class _OwnerSubsidiaryWriteMixin:
         self._check_vehicle_subsidiary(instance.vehicle)
         assert_unlocked(instance)  # pièce d'un mois clos : 409, base intacte
         super().perform_destroy(instance)
+
+
+class VehicleDocumentViewSet(_OwnerSubsidiaryWriteMixin, viewsets.ModelViewSet):
+    """Documents d'un véhicule (carte grise, vignette, autorisation…) et leurs fichiers.
+
+    Gestion d'actif : seuls les véhicules POSSÉDÉS par la filiale de l'utilisateur (tout, en
+    périmètre groupe), et seulement pour les profils de gestion — un demandeur ou un chauffeur
+    n'y a pas accès. L'écriture suit `_OwnerSubsidiaryWriteMixin` (auditeur exclu).
+    """
+
+    queryset = VehicleDocument.objects.select_related("vehicle")
+    serializer_class = VehicleDocumentSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ["vehicle", "doc_type"]
+    ordering_fields = ["expiry_date", "created_at"]
+
+    def get_queryset(self):
+        from apps.analytics.scope import owned
+        from apps.core.enums import RoleChoices as R
+        from apps.vehicles.document_files import document_managers
+
+        user = self.request.user
+        if not (user.is_superuser or user.role in (*document_managers(), R.FINANCE, R.AUDITOR)):
+            return VehicleDocument.objects.none()
+        return super().get_queryset().filter(vehicle__in=owned(Vehicle, user))
 
 
 class InsurancePolicyViewSet(_OwnerSubsidiaryWriteMixin, viewsets.ModelViewSet):
