@@ -1,4 +1,7 @@
-"""Génère l'import du realm Keycloak `kexpress` (à valider sur la préproduction).
+"""Génère l'import d'un realm Keycloak `kexpress` NEUF (première installation uniquement).
+
+Realm DÉJÀ en service : ne pas réimporter (il faudrait le recréer et ses comptes seraient perdus) ;
+pour ajouter la première connexion sans mot de passe, utiliser `setup_activation_idp.py`.
 
     python docker/keycloak/render_realm.py --front https://kexpress.kaydan-express.ci \
         --session-hours 12 --remember-days 14 > kexpress-realm.json
