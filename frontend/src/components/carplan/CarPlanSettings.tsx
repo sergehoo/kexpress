@@ -8,6 +8,7 @@ import { Button, Card, CardBody, CardHeader, CardTitle, EmptyState, Input, Label
 import { useAuth } from "@/lib/auth";
 import {
   ASSIGNMENT_TYPE_LABEL, canCarPlan, carPlanError, COVERAGE_LABEL, fetchProfile, httpStatus, MILEAGE_DECLARATION_LABEL,
+  READING_FREQUENCIES,
   useCategories, useCreatePolicy, useNewPolicyVersion, usePolicies, usePublishPolicyVersion, useSaveCategory,
   useSaveProfile, useUpdatePolicyVersion, VEHICLE_TYPES, VERSION_STATUS_LABEL, VERSION_STATUS_TONE,
   type AllowedVehicleRule, type AssignmentType, type Coverage, type EmployeeCategory, type MileageDeclaration,
@@ -361,6 +362,7 @@ function VersionSummary({ version: v, categories }: { version: PolicyVersion; ca
       </Block>
       <Block title="Kilométrage et quotas">
         <Line label="Déclaration" value={MILEAGE_DECLARATION_LABEL[v.mileage_declaration] ?? v.mileage_declaration} />
+        <Line label="Fréquence des relevés" value={`Tous les ${v.reading_frequency_days ?? 7} jours`} />
         <Line label="Limite mensuelle" value={limit(v.monthly_km_limit, "km")} />
         <Line label="Limite annuelle" value={limit(v.annual_km_limit, "km")} />
         <Line label="Carburant mensuel" value={limit(v.monthly_fuel_liters_limit, "L")} />
@@ -406,6 +408,7 @@ function VersionEditor({ policy, version: v, categories, onClose, onDone }: {
   const [privateAllowed, setPrivateAllowed] = useState(v.private_use_allowed);
   const [privateUse, setPrivateUse] = useState(v.private_use);
   const [declaration, setDeclaration] = useState<MileageDeclaration>(v.mileage_declaration);
+  const [frequency, setFrequency] = useState(v.reading_frequency_days ?? 7);
   const [monthlyKm, setMonthlyKm] = useState(v.monthly_km_limit != null ? String(v.monthly_km_limit) : "");
   const [annualKm, setAnnualKm] = useState(v.annual_km_limit != null ? String(v.annual_km_limit) : "");
   const [fuel, setFuel] = useState(v.monthly_fuel_liters_limit ?? "");
@@ -442,6 +445,7 @@ function VersionEditor({ policy, version: v, categories, onClose, onDone }: {
       private_use_allowed: privateAllowed,
       private_use: privateAllowed ? privateUse.trim() : "",
       mileage_declaration: declaration,
+      reading_frequency_days: frequency,
       monthly_km_limit: intOrNull(monthlyKm),
       annual_km_limit: intOrNull(annualKm),
       monthly_fuel_liters_limit: decimalOrNull(fuel),
@@ -539,6 +543,12 @@ function VersionEditor({ policy, version: v, categories, onClose, onDone }: {
             <Select id="ve-decl" value={declaration} onChange={(e) => setDeclaration(e.target.value as MileageDeclaration)} className="sm:w-72">
               {DECLARATIONS.map(([d, l]) => <option key={d} value={d}>{l}</option>)}
             </Select></div>
+          <div><Label htmlFor="ve-freq">Fréquence des relevés obligatoires</Label>
+            <Select id="ve-freq" value={frequency} onChange={(e) => setFrequency(Number(e.target.value))} className="sm:w-72">
+              {READING_FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </Select>
+            <p className="mt-1 text-[11px] text-faint">Rappel le jour dû, une relance trois jours après, puis signalement aux gestionnaires.
+              Une attribution peut avoir sa propre fréquence.</p></div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div><Label htmlFor="ve-mkm">Limite mensuelle (km)</Label><Input id="ve-mkm" type="number" min={0} value={monthlyKm} onChange={(e) => setMonthlyKm(e.target.value)} placeholder="Aucune" /></div>
             <div><Label htmlFor="ve-akm">Limite annuelle (km)</Label><Input id="ve-akm" type="number" min={0} value={annualKm} onChange={(e) => setAnnualKm(e.target.value)} placeholder="Aucune" /></div>

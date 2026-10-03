@@ -159,6 +159,32 @@ export function SectionTitle({ children, action }: { children: React.ReactNode; 
   );
 }
 
+/** Pagination d'une liste paginée par l'API (`count`, `page`, `page_size`). */
+export function Pager({ count, page, pageSize, onPage }: {
+  count: number; page: number; pageSize: number; onPage: (page: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(count / pageSize));
+  if (pages <= 1) return null;
+  const first = (page - 1) * pageSize + 1;
+  const last = Math.min(count, page * pageSize);
+  return (
+    <div className="flex items-center justify-between gap-2 text-xs text-muted">
+      <span>{first}–{last} sur {count}</span>
+      <div className="flex items-center gap-1">
+        <button type="button" aria-label="Page précédente" disabled={page <= 1} onClick={() => onPage(page - 1)}
+                className="rounded-lg border border-line p-1.5 text-ink transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40">
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span className="px-1">Page {page} / {pages}</span>
+        <button type="button" aria-label="Page suivante" disabled={page >= pages} onClick={() => onPage(page + 1)}
+                className="rounded-lg border border-line p-1.5 text-ink transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40">
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** Jauge de consommation contre un quota (quantités seulement). */
 export function GaugeBar({ label, gauge, unit }: { label: string; gauge: Gauge | null | undefined; unit: string }) {
   if (!gauge) return null;

@@ -364,20 +364,21 @@ def report_delivery_problems() -> None:
         logger.error("Email d'authentification NON envoyé : %s", " ".join(problems))
 
 
-def deliver(subject: str, body: str, recipient: str) -> bool:
-    """Envoie un email au SEUL titulaire. Refusé (False, erreur journalisée SANS le contenu)
-    si le backend n'achemine pas réellement les emails hors DEBUG. Un incident d'envoi SMTP est
-    journalisé (sans le code) et n'est jamais remonté à l'appelant public."""
-    from django.core.mail import send_mail
+def deliver(subject: str, body: str, recipient: str, html: str | None = None) -> bool:
+    """Envoie un email au SEUL titulaire (texte `body`, et sa version `html` si fournie).
+    Refusé (False, erreur journalisée SANS le contenu) si le backend n'achemine pas réellement
+    les emails hors DEBUG. Un incident d'envoi SMTP est journalisé (sans le code) et n'est
+    jamais remonté à l'appelant public."""
+    from apps.core import emails
 
     if delivery_problems():
         report_delivery_problems()
         return False
+    message = emails.RenderedEmail(subject=subject, text=body, html=html)
 
     def _send():
         try:
-            send_mail(subject=subject, message=body, from_email=settings.DEFAULT_FROM_EMAIL,
-                      recipient_list=[recipient], fail_silently=False)
+            emails.send(message, [recipient])
         except Exception:
             logger.warning("Envoi d'un email d'authentification impossible.", exc_info=True)
 
@@ -392,36 +393,30 @@ def _minutes() -> int:
     return max(1, int(ttl().total_seconds() // 60))
 
 
-_FOOTER = ("\n\nNe communiquez jamais ce code, y compris à une personne se présentant comme le "
-           "support K-Express. Si vous n'êtes pas à l'origine de cette demande, ignorez ce message "
-           "et prévenez votre administrateur.")
+def _deliver_rendered(rendered, recipient: str) -> bool:
+    return deliver(rendered.subject, rendered.text, recipient, html=rendered.html)
 
 
 def send_activation_code(email: str, code: str, first_name: str = "") -> bool:
-    hello = f"Bonjour {first_name},\n\n" if first_name else "Bonjour,\n\n"
-    return deliver("K-Express — votre code d'activation",
-            f"{hello}Votre code d'activation K-Express est : {code}\n\n"
-            f"Il est valable {_minutes()} minutes et ne sert qu'une fois." + _FOOTER, email)
+    from apps.core.emails import catalog
+
+    return _deliver_rendered(catalog.activation_code(code=code, minutes=_minutes(), first_name=first_name), email)
 
 
 def send_login_code(user, code: str, device_label: str = "") -> bool:
     """Code de connexion / de vérification d'appareil, envoyé à l'adresse ÉPINGLÉE du compte
     K-Express (`user.email` : jamais réécrite depuis un email Keycloak non certifié)."""
-    where = f" depuis « {device_label} »" if device_label else ""
-    return deliver("K-Express — code de connexion",
-            f"Bonjour {user.get_short_name()},\n\nUne connexion à votre compte K-Express est en cours{where}.\n"
-            f"Votre code de vérification est : {code}\n\n"
-            f"Il est valable {_minutes()} minutes et ne sert qu'une fois." + _FOOTER, user.email)
+    from apps.core.emails import catalog
+
+    rendered = catalog.login_code(code=code, minutes=_minutes(), first_name=user.first_name,
+                                  device_label=device_label)
+    return _deliver_rendered(rendered, user.email)
 
 
 def send_already_active_notice(email: str, first_name: str = "") -> bool:
-    hello = f"Bonjour {first_name},\n\n" if first_name else "Bonjour,\n\n"
-    return deliver("K-Express — votre compte est déjà activé",
-            f"{hello}Une demande d'activation a été faite pour votre adresse, mais votre compte K-Express "
-            "est déjà actif : connectez-vous avec votre identifiant et votre mot de passe.\n\n"
-            "Mot de passe oublié ? Utilisez « Mot de passe oublié » sur la page de connexion K-access, "
-            "ou contactez votre administrateur.\n\n"
-            "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.", email)
+    from apps.core.emails import catalog
+
+    return _deliver_rendered(catalog.already_active(first_name=first_name), email)
 
 
 # --- Réponses publiques uniformes ---------------------------------------------------------------

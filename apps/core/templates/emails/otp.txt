@@ -1,0 +1,16 @@
+{% extends "emails/base.txt" %}
+{% block body %}{{ title }}
+
+Bonjour{% if first_name %} {{ first_name }}{% endif %},
+
+{{ intro }}
+{% if device_label %}Appareil : {{ device_label }}
+{% endif %}Demande reçue le {{ requested_at }}
+
+{{ code_label }} : {{ code }}
+
+Il est valable {{ validity }} et ne sert qu'une seule fois.
+
+SÉCURITÉ — {{ security_tip }}
+
+{{ not_you }}{% endblock %}

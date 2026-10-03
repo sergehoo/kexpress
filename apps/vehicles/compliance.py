@@ -39,15 +39,32 @@ def latest_inspection(vehicle):
     return vehicle.inspections.order_by("-next_date").first()
 
 
+def revision_baseline(vehicle, *, revisions=None, shifts=None):
+    """(dernière révision, son kilométrage exprimé sur le compteur EN PLACE) — (None, None) sans
+    révision. La dernière est celle au kilométrage le plus élevé SUR LE COMPTEUR EN PLACE : après
+    un remplacement de compteur, le compteur redescend, et comparer les valeurs brutes retiendrait
+    à tort une révision de l'ancien compteur au lieu de celle faite sur le nouveau."""
+    from apps.carplan.mileage import meter_shifts, shift_since
+
+    revisions = list(vehicle.revisions.all()) if revisions is None else list(revisions)
+    if not revisions:
+        return None, None
+    shifts = meter_shifts(vehicle) if shifts is None else shifts
+    scored = [(r.mileage_at_revision - shift_since(shifts, r.date, km=r.mileage_at_revision), r.date, r.pk, r)
+              for r in revisions]
+    km, _, _, rev = max(scored, key=lambda x: (x[0], x[1], str(x[2])))
+    return rev, km
+
+
 def last_revision(vehicle):
-    return vehicle.revisions.order_by("-mileage_at_revision").first()
+    return revision_baseline(vehicle)[0]
 
 
 def next_revision_km(vehicle) -> int:
-    """Prochaine révision = km de la dernière révision + intervalle DU VÉHICULE."""
-    rev = last_revision(vehicle)
-    base = rev.mileage_at_revision if rev else 0
-    return base + interval_for(vehicle)
+    """Prochaine révision = km de la dernière révision + intervalle DU VÉHICULE, exprimée sur le
+    compteur EN PLACE (un remplacement de compteur postérieur à la révision est déduit)."""
+    _, base = revision_baseline(vehicle)
+    return (base or 0) + interval_for(vehicle)
 
 
 def revision_remaining_km(vehicle) -> int:

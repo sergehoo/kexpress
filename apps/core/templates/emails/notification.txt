@@ -1,0 +1,12 @@
+{% extends "emails/base.txt" %}
+{% block body %}{% if custom %}{{ message_text }}
+{% else %}{{ title }}{% if type_label and type_label != title %} ({{ type_label }}){% endif %}
+
+Bonjour{% if first_name %} {{ first_name }}{% endif %},
+{% if message_text %}
+{{ message_text }}
+{% endif %}{% endif %}{% if action_url %}{% if not custom or action_url not in message_text %}
+{{ action_label }} : {{ action_url }}{% endif %}{% elif notifications_url %}
+Vos notifications : {{ notifications_url }}{% endif %}{% endblock %}
+{% block footer_extra %}{% if notifications_url %}Vous recevez cet email selon vos préférences de notification (page Notifications de K-Express).
+{% endif %}{% endblock %}

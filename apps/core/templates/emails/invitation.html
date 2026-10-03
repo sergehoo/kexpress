@@ -1,0 +1,11 @@
+{% extends "emails/base.html" %}
+{% block content %}
+{% include "emails/components/greeting.html" %}
+{% include "emails/components/paragraph.html" with text=intro %}
+{% include "emails/components/details.html" with rows=link_rows %}
+{% include "emails/components/button.html" with url=action_url label=action_label %}
+{% endblock %}
+{% block notice %}
+{% include "emails/components/notice.html" with heading="Lien strictement personnel" text="Choisissez un mot de passe que vous n'utilisez nulle part ailleurs et ne transférez jamais cet email : le lien donne accès à votre compte." accent=kx.orange %}
+{% include "emails/components/notice.html" with heading="Ce n'est pas vous ?" text=not_you accent="#b45309" %}
+{% endblock %}

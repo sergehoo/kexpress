@@ -8,6 +8,7 @@ missions : une attribution et une course ne peuvent pas se croiser).
 from __future__ import annotations
 
 import functools
+import logging
 import secrets
 from datetime import date, timedelta
 from decimal import Decimal
@@ -20,6 +21,8 @@ from apps.carplan.models import (
     CarPlanAssignment, CarPlanEvent, CarPlanPolicy, CarPlanPolicyVersion, PoolRelease, VehicleHold, VehicleUsage,
     VehicleUsageChange,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CarPlanError(Exception):
@@ -133,7 +136,8 @@ def _lock(vehicle):
 
 
 POLICY_FIELDS = ("allowed_vehicles", "assignment_types", "max_duration_months", "professional_use",
-                 "private_use_allowed", "private_use", "mileage_declaration", "monthly_km_limit", "annual_km_limit",
+                 "private_use_allowed", "private_use", "mileage_declaration", "reading_frequency_days",
+                 "monthly_km_limit", "annual_km_limit",
                  "monthly_fuel_liters_limit", "monthly_energy_kwh_limit", "tolls_coverage", "parking_coverage",
                  "maintenance_coverage", "employee_contribution_monthly", "contribution_terms", "return_conditions",
                  "replacement_conditions")
@@ -331,6 +335,8 @@ def decide_mode_change(change, *, actor, approve: bool, note="") -> VehicleUsage
         usage, _ = VehicleUsage.objects.get_or_create(vehicle=vehicle)
         usage.mode = change.to_mode
         usage.save(update_fields=["mode", "updated_at"])
+        if change.to_mode != VehicleUsage.POOL:
+            _ensure_maintenance_plans(vehicle)
     change.status = VehicleUsageChange.APPLIED if approve else VehicleUsageChange.REJECTED
     change.decided_by, change.decided_at, change.decision_note = actor, timezone.now(), (note or "")[:2000]
     change.save(update_fields=["status", "decided_by", "decided_at", "decision_note", "updated_at"])
@@ -437,13 +443,28 @@ def _pool_conflicts(vehicle, start: date, end: date | None) -> int:
                      "planned_departure_at", "planned_arrival_at").count())
 
 
+def _ensure_maintenance_plans(vehicle) -> None:
+    """Véhicule entrant au Car Plan : ses plans d'entretien de référence sont créés ICI, à
+    l'écriture — jamais au détour d'une lecture (« Mon véhicule », suivi gestionnaire). Un
+    incident n'empêche pas l'attribution : la tâche périodique les créera."""
+    from apps.maintenance.predictive import ensure_plans
+
+    try:
+        with transaction.atomic():
+            ensure_plans(vehicle)
+    except Exception:
+        logger.exception("Plans d'entretien non créés pour %s", vehicle.pk)
+
+
 def _hold(vehicle, assignment, start, end, *, kind=VehicleHold.ASSIGNMENT, replacement=None) -> VehicleHold:
     try:
         with transaction.atomic():
-            return VehicleHold.objects.create(vehicle=vehicle, assignment=assignment, period=_days(start, end),
+            hold = VehicleHold.objects.create(vehicle=vehicle, assignment=assignment, period=_days(start, end),
                                               kind=kind, replacement=replacement)
     except IntegrityError:
         raise CarPlanError("Ce véhicule est déjà attribué (ou prêté en remplacement) sur une période qui se chevauche.")
+    _ensure_maintenance_plans(vehicle)
+    return hold
 
 
 @writes

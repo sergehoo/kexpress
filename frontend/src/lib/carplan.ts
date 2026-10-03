@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 
 import { api, apiError } from "@/lib/api";
+import type { PlanRow, Reliability } from "@/lib/maintenance";
 import type { Paginated } from "@/lib/types";
 
 // --- Permissions ------------------------------------------------------------------------
@@ -168,6 +169,9 @@ export const EVENT_LABEL: Record<string, string> = {
   inspection_return: "État des lieux de restitution réalisé",
   inspection_signed: "État des lieux validé",
   mileage_declared: "Relevé kilométrique",
+  mileage_corrected: "Relevé kilométrique corrigé",
+  meter_replaced: "Compteur remplacé",
+  reading_frequency: "Fréquence des relevés modifiée",
   request_maintenance: "Demande d'entretien",
   request_replacement: "Demande de remplacement",
   request_return: "Demande de restitution",
@@ -218,6 +222,8 @@ export interface Assignment {
   annual_km_quota: number | null;
   monthly_fuel_liters_quota: string | null;
   monthly_energy_kwh_quota: string | null;
+  /** Vide : fréquence de la politique. */
+  reading_frequency_days: number | null;
   special_conditions: string;
   status: AssignmentStatus;
   status_display: string;
@@ -324,12 +330,87 @@ export interface MileageReading {
   vehicle: string;
   vehicle_registration: string;
   reading_date: string;
+  /** Instant réel du relevé (base des moyennes km / jour). */
+  recorded_at: string;
   odometer: number;
   professional_km: number | null;
   private_km: number | null;
   source: string;
   source_display: string;
+  /** Relevé corrigé par celui-ci (trace : l'original reste listé, `superseded`). */
+  corrects: number | null;
+  reason: string;
+  superseded: boolean;
+  corrected_by_id: number | null;
+  /** Remplacement de compteur : dernier relevé de l'ancien compteur. */
+  previous_odometer: number | null;
+  anomaly: string;
+  by_manager: boolean;
   created_at: string;
+}
+
+export const READING_FREQUENCIES = [{ value: 5, label: "Tous les 5 jours" }, { value: 7, label: "Toutes les semaines" }];
+
+export type ReadingState = "ok" | "due" | "late" | "stale" | "not_required";
+export const READING_STATE_TONE: Record<ReadingState, Tone> = {
+  ok: "green", due: "amber", late: "red", stale: "red", not_required: "slate",
+};
+
+export interface ReadingStatus {
+  frequency_days: number;
+  frequency_source: "attribution" | "politique";
+  required: boolean;
+  last_reading: { id: number; date: string; recorded_at: string; odometer: number; source: string; source_display: string } | null;
+  next_due: string;
+  late_days: number;
+  days_since_last: number | null;
+  state: ReadingState;
+  state_label: string;
+  stale: boolean;
+}
+
+export interface Pace {
+  km_per_day: number | null;
+  method: "weighted" | "preliminary" | null;
+  label: string;
+  readings: number;
+  intervals: number;
+  span_days: number;
+  recent_km_per_day: number | null;
+  pace_increase: boolean;
+  last_at: string | null;
+  last_odometer: number | null;
+}
+
+/** Suivi kilométrique et entretien prévisionnel d'une attribution — sans montant. */
+export interface Tracking {
+  reading: ReadingStatus;
+  pace: Pace | null;
+  reliability: Reliability;
+  current_odometer: number | null;
+  maintenance: PlanRow[];
+  next_operation: PlanRow | null;
+  /** Relevé que le bénéficiaire peut encore corriger lui-même (sa dernière déclaration, < 48 h). */
+  correctable_reading: number | null;
+  last_reminder?: { step: string; label: string; at: string } | null;
+}
+
+export interface FollowupRow {
+  assignment: string;
+  reference: string;
+  beneficiary_name: string;
+  subsidiary_name: string;
+  vehicle: string;
+  registration: string;
+  fuel_type: string;
+  status: AssignmentStatus;
+  reading: ReadingStatus;
+  pace: Pace | null;
+  reliability: Reliability;
+  current_odometer: number | null;
+  next_operation: PlanRow | null;
+  urgent_operations: number;
+  last_reminder: { step: string; label: string; at: string } | null;
 }
 
 export interface Replacement {
@@ -477,6 +558,7 @@ export interface PolicyVersion {
   private_use_allowed: boolean;
   private_use: string;
   mileage_declaration: MileageDeclaration;
+  reading_frequency_days: number;
   monthly_km_limit: number | null;
   annual_km_limit: number | null;
   monthly_fuel_liters_limit: string | null;
@@ -610,6 +692,7 @@ export interface MyConditions {
   private_use_allowed: boolean;
   private_use: string;
   mileage_declaration: MileageDeclaration;
+  reading_frequency_days?: number;
   tolls: string;
   parking: string;
   maintenance: string;
@@ -643,6 +726,7 @@ export interface MyAssignment {
   annual_km_quota: number | null;
   monthly_fuel_liters_quota: string | null;
   monthly_energy_kwh_quota: string | null;
+  reading_frequency_days?: number | null;
   special_conditions: string;
   vehicle: MyVehicleInfo | null;
   conditions: MyConditions;
@@ -697,6 +781,8 @@ function useInvalidate() {
   return () => {
     void qc.invalidateQueries({ queryKey: [KEY] });
     void qc.invalidateQueries({ queryKey: [ME] });
+    // Un relevé recalcule les prévisions d'entretien.
+    void qc.invalidateQueries({ queryKey: ["maintenance-plans"] });
   };
 }
 
@@ -788,6 +874,8 @@ export const useAssignmentComparison = (id?: string | null, enabled = true) =>
   useAssignmentSub<Comparison>(id, "comparison", enabled);
 export const useAssignmentUsage = (id?: string | null) => useAssignmentSub<Usage>(id, "usage");
 export const useAssignmentMileage = (id?: string | null) => useAssignmentSub<MileageReading[]>(id, "mileage");
+export const useAssignmentTracking = (id?: string | null, enabled = true) =>
+  useAssignmentSub<Tracking>(id, "tracking", enabled);
 export const useAssignmentReplacements = (id?: string | null) => useAssignmentSub<Replacement[]>(id, "replacements");
 export const useAssignmentCosts = (id?: string | null, enabled = true) =>
   useAssignmentSub<AssignmentCosts>(id, "costs", enabled);
@@ -876,6 +964,64 @@ export function useManagerMileage() {
     mutationFn: async ({ assignmentId, odometer, reading_date }: { assignmentId: string; odometer: number; reading_date?: string }) =>
       (await api.post<MileageReading>(`/carplan/assignments/${assignmentId}/mileage/`, cleanParams({ odometer, reading_date }))).data,
     onSuccess: invalidate,
+  });
+}
+
+/** Correction tracée d'un relevé par un gestionnaire (motif obligatoire). */
+export function useCorrectMileage() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async ({ assignmentId, readingId, odometer, reason }: {
+      assignmentId: string; readingId: number; odometer: number; reason: string;
+    }) => (await api.post<MileageReading>(`/carplan/assignments/${assignmentId}/mileage/${readingId}/correct/`,
+      { odometer, reason })).data,
+    onSuccess: invalidate,
+  });
+}
+
+export function useMeterReplacement() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async ({ assignmentId, body }: {
+      assignmentId: string; body: { old_odometer: number; new_odometer: number; reason: string; recorded_at?: string };
+    }) => (await api.post<MileageReading>(`/carplan/assignments/${assignmentId}/meter-replacement/`, body)).data,
+    onSuccess: invalidate,
+  });
+}
+
+export function useReadingFrequency() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async ({ assignmentId, days }: { assignmentId: string; days: number | null }) =>
+      (await api.post<Assignment>(`/carplan/assignments/${assignmentId}/reading-frequency/`, { days })).data,
+    onSuccess: invalidate,
+  });
+}
+
+export type FollowupFilter = "" | "late" | "maintenance" | "unreliable";
+
+export interface FollowupPage {
+  count: number;
+  page: number;
+  page_size: number;
+  results: FollowupRow[];
+  /** Compteurs sur TOUTES les attributions en cours du périmètre (indépendants du filtre). */
+  counts: { total: number; late: number; maintenance: number; unreliable: number };
+}
+
+/** Gestion : relevés en retard, fiabilité et entretien le plus proche des attributions en cours.
+ *  Filtre et pagination appliqués par l'API. */
+export function useMileageFollowup({ state = "", page = 1, pageSize = 50 }: {
+  state?: FollowupFilter; page?: number; pageSize?: number;
+} = {}, enabled = true) {
+  return useQuery({
+    queryKey: [KEY, "mileage-followup", state, page, pageSize],
+    enabled,
+    retry,
+    placeholderData: (previous) => previous,
+    queryFn: async () => (await api.get<FollowupPage>("/carplan/mileage-followup/", {
+      params: { ...(state ? { state } : {}), page: String(page), page_size: String(pageSize) },
+    })).data,
   });
 }
 
@@ -1071,7 +1217,8 @@ export function useNewPolicyVersion() {
 /** Champs modifiables d'une version BROUILLON (`services.POLICY_FIELDS` + date + catégories). */
 export type PolicyDraftBody = Partial<Pick<PolicyVersion,
   | "effective_from" | "allowed_vehicles" | "assignment_types" | "max_duration_months" | "professional_use"
-  | "private_use_allowed" | "private_use" | "mileage_declaration" | "monthly_km_limit" | "annual_km_limit"
+  | "private_use_allowed" | "private_use" | "mileage_declaration" | "reading_frequency_days"
+  | "monthly_km_limit" | "annual_km_limit"
   | "monthly_fuel_liters_limit" | "monthly_energy_kwh_limit" | "tolls_coverage" | "parking_coverage"
   | "maintenance_coverage" | "employee_contribution_monthly" | "contribution_terms" | "return_conditions"
   | "replacement_conditions" | "eligible_categories">>;
@@ -1218,6 +1365,26 @@ export function useDeclareMyMileage() {
   return useMutation({
     mutationFn: async (body: { odometer: number; reading_date?: string; professional_km?: number; private_km?: number }) =>
       (await api.post<MileageReading>("/carplan/me/mileage/", body)).data,
+    onSuccess: invalidate,
+  });
+}
+
+export function useMyTracking(enabled = true) {
+  return useQuery({
+    queryKey: [ME, "tracking"],
+    enabled,
+    retry,
+    queryFn: async () => (await api.get<Tracking>("/carplan/me/tracking/")).data,
+  });
+}
+
+/** Le bénéficiaire corrige SA dernière déclaration (48 h) : l'original reste tracé. */
+export function useCorrectMyMileage() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async ({ readingId, odometer, reason }: { readingId: number; odometer: number; reason?: string }) =>
+      (await api.post<MileageReading>(`/carplan/me/mileage/${readingId}/correct/`,
+        reason ? { odometer, reason } : { odometer })).data,
     onSuccess: invalidate,
   });
 }

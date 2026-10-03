@@ -1,0 +1,12 @@
+{% extends "emails/base.html" %}
+{% block content %}
+{% include "emails/components/greeting.html" %}
+{% include "emails/components/paragraph.html" with text=intro %}
+{% if device_label %}{% include "emails/components/details.html" with rows=context_rows %}{% else %}<p class="kx-muted" style="margin:-6px 0 18px;font-size:13px;line-height:20px;color:{{ kx.muted }};">Demande reçue le {{ requested_at }}.</p>{% endif %}
+{% include "emails/components/code.html" %}
+<p class="kx-p" style="margin:0 0 20px;font-size:14px;line-height:22px;color:{{ kx.text }};">{{ instruction }}</p>
+{% endblock %}
+{% block notice %}
+{% include "emails/components/notice.html" with heading="Ne partagez jamais ce code" text=security_tip accent=kx.orange %}
+{% include "emails/components/notice.html" with heading="Ce n'est pas vous ?" text=not_you accent="#b45309" %}
+{% endblock %}

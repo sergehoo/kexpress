@@ -1,0 +1,9 @@
+{% extends "emails/base.html" %}
+{% block content %}
+{% include "emails/components/greeting.html" %}
+{% for text in paragraphs %}{% include "emails/components/paragraph.html" %}{% endfor %}
+{% if action_url %}{% include "emails/components/button.html" with url=action_url label=action_label %}{% endif %}
+{% endblock %}
+{% block notice %}
+{% include "emails/components/notice.html" with heading="Ce n'est pas vous ?" text=not_you accent=variant.accent %}
+{% endblock %}

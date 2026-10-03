@@ -1,14 +1,18 @@
-from rest_framework import viewsets
+from django.db import transaction
+from rest_framework import mixins, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.mixins import TenantScopedViewSetMixin
 from apps.finance.permissions import MANAGE_EXPENSES, VIEW_EXPENSES, FinancePermission
-from apps.maintenance.models import BreakdownType, MaintenanceRecord, MaintenanceType
+from apps.maintenance.models import BreakdownType, MaintenanceRecord, MaintenanceSchedule, MaintenanceType
 from apps.maintenance.serializers import (
     BreakdownTypeSerializer,
     MaintenanceRecordSerializer,
+    MaintenanceScheduleSerializer,
     MaintenanceTypeSerializer,
 )
 
@@ -53,13 +57,42 @@ class ReferenceWritePermission(IsAuthenticated):
         return bool(user.is_superuser or user.role in self.WRITERS)
 
 
+#: Rôles qui administrent le référentiel COMMUN au groupe (périodicités, seuils d'alerte).
+GROUP_REFERENCE_ADMINS = {"super_admin", "company_admin"}
+
+
+def _is_group_admin(user) -> bool:
+    return bool(user.is_superuser or user.role in GROUP_REFERENCE_ADMINS)
+
+
+class MaintenanceTypePermission(ReferenceWritePermission):
+    """Le référentiel des types est COMMUN à toutes les filiales : ses périodicités et ses seuils
+    d'alerte pilotent les plans de tout le groupe. Une filiale ajoute une opération, mais seule
+    l'administration groupe modifie ou supprime un type existant — sans quoi une filiale sœur
+    pouvait faire taire les pré-alertes des autres. Une filiale ajuste SES véhicules par la
+    dérogation de périodicité du plan."""
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        if request.method in ("PUT", "PATCH", "DELETE"):
+            return _is_group_admin(request.user)
+        return True
+
+
 class MaintenanceTypeViewSet(viewsets.ModelViewSet):
     """Types de maintenance (référentiel partagé)."""
 
     queryset = MaintenanceType.objects.all().order_by("name")
     serializer_class = MaintenanceTypeSerializer
-    permission_classes = [ReferenceWritePermission]
+    permission_classes = [MaintenanceTypePermission]
     search_fields = ["name"]
+
+    def perform_create(self, serializer):
+        kind = serializer.validated_data.get("kind") or ""
+        if kind and kind != MaintenanceType.OTHER and not _is_group_admin(self.request.user):
+            raise PermissionDenied("Les opérations de référence du groupe sont gérées par l'administration groupe.")
+        serializer.save()
 
 
 class BreakdownTypeViewSet(viewsets.ModelViewSet):
@@ -140,3 +173,218 @@ class MaintenanceRecordViewSet(TenantScopedViewSetMixin, viewsets.ModelViewSet):
             self._event(rec, NotificationType.VEHICLE_BACK,
                         title=f"Véhicule remis en service — {rec.vehicle.registration}",
                         detail=f"Indisponibilité : {rec.downtime_hours or '—'} h.")
+
+
+# --- Plans d'entretien prédictifs ------------------------------------------------------------
+
+
+class PlanPermission(IsAuthenticated):
+    """Lecture : exploitation, finance, audit ; écriture : exploitation et administrateurs —
+    jamais l'auditeur, le demandeur ni le chauffeur (le bénéficiaire lit son calendrier dans
+    « Mon véhicule »)."""
+
+    READERS = ReferenceWritePermission.WRITERS | {"finance", "auditor"}
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        user = request.user
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return bool(user.is_superuser or user.role in self.READERS)
+        if user.role == "auditor":
+            return False
+        return bool(user.is_superuser or user.role in ReferenceWritePermission.WRITERS)
+
+
+def _owned_vehicles(user):
+    """La maintenance d'un véhicule revient à sa filiale PROPRIÉTAIRE (parc possédé)."""
+    from apps.analytics.scope import owned
+    from apps.vehicles.models import Vehicle
+
+    return owned(Vehicle, user)
+
+
+#: Pagination des listes calculées (plans) : taille par défaut et maximale d'une page.
+PAGE_SIZE, MAX_PAGE_SIZE = 50, 200
+#: Tableau de bord : nombre d'échéances et de véhicules détaillés (les compteurs portent sur tout).
+OUTLOOK_LIMIT = 50
+
+
+def page_of(request, rows):
+    """Page `page` (1…) de `page_size` lignes (50 par défaut, 200 au plus) d'une liste calculée."""
+    def _int(name, default):
+        try:
+            return max(1, int(request.query_params.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    size = min(_int("page_size", PAGE_SIZE), MAX_PAGE_SIZE)
+    page = _int("page", 1)
+    start = (page - 1) * size
+    return {"count": len(rows), "page": page, "page_size": size, "results": rows[start:start + size]}
+
+
+class MaintenancePlanViewSet(mixins.CreateModelMixin, mixins.UpdateModelMixin, viewsets.ReadOnlyModelViewSet):
+    """Plans d'entretien par véhicule et opération : paramètres + situation calculée
+    (seuils, distance restante, date prévisionnelle, niveau) — aucun montant.
+
+    Lectures : aucune écriture, données lues EN LOT (nombre de requêtes indépendant du nombre de
+    véhicules), listes paginées. Écritures : atomiques (une erreur n'enregistre rien)."""
+
+    serializer_class = MaintenanceScheduleSerializer
+    permission_classes = [PlanPermission]
+    http_method_names = ["get", "post", "patch", "head", "options"]
+
+    def get_queryset(self):
+        qs = MaintenanceSchedule.objects.filter(vehicle__in=_owned_vehicles(self.request.user)) \
+            .select_related("vehicle", "maintenance_type")
+        vehicle = self.request.query_params.get("vehicle")
+        if vehicle:
+            qs = qs.filter(vehicle_id=vehicle) if _is_uuid(vehicle) else qs.none()
+        return qs
+
+    def _rows(self, schedules, *, today=None):
+        from apps.maintenance.predictive import bulk_paces, evaluate, load_facts
+
+        schedules = list(schedules)
+        vehicles = {s.vehicle_id: s.vehicle for s in schedules}
+        paces = bulk_paces(vehicles.values())
+        facts = load_facts(vehicles.values(), with_schedules=False)
+        rows = []
+        for schedule in schedules:
+            row = evaluate(schedule, schedule.vehicle, paces[schedule.vehicle_id][0], today=today,
+                           facts=facts[schedule.vehicle_id])
+            if row is not None:
+                rows.append(row)
+        return rows, paces
+
+    def list(self, request, *args, **kwargs):
+        from apps.maintenance.predictive import RANK, _sort_key
+
+        rows, _ = self._rows(self.get_queryset().filter(is_active=True))
+        level = request.query_params.get("level")
+        if level:
+            rows = [r for r in rows if r["level"] == level]
+        rows.sort(key=lambda r: (-RANK[r["level"]], *_sort_key(r)))
+        return Response(page_of(request, rows))
+
+    def retrieve(self, request, *args, **kwargs):
+        schedule = self.get_object()
+        rows, _ = self._rows([schedule])
+        data = rows[0] if rows else {"id": str(schedule.pk), "level": "not_applicable",
+                                     "level_label": "Sans objet pour ce véhicule"}
+        return Response({**data, "settings": self.get_serializer(schedule).data})
+
+    def _meter_note(self, serializer, instance=None):
+        """Km de dernier entretien saisi à la main : lu au compteur de sa date, il est ramené sur le
+        compteur EN PLACE si un remplacement de compteur a eu lieu depuis."""
+        from apps.carplan.mileage import on_current_meter
+
+        data = serializer.validated_data
+        if data.get("last_done_mileage") is None:
+            return {}, ""
+        vehicle = data.get("vehicle") or instance.vehicle
+        day = data.get("last_done_date", getattr(instance, "last_done_date", None))
+        converted = on_current_meter(vehicle, data["last_done_mileage"], day)
+        if converted == data["last_done_mileage"]:
+            return {}, ""
+        return ({"last_done_mileage": converted},
+                f" {data['last_done_mileage']} km lus sur le compteur remplacé depuis : {converted} km sur le "
+                "compteur en place.")
+
+    def perform_create(self, serializer):
+        from apps.maintenance.predictive import _log, applies, recompute_thresholds
+
+        vehicle = serializer.validated_data["vehicle"]
+        mtype = serializer.validated_data["maintenance_type"]
+        if not _owned_vehicles(self.request.user).filter(pk=vehicle.pk).exists():
+            raise PermissionDenied("Ce véhicule n'appartient pas à votre filiale.")
+        if not applies(mtype, vehicle):
+            raise ValidationError({"maintenance_type": "Opération thermique sans objet sur un véhicule électrique."})
+        extra, note = self._meter_note(serializer)
+        schedule = serializer.save(created_by=self.request.user, **extra)
+        recompute_thresholds(schedule, vehicle)
+        schedule.save()
+        _log(schedule, "config", actor=self.request.user, message=f"Plan d'entretien créé.{note}")
+
+    def perform_update(self, serializer):
+        from apps.maintenance.predictive import _log, recompute_thresholds, refresh_vehicle
+
+        changed = sorted(serializer.validated_data)
+        extra, note = self._meter_note(serializer, serializer.instance)
+        schedule = serializer.save(**extra)
+        recompute_thresholds(schedule)
+        schedule.save()
+        _log(schedule, "config", actor=self.request.user,
+             message=f"Paramètres modifiés : {', '.join(changed)}.{note}", fields=changed)
+        refresh_vehicle(schedule.vehicle, notify=False)
+
+    def create(self, request, *args, **kwargs):
+        with transaction.atomic():
+            response = super().create(request, *args, **kwargs)
+            return self._situation(response)
+
+    def partial_update(self, request, *args, **kwargs):
+        with transaction.atomic():
+            response = super().partial_update(request, *args, **kwargs)
+            return self._situation(response)
+
+    def _situation(self, response):
+        schedule = MaintenanceSchedule.objects.select_related("vehicle", "maintenance_type").get(pk=response.data["id"])
+        rows, _ = self._rows([schedule])
+        response.data = {**(rows[0] if rows else {}), "settings": self.get_serializer(schedule).data}
+        return response
+
+    @action(detail=True, methods=["get"])
+    def events(self, request, pk=None):
+        from apps.maintenance.predictive import plan_events
+
+        return Response(plan_events([self.get_object()]))
+
+    @action(detail=False, methods=["get"])
+    def outlook(self, request):
+        """Tableau de bord gestionnaire : entretiens à venir, urgents ou dépassés, fiabilité des
+        prévisions, historique des alertes et des interventions — sur le parc possédé. Compteurs
+        sur tout le parc ; échéances et véhicules détaillés limités aux 50 premiers."""
+        from apps.carplan.mileage import reliability
+        from apps.core.enums import MaintenanceStatus
+        from apps.maintenance.predictive import LEVEL_LABEL, RANK, _sort_key, plan_events
+
+        vehicles = _owned_vehicles(request.user)
+        schedules = list(self.get_queryset().filter(is_active=True))
+        rows, paces = self._rows(schedules)
+        counts = {level: 0 for level in LEVEL_LABEL}
+        for r in rows:
+            counts[r["level"]] += 1
+        watch = sorted((r for r in rows if RANK[r["level"]] > 0), key=lambda r: (-RANK[r["level"]], *_sort_key(r)))
+        registrations = {s.vehicle_id: s.vehicle.registration for s in schedules}
+        forecasts = []
+        for vehicle_id, (pace, assignment, pre) in paces.items():
+            rel = (reliability(assignment, readings=pre["readings"], corrected_at=pre["corrected_at"])
+                   if assignment is not None else None)
+            forecasts.append({"vehicle": str(vehicle_id), "registration": registrations[vehicle_id],
+                              "km_per_day": pace.get("km_per_day"), "method": pace.get("method"),
+                              "label": pace.get("label"), "readings": pace.get("readings"),
+                              "reliability": rel})
+        forecasts.sort(key=lambda f: (f["km_per_day"] is None, f["registration"]))
+        done = (MaintenanceRecord.objects.filter(vehicle__in=vehicles, status=MaintenanceStatus.COMPLETED)
+                .select_related("vehicle", "maintenance_type").order_by("-performed_date", "-updated_at")[:20])
+        return Response({
+            "counts": counts, "plans": len(rows), "watch": watch[:OUTLOOK_LIMIT], "watch_count": len(watch),
+            "forecasts": forecasts[:OUTLOOK_LIMIT], "forecasts_count": len(forecasts),
+            "events": plan_events(schedules, limit=40),
+            "interventions": [{"id": str(r.pk), "registration": r.vehicle.registration,
+                               "operation": r.maintenance_type.name,
+                               "performed_date": r.performed_date.isoformat() if r.performed_date else None,
+                               "mileage": r.mileage} for r in done],
+        })
+
+
+def _is_uuid(value) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True

@@ -1,0 +1,12 @@
+{% extends "emails/base.html" %}
+{% block hero_subtitle %}{% if type_label and type_label != title %}<p style="margin:8px 0 0;font-family:{{ kx.font }};font-size:14px;line-height:20px;color:#cbd5e1;">{{ type_label }}</p>{% endif %}{% endblock %}
+{% block content %}
+{% if not custom %}{% include "emails/components/greeting.html" %}{% endif %}
+{% if variant_hint %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 18px;"><tr><td class="kx-hint" bgcolor="{{ variant.soft }}" style="background-color:{{ variant.soft }};border-left:4px solid {{ variant.accent }};border-radius:10px;padding:12px 16px;font-size:14px;line-height:21px;font-weight:700;color:{{ variant.accent }};">{{ variant_hint }}</td></tr></table>{% endif %}
+{% for block in blocks %}{% if block.kind == "details" %}{% include "emails/components/details.html" with rows=block.rows %}{% else %}{% include "emails/components/paragraph.html" with text=block.text %}{% endif %}{% empty %}{% include "emails/components/paragraph.html" with text="Une nouvelle notification vous attend dans votre espace K-Express." %}{% endfor %}
+{% if action_url %}{% include "emails/components/button.html" with url=action_url label=action_label %}{% elif notifications_url %}<p class="kx-p" style="margin:0 0 22px;font-size:14px;line-height:22px;color:{{ kx.text }};">Retrouvez cette notification dans <a class="kx-link" href="{{ notifications_url }}" target="_blank" rel="noopener" style="color:#c2410c;font-weight:700;text-decoration:underline;">votre espace K-Express</a>.</p>{% endif %}
+{% endblock %}
+{% block notice %}
+{% include "emails/components/notice.html" with heading="Pour votre sécurité" text=safety_text accent=variant.accent %}
+{% endblock %}
+{% block footer_extra %}{% if notifications_url %}<p class="kx-muted" style="margin:0 0 10px;font-size:12px;line-height:18px;color:{{ kx.muted }};">Vous recevez cet email selon vos préférences de notification. <a class="kx-link" href="{{ notifications_url }}" target="_blank" rel="noopener" style="color:#c2410c;text-decoration:underline;">Gérer mes préférences</a></p>{% endif %}{% endblock %}

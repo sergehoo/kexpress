@@ -272,6 +272,10 @@ class NotificationType(models.TextChoices):
     # Car Plan — étapes d'une attribution, échéances, quotas, demandes et incidents du
     # bénéficiaire (jamais un montant : le bénéficiaire ne voit aucun coût interne).
     CARPLAN = "carplan", "Car Plan"
+    # Suivi kilométrique : relevé périodique attendu (rappel, relance, retard signalé).
+    MILEAGE_READING_DUE = "mileage_reading_due", "Relevé kilométrique attendu"
+    # Plans d'entretien prédictifs : préavis, alerte, urgence, dépassement, rythme en hausse.
+    MAINTENANCE_FORECAST = "maintenance_forecast", "Entretien à prévoir (prévision)"
     OTHER = "other", "Autre"
 
 

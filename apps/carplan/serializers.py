@@ -29,7 +29,8 @@ class PolicyVersionSerializer(serializers.ModelSerializer):
         model = CarPlanPolicyVersion
         fields = ["id", "policy", "number", "status", "status_display", "effective_from", "eligible_categories",
                   "allowed_vehicles", "assignment_types", "max_duration_months", "professional_use",
-                  "private_use_allowed", "private_use", "mileage_declaration", "monthly_km_limit", "annual_km_limit",
+                  "private_use_allowed", "private_use", "mileage_declaration", "reading_frequency_days",
+                  "monthly_km_limit", "annual_km_limit",
                   "monthly_fuel_liters_limit", "monthly_energy_kwh_limit", "tolls_coverage", "parking_coverage",
                   "maintenance_coverage", "employee_contribution_monthly", "contribution_terms", "return_conditions",
                   "replacement_conditions", "published_at", "published_by_name", "created_at"]
@@ -140,7 +141,8 @@ class AssignmentSerializer(serializers.ModelSerializer):
                   "vehicle_registration", "vehicle_label", "policy_version", "policy_name", "policy_version_number",
                   "assignment_type", "assignment_type_display", "start_date", "planned_end_date",
                   "actual_return_date", "start_mileage", "end_mileage", "monthly_km_quota", "annual_km_quota",
-                  "monthly_fuel_liters_quota", "monthly_energy_kwh_quota", "special_conditions", "status",
+                  "monthly_fuel_liters_quota", "monthly_energy_kwh_quota", "reading_frequency_days",
+                  "special_conditions", "status",
                   "status_display", "requested_by_name", "approved_by_name", "approved_at", "renewal_of", "attention",
                   "created_at", "updated_at"]
         read_only_fields = fields
@@ -179,8 +181,8 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
         model = CarPlanAssignment
         fields = ["id", "reference", "assignment_type", "assignment_type_display", "status", "status_display",
                   "start_date", "planned_end_date", "start_mileage", "monthly_km_quota", "annual_km_quota",
-                  "monthly_fuel_liters_quota", "monthly_energy_kwh_quota", "special_conditions", "vehicle",
-                  "conditions", "attention"]
+                  "monthly_fuel_liters_quota", "monthly_energy_kwh_quota", "reading_frequency_days",
+                  "special_conditions", "vehicle", "conditions", "attention"]
         read_only_fields = fields
 
     def get_vehicle(self, obj):
@@ -196,7 +198,8 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
         p = obj.policy_version
         return {"policy": p.policy.name, "version": p.number, "professional_use": p.professional_use,
                 "private_use_allowed": p.private_use_allowed, "private_use": p.private_use,
-                "mileage_declaration": p.mileage_declaration, "tolls": p.get_tolls_coverage_display(),
+                "mileage_declaration": p.mileage_declaration, "reading_frequency_days": p.reading_frequency_days,
+                "tolls": p.get_tolls_coverage_display(),
                 "parking": p.get_parking_coverage_display(), "maintenance": p.get_maintenance_coverage_display(),
                 "return_conditions": p.return_conditions, "replacement_conditions": p.replacement_conditions}
 
@@ -251,14 +254,36 @@ class InspectionSerializer(serializers.ModelSerializer):
 
 
 class MileageReadingSerializer(serializers.ModelSerializer):
+    """Relevé horodaté ; un relevé corrigé reste listé (`superseded`) avec sa correction."""
+
     source_display = serializers.CharField(source="get_source_display", read_only=True)
     vehicle_registration = serializers.CharField(source="vehicle.registration", read_only=True)
+    superseded = serializers.SerializerMethodField()
+    corrected_by_id = serializers.SerializerMethodField()
+    by_manager = serializers.SerializerMethodField()
 
     class Meta:
         model = MileageReading
-        fields = ["id", "vehicle", "vehicle_registration", "reading_date", "odometer", "professional_km",
-                  "private_km", "source", "source_display", "created_at"]
+        fields = ["id", "vehicle", "vehicle_registration", "reading_date", "recorded_at", "odometer",
+                  "professional_km", "private_km", "source", "source_display", "corrects", "reason", "superseded",
+                  "corrected_by_id", "previous_odometer", "anomaly", "by_manager", "created_at"]
         read_only_fields = fields
+
+    def _correction(self, obj):
+        try:
+            return obj.correction
+        except MileageReading.DoesNotExist:
+            return None
+
+    def get_superseded(self, obj):
+        return self._correction(obj) is not None
+
+    def get_corrected_by_id(self, obj):
+        correction = self._correction(obj)
+        return correction.pk if correction is not None else None
+
+    def get_by_manager(self, obj):
+        return obj.declared_by_id != obj.assignment.beneficiary_id
 
 
 class RequestSerializer(serializers.ModelSerializer):

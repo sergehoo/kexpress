@@ -1,0 +1,10 @@
+{% extends "emails/base.txt" %}
+{% block body %}{{ title }}
+
+Bonjour{% if first_name %} {{ first_name }}{% endif %},
+{% for text in paragraphs %}
+{{ text }}
+{% endfor %}{% if action_url %}
+{{ action_label }} : {{ action_url }}
+{% endif %}
+{{ not_you }}{% endblock %}

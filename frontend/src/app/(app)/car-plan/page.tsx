@@ -9,6 +9,7 @@ import { AssignmentDetail } from "@/components/carplan/AssignmentDetail";
 import { AssignmentsPanel } from "@/components/carplan/AssignmentsPanel";
 import { DashboardPanel } from "@/components/carplan/DashboardPanel";
 import { GpsAccessPanel } from "@/components/carplan/GpsAccessPanel";
+import { MileageFollowupPanel } from "@/components/carplan/MileageFollowupPanel";
 import { ReleasesPanel } from "@/components/carplan/ReleasesPanel";
 import { RequestsIncidentsPanel } from "@/components/carplan/RequestsIncidentsPanel";
 import { VehiclesPanel } from "@/components/carplan/VehiclesPanel";
@@ -81,6 +82,7 @@ function CarPlanContent() {
         items={[
           { key: "dashboard", label: "Tableau de bord", content: <DashboardPanel onOpen={open} /> },
           { key: "assignments", label: "Attributions", content: <AssignmentsPanel onOpen={open} /> },
+          { key: "mileage", label: "Relevés & entretien", content: <MileageFollowupPanel onOpen={open} /> },
           { key: "vehicles", label: "Véhicules", content: <VehiclesPanel /> },
           { key: "requests", label: "Demandes & incidents", content: <RequestsIncidentsPanel onOpen={open} /> },
           { key: "releases", label: "Mises à disposition", content: <ReleasesPanel onOpen={open} /> },

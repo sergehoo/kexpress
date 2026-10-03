@@ -25,10 +25,14 @@ class InvitationError(Exception):
 
 
 def invitation_link(user) -> str:
+    """Lien de définition du mot de passe, sur l'origine du frontend telle que la construisent
+    tous les emails (`frontend_base`) : forcée en HTTPS hors poste local, le jeton ne circule
+    jamais en clair même si FRONTEND_URL est déclaré en http://."""
+    from apps.core.emails import frontend_base
+
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = invitation_tokens.make_token(user)
-    base = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
-    return f"{base}/auth/setup-password?uid={uid}&token={token}"
+    return f"{frontend_base()}/auth/setup-password?uid={uid}&token={token}"
 
 
 def delivery_problems() -> list[str]:
@@ -45,9 +49,9 @@ def delivery_problems() -> list[str]:
 
 def send_invitation(user, actor=None) -> None:
     """Envoie le lien au SEUL titulaire du compte (jamais renvoyé à l'appelant)."""
-    from django.core.mail import send_mail
-
     from apps.audit import services as audit
+    from apps.core import emails
+    from apps.core.emails import catalog
     from apps.core.enums import AuditAction
 
     if not user.is_active:
@@ -60,18 +64,14 @@ def send_invitation(user, actor=None) -> None:
     user.invited_at = timezone.now()
     type(user).objects.filter(pk=user.pk).update(invited_at=user.invited_at)
     hours = getattr(settings, "INVITATION_TIMEOUT_HOURS", 72)
-    send_mail(
-        subject="K-Express — définissez votre mot de passe",
-        message=(
-            f"Bonjour {user.get_short_name()},\n\n"
-            "Un compte K-Express a été créé pour vous. Définissez votre mot de passe en suivant "
-            f"ce lien (valable {hours} h, utilisable une seule fois) :\n\n{invitation_link(user)}\n\n"
-            "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
-    )
+    # Compte déjà utilisé (mot de passe ou connexion passée) : formulation « nouveau mot de passe ».
+    renewal = user.has_usable_password() or user.last_login is not None
+    try:
+        rendered = catalog.invitation(link=invitation_link(user), hours=hours, first_name=user.first_name,
+                                      renewal=renewal)
+    except emails.UnsafeLinkError:
+        raise InvitationError("Invitation impossible : FRONTEND_URL ne désigne pas une adresse valide.") from None
+    emails.send(rendered, [user.email])
     audit.record(actor, AuditAction.UPDATE, user, changes={"action": "send_invitation"})
 
 

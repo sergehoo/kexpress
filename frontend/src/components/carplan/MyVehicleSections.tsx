@@ -7,8 +7,8 @@ import { SecureFileLink } from "@/components/SecureFileLink";
 import { Button, Card, CardBody, CardHeader, CardTitle, EmptyState, Input, Label, Select, Spinner } from "@/components/ui";
 import {
   carPlanError, INCIDENT_KIND_LABEL, INCIDENT_STATUS_TONE, REQUEST_KIND_LABEL, REQUEST_STATUS_TONE,
-  useCreateMyRequest, useDeclareMyIncident, useDeclareMyMileage, useMyHistory, useMyIncidents, useMyInspections,
-  useMyMileage, useMyRequests, type MyVehicle,
+  useCorrectMyMileage, useCreateMyRequest, useDeclareMyIncident, useDeclareMyMileage, useMyHistory, useMyIncidents,
+  useMyInspections, useMyMileage, useMyRequests, useMyTracking, type MileageReading, type MyVehicle,
 } from "@/lib/carplan";
 import { cn, formatNumber } from "@/lib/utils";
 
@@ -41,12 +41,15 @@ export function Section({ id, title, children, action }: {
 export function MileageSection({ mine, onToast }: { mine: MyVehicle; onToast: Toast }) {
   const declare = useDeclareMyMileage();
   const readings = useMyMileage();
+  const tracking = useMyTracking(!!mine.vehicle);
   const usage = mine.usage;
   const declaration = usage?.declaration ?? mine.conditions.mileage_declaration;
   const privateAllowed = mine.conditions.private_use_allowed;
-  // Plancher du compteur, comme l'API : le plus haut du dernier relevé et du kilométrage initial.
-  const floors = [usage?.last_reading?.odometer, mine.start_mileage].filter((x): x is number => typeof x === "number");
-  const last = floors.length ? Math.max(...floors) : null;
+  const status = tracking.data?.reading;
+  // Plancher du compteur, comme l'API : le dernier relevé en vigueur (à défaut, le kilométrage initial).
+  const lastReading = status?.last_reading ?? null;
+  const fallback = [usage?.last_reading?.odometer, mine.start_mileage].filter((x): x is number => typeof x === "number");
+  const last = lastReading ? lastReading.odometer : fallback.length ? Math.max(...fallback) : null;
   const [odometer, setOdometer] = useState("");
   const [date, setDate] = useState(todayISO());
   const [pro, setPro] = useState("");
@@ -57,6 +60,7 @@ export function MileageSection({ mine, onToast }: { mine: MyVehicle; onToast: To
   const value = Number(odometer);
   const driven = odometer.trim() !== "" && Number.isFinite(value) && last !== null ? value - last : null;
   const split = declaration === "split";
+  const correctable = (readings.data ?? []).find((r) => r.id === tracking.data?.correctable_reading) ?? null;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -87,28 +91,33 @@ export function MileageSection({ mine, onToast }: { mine: MyVehicle; onToast: To
       }
     }
     declare.mutate(body, {
-      onSuccess: () => { setOdometer(""); setPro(""); setPriv(""); onToast("Relevé kilométrique enregistré."); },
+      onSuccess: (r) => {
+        setOdometer(""); setPro(""); setPriv(""); setDate(todayISO());
+        onToast(r.anomaly ? "Relevé enregistré — valeur inhabituelle signalée à votre gestionnaire." : "Relevé kilométrique enregistré.");
+      },
       onError: (err) => setError(carPlanError(err)),
     });
   }
 
   return (
-    <Section id="kilometrage" title="Déclaration de kilométrage">
+    <Section id="kilometrage" title="Relevé kilométrique"
+             action={status?.required ? <span className="text-[11px] text-muted">Attendu le {formatDay(status.next_due)}</span> : undefined}>
       {!canDeclare ? (
         <p className="text-sm text-muted">La déclaration s&apos;ouvre une fois le véhicule remis (état des lieux validé).</p>
       ) : (
         <form onSubmit={submit} className="space-y-3">
           <p className="text-xs text-muted">
             {declaration === "none" ? "Votre politique n'exige pas de relevé ; vous pouvez néanmoins déclarer votre compteur."
-              : declaration === "split" ? "Votre politique demande de ventiler les kilomètres professionnels et privés."
-              : "Votre politique demande le relevé du compteur."}
+              : declaration === "split" ? `Relevé attendu tous les ${status?.frequency_days ?? 7} jours, kilomètres professionnels et privés ventilés.`
+              : `Relevé attendu tous les ${status?.frequency_days ?? 7} jours.`}
             {last !== null && <> Dernier relevé : <span className="font-medium text-ink">{km(last)}</span>
-              {usage?.last_reading?.date ? ` (${formatDay(usage.last_reading.date)})` : ""}.</>}
+              {lastReading ? ` (${formatDateTime(lastReading.recorded_at)})` : usage?.last_reading?.date ? ` (${formatDay(usage.last_reading.date)})` : ""}.</>}
           </p>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
             <div><Label htmlFor="my-odo">Compteur actuel (km)</Label>
-              <Input id="my-odo" type="number" inputMode="numeric" min={last ?? 0} required value={odometer}
-                     onChange={(e) => setOdometer(e.target.value)} className="text-base sm:text-sm" /></div>
+              <Input id="my-odo" type="number" inputMode="numeric" min={last ?? 0} required value={odometer} autoComplete="off"
+                     placeholder={last !== null ? String(last) : undefined}
+                     onChange={(e) => setOdometer(e.target.value)} className="h-12 text-lg font-semibold tabular-nums sm:h-10 sm:text-sm" /></div>
             <div><Label htmlFor="my-date">Date du relevé</Label>
               <Input id="my-date" type="date" max={todayISO()} value={date} onChange={(e) => setDate(e.target.value)} className="text-base sm:text-sm" /></div>
           </div>
@@ -130,31 +139,84 @@ export function MileageSection({ mine, onToast }: { mine: MyVehicle; onToast: To
             <p className="text-[11px] text-faint">Usage privé non autorisé par votre politique : les kilomètres sont déclarés professionnels.</p>
           )}
           <FormError message={error} />
-          <Button type="submit" className="w-full sm:w-auto" disabled={declare.isPending}>
+          <Button type="submit" className="h-12 w-full text-base sm:h-auto sm:w-auto sm:text-sm" disabled={declare.isPending}>
             {declare.isPending ? <Spinner className="h-4 w-4" /> : <Send className="h-4 w-4" />} Déclarer
           </Button>
         </form>
       )}
 
+      {canDeclare && correctable && <CorrectionForm reading={correctable} onToast={onToast} />}
+
       <div className="mt-4 border-t border-line pt-3">
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Mes relevés</p>
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Historique de mes relevés</p>
         {readings.isLoading ? <Spinner /> : !(readings.data ?? []).length ? <p className="text-xs text-muted">Aucun relevé.</p> : (
           <ul className="divide-y divide-line text-sm">
-            {[...(readings.data ?? [])].reverse().slice(0, 12).map((r) => (
-              <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                <span className="text-muted">{formatDay(r.reading_date)}</span>
-                <span className="font-medium text-ink">{km(r.odometer)}</span>
-                <span className="w-full text-[11px] text-faint sm:w-auto">
-                  {r.source_display}
+            {[...(readings.data ?? [])].reverse().slice(0, 20).map((r) => (
+              <li key={r.id} className={cn("flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 py-2", r.superseded && "opacity-60")}>
+                <span className="text-muted">{formatDateTime(r.recorded_at)}</span>
+                <span className={cn("font-medium text-ink tabular-nums", r.superseded && "line-through")}>{km(r.odometer)}</span>
+                <span className="w-full text-[11px] text-faint">
+                  {r.source_display}{r.by_manager && r.source !== "handover" && r.source !== "return" ? " · par votre gestionnaire" : ""}
                   {r.professional_km != null ? ` · pro ${formatNumber(r.professional_km)} km` : ""}
                   {r.private_km != null ? ` · privé ${formatNumber(r.private_km)} km` : ""}
+                  {r.previous_odometer != null ? ` · ancien compteur ${km(r.previous_odometer)}` : ""}
                 </span>
+                {r.superseded && <span className="w-full text-[11px] text-amber-700 dark:text-amber-300">Relevé corrigé (conservé pour la trace)</span>}
+                {r.corrects && <span className="w-full text-[11px] text-sky-700 dark:text-sky-300">Correction{r.reason ? ` : ${r.reason}` : ""}</span>}
+                {r.anomaly && !r.superseded && <span className="w-full text-[11px] text-amber-700 dark:text-amber-300">{r.anomaly}</span>}
               </li>
             ))}
           </ul>
         )}
       </div>
     </Section>
+  );
+}
+
+/** Correction de SA dernière déclaration (48 h après la déclaration, deux corrections au plus) : un
+ *  nouveau relevé remplace l'erroné, qui reste tracé. */
+function CorrectionForm({ reading, onToast }: { reading: MileageReading; onToast: Toast }) {
+  const correct = useCorrectMyMileage();
+  const [open, setOpen] = useState(false);
+  const [odometer, setOdometer] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    const n = Number(odometer);
+    if (!odometer.trim() || !Number.isInteger(n) || n < 0) { setError("Indiquez le bon compteur en km (nombre entier)."); return; }
+    correct.mutate({ readingId: reading.id, odometer: n, reason: reason.trim() || undefined }, {
+      onSuccess: () => { setOpen(false); setOdometer(""); setReason(""); onToast("Relevé corrigé : l'ancienne valeur reste visible dans l'historique."); },
+      onError: (err) => setError(carPlanError(err)),
+    });
+  }
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="mt-3 text-xs font-medium text-brand-600 hover:underline">
+        Erreur de saisie ? Corriger mon dernier relevé ({km(reading.odometer)})
+      </button>
+    );
+  }
+  return (
+    <form onSubmit={submit} className="mt-3 space-y-2 rounded-xl border border-line bg-surface2 p-3">
+      <p className="text-xs text-muted">Correction possible dans les 48 h qui suivent votre déclaration, deux fois au plus ; au-delà, demandez-la à votre gestionnaire.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div><Label htmlFor="fix-odo">Bon compteur (km)</Label>
+          <Input id="fix-odo" type="number" inputMode="numeric" min={0} value={odometer} required
+                 onChange={(e) => setOdometer(e.target.value)} className="text-base sm:text-sm" /></div>
+        <div><Label htmlFor="fix-reason">Motif (facultatif)</Label>
+          <Input id="fix-reason" value={reason} maxLength={500} placeholder="Ex. chiffre en trop"
+                 onChange={(e) => setReason(e.target.value)} className="text-base sm:text-sm" /></div>
+      </div>
+      <FormError message={error} />
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={correct.isPending}>{correct.isPending && <Spinner className="h-4 w-4" />} Corriger</Button>
+        <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(false)}>Annuler</Button>
+      </div>
+    </form>
   );
 }
 

@@ -60,9 +60,11 @@ def create_inspection(assignment, *, actor, kind, data) -> CarPlanInspection:
     vehicle = assignment.vehicle
     if kind == CarPlanInspection.RETURN:
         handover = _handover_of(assignment)
-        last = MileageReading.objects.filter(vehicle=vehicle).order_by("-reading_date", "-odometer").first()
+        last = MileageReading.objects.filter(vehicle=vehicle).order_by("-recorded_at", "-id").first()
         floor = max(filter(None, [handover.mileage if handover else None, last.odometer if last else None,
                                   assignment.start_mileage]), default=0)
+        if MileageReading.objects.filter(assignment=assignment, source=MileageReading.METER_REPLACEMENT).exists():
+            floor = last.odometer  # compteur remplacé : seule la nouvelle base fait foi
         if mileage < floor:
             raise CarPlanError(f"Le kilométrage de restitution est inférieur au dernier relevé connu ({floor} km).")
     elif vehicle.mileage and mileage + 50 < vehicle.mileage:
@@ -153,7 +155,8 @@ def sign(inspection, *, actor, as_beneficiary: bool) -> CarPlanInspection:
 def _finalise(inspection, actor):
     MileageReading.objects.create(assignment=inspection.assignment, vehicle=inspection.vehicle,
                                   reading_date=timezone.localtime(inspection.performed_at).date(),
-                                  odometer=inspection.mileage, source=inspection.kind, declared_by=actor)
+                                  recorded_at=inspection.performed_at, odometer=inspection.mileage,
+                                  source=inspection.kind, declared_by=actor)
     from apps.carplan.operations import raise_vehicle_mileage
 
     raise_vehicle_mileage(inspection.vehicle, inspection.mileage)
@@ -202,7 +205,11 @@ def compare(handover, ret) -> dict:
     for wheel, state in handover.tyres.items():
         if ret.tyres.get(wheel) and ret.tyres.get(wheel) != state:
             gaps.append({"kind": "tyre", "label": f"Pneumatique {wheel} : {state} → {ret.tyres.get(wheel)}"})
-    return {"available": True, "km_driven": ret.mileage - handover.mileage,
+    # Compteur remplacé entre remise et restitution : on rajoute les km de l'ancien compteur.
+    shift = sum((r.previous_odometer or 0) - r.odometer for r in MileageReading.objects.filter(
+        vehicle=ret.vehicle, source=MileageReading.METER_REPLACEMENT,
+        recorded_at__gte=handover.performed_at, recorded_at__lte=ret.performed_at))
+    return {"available": True, "km_driven": ret.mileage - handover.mileage + shift,
             "energy_delta_pct": ret.energy_level_pct - handover.energy_level_pct, "gaps": gaps,
             "has_gaps": bool(gaps)}
 

@@ -80,4 +80,10 @@ app.conf.beat_schedule = {
         "task": "apps.carplan.tasks.check_car_plan",
         "schedule": crontab(hour="7,15", minute=10),
     },
+    # Plans d'entretien prédictifs : prévisions recalculées, alertes selon l'état mémorisé de
+    # chaque plan (préavis, alerte, urgence, dépassement, rythme en hausse) — 2× / jour.
+    "check-maintenance-plans": {
+        "task": "apps.maintenance.tasks.check_maintenance_plans",
+        "schedule": crontab(hour="7,15", minute=20),
+    },
 }

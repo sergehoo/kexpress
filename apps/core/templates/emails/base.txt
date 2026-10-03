@@ -1,0 +1,6 @@
+{% autoescape off %}{% block body %}{% endblock %}
+
+--
+Kaydan Express · Gestion de flotte — Kaydan Groupe
+Sécurité : K-Express ne vous demandera jamais votre mot de passe ni vos codes de vérification, par email, téléphone ou message.
+{% block footer_extra %}{% endblock %}Message automatique, merci de ne pas y répondre.{% endautoescape %}

@@ -17,7 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.carplan import inspections, operations
+from apps.carplan import inspections, mileage, operations
 from apps.carplan import permissions as perms
 from apps.carplan import services
 from apps.carplan.models import (
@@ -525,9 +525,46 @@ class AssignmentViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
             self._writable(a)
             data = _body(request)
             reading = _run(operations.declare_mileage, a, actor=request.user, odometer=data.get("odometer"),
-                           reading_date=_date(data, "reading_date"), by_manager=True)
+                           reading_date=_date(data, "reading_date"), by_manager=True,
+                           recorded_at=_datetime(data, "recorded_at") if data.get("recorded_at") else None)
             return Response(MileageReadingSerializer(reading).data, status=201)
-        return Response(MileageReadingSerializer(a.mileage_readings.select_related("vehicle"), many=True).data)
+        return Response(MileageReadingSerializer(_readings_history(a), many=True).data)
+
+    @action(detail=True, methods=["post"], url_path=r"mileage/(?P<reading_id>[0-9]+)/correct")
+    def correct_mileage(self, request, pk=None, reading_id=None):
+        """Correction tracée d'un relevé par un gestionnaire (motif obligatoire)."""
+        a = self._writable(self.get_object())
+        reading = MileageReading.all_objects.filter(pk=reading_id, assignment=a).first()
+        if reading is None:
+            raise NotFound("Relevé introuvable.")
+        data = _body(request)
+        corrected = _run(mileage.correct_reading, reading, actor=request.user, odometer=data.get("odometer"),
+                         reason=_text(data, "reason"), professional_km=_int(data, "professional_km"),
+                         private_km=_int(data, "private_km"), by_manager=True)
+        return Response(MileageReadingSerializer(corrected).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="meter-replacement")
+    def meter_replacement(self, request, pk=None):
+        a = self._writable(self.get_object())
+        data = _body(request)
+        reading = _run(mileage.replace_meter, a, actor=request.user, old_odometer=data.get("old_odometer"),
+                       new_odometer=data.get("new_odometer"), reason=_text(data, "reason"),
+                       recorded_at=_datetime(data, "recorded_at") if data.get("recorded_at") else None)
+        return Response(MileageReadingSerializer(reading).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="reading-frequency")
+    def reading_frequency(self, request, pk=None):
+        a = self._writable(self.get_object())
+        _run(mileage.set_reading_frequency, a, actor=request.user, days=_body(request).get("days"))
+        return self._done(a)
+
+    @action(detail=True, methods=["get"])
+    def tracking(self, request, pk=None):
+        """Suivi kilométrique et entretien prévisionnel de l'attribution (aucun montant)."""
+        a = self.get_object()
+        data = mileage.tracking_summary(a)
+        data["last_reminder"] = mileage.last_reminder(a)
+        return Response(data)
 
     @action(detail=True, methods=["get"])
     def costs(self, request, pk=None):
@@ -866,13 +903,18 @@ def _is_uuid(value) -> bool:
     return True
 
 
+def _readings_history(assignment):
+    """Historique horodaté des relevés de l'attribution, corrections comprises (trace)."""
+    return (MileageReading.all_objects.filter(assignment=assignment)
+            .select_related("vehicle", "assignment", "correction").order_by("recorded_at", "id"))
+
+
 class MyMileageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         assignment = _mine(request)
-        return Response(MileageReadingSerializer(assignment.mileage_readings.select_related("vehicle"),
-                                                 many=True).data)
+        return Response(MileageReadingSerializer(_readings_history(assignment), many=True).data)
 
     def post(self, request):
         assignment = _mine(request)
@@ -881,6 +923,84 @@ class MyMileageView(APIView):
                        reading_date=_date(data, "reading_date"), professional_km=_int(data, "professional_km"),
                        private_km=_int(data, "private_km"))
         return Response(MileageReadingSerializer(reading).data, status=201)
+
+
+class MyMileageCorrectionView(APIView):
+    """Le bénéficiaire corrige SA dernière déclaration, dans les 48 h (trace conservée)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        assignment = _mine(request)
+        reading = MileageReading.all_objects.filter(pk=pk, assignment=assignment).first() \
+            if str(pk).isdigit() else None
+        if reading is None:
+            raise NotFound("Relevé introuvable.")
+        data = _body(request)
+        corrected = _run(mileage.correct_reading, reading, actor=request.user, odometer=data.get("odometer"),
+                         reason=_text(data, "reason"), professional_km=_int(data, "professional_km"),
+                         private_km=_int(data, "private_km"))
+        return Response(MileageReadingSerializer(corrected).data, status=201)
+
+
+class MyTrackingView(APIView):
+    """« Mon véhicule » : relevé attendu, rythme, fiabilité, calendrier des entretiens — sans montant."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        assignment = _mine(request)
+        return Response(mileage.tracking_summary(assignment, viewer=request.user))
+
+
+#: Filtres du suivi gestionnaire (appliqués côté serveur, avant pagination).
+FOLLOWUP_FILTERS = {
+    "late": lambda r: r["reading"]["state"] in ("late", "stale"),
+    "maintenance": lambda r: r["urgent_operations"] > 0,
+    "unreliable": lambda r: r["reliability"]["level"] in ("low", "insufficient"),
+}
+
+
+class MileageFollowupView(APIView):
+    """Gestionnaires : relevés en retard, fiabilité et entretien le plus proche des attributions
+    en cours de LEUR périmètre. Lecture seule, données lues EN LOT (le nombre de requêtes ne
+    dépend pas du nombre d'attributions), filtre `state` et pagination (`page`, `page_size`) ;
+    `counts` porte sur toutes les attributions du périmètre."""
+
+    permission_classes = [IsAuthenticated, CarPlanPermission]
+    read_perm = perms.VIEW_CARPLAN
+
+    def get(self, request):
+        from apps.maintenance.predictive import load_facts
+        from apps.maintenance.views import page_of
+
+        running = list(assignments_for(request.user, CarPlanAssignment.objects.filter(
+            status__in=mileage.IN_USE, vehicle__isnull=False).select_related(
+            "beneficiary", "vehicle", "policy_version", "subsidiary")).order_by("vehicle__registration"))
+        prefetched = mileage.bulk_tracking(running, reminders=True)
+        facts = load_facts([a.vehicle for a in running])
+        rows = []
+        for a in running:
+            pre = prefetched[a.pk]
+            summary = mileage.tracking_summary(a, prefetched=pre, facts=facts[a.vehicle_id])
+            nxt = summary["next_operation"]
+            urgent = [m for m in summary["maintenance"] if m["level"] in ("urgent", "overdue")]
+            rows.append({
+                "assignment": str(a.pk), "reference": a.reference,
+                "beneficiary_name": a.beneficiary.get_full_name() or a.beneficiary.email,
+                "subsidiary_name": a.subsidiary.name, "vehicle": str(a.vehicle_id),
+                "registration": a.vehicle.registration, "fuel_type": a.vehicle.fuel_type, "status": a.status,
+                "reading": summary["reading"], "pace": summary["pace"], "reliability": summary["reliability"],
+                "current_odometer": summary["current_odometer"], "next_operation": nxt,
+                "urgent_operations": len(urgent), "last_reminder": pre["reminder"],
+            })
+        order = {"stale": 0, "late": 1, "due": 2, "ok": 3, "not_required": 4}
+        rows.sort(key=lambda r: (order.get(r["reading"]["state"], 5), r["registration"]))
+        counts = {"total": len(rows), **{name: sum(1 for r in rows if keep(r)) for name, keep in FOLLOWUP_FILTERS.items()}}
+        keep = FOLLOWUP_FILTERS.get(request.query_params.get("state") or "")
+        if keep is not None:
+            rows = [r for r in rows if keep(r)]
+        return Response({**page_of(request, rows), "counts": counts})
 
 
 class MyRequestsView(APIView):

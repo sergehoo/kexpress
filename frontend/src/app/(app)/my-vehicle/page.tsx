@@ -4,18 +4,23 @@ import { useState } from "react";
 import { BatteryCharging, CalendarDays, CarFront, ClipboardCheck, Fuel, Gauge, RefreshCw, ShieldCheck, ShieldX } from "lucide-react";
 
 import { InspectionCard } from "@/components/carplan/inspections";
+import { MaintenanceCalendar, TrackingOverview } from "@/components/carplan/MileageTracking";
 import {
   HistorySection, IncidentSection, InspectionsHistorySection, MileageSection, RequestsSection, Section,
 } from "@/components/carplan/MyVehicleSections";
 import { type Flash, formatDay, GaugeBar, InfoRow, km, Notice } from "@/components/carplan/shared";
 import { EmptyState, Spinner } from "@/components/ui";
-import { carPlanError, FUEL_LABEL, httpStatus, MILEAGE_DECLARATION_LABEL, useMyVehicle, VEHICLE_TYPES, type MyCompliance } from "@/lib/carplan";
+import {
+  carPlanError, FUEL_LABEL, httpStatus, MILEAGE_DECLARATION_LABEL, useMyTracking, useMyVehicle, VEHICLE_TYPES, type MyCompliance,
+} from "@/lib/carplan";
 import { cn, formatNumber } from "@/lib/utils";
 
 const NAV = [
   { href: "#vehicule", label: "Mon véhicule" },
+  { href: "#kilometrage", label: "Relevé" },
+  { href: "#suivi", label: "Suivi" },
+  { href: "#entretien", label: "Entretiens" },
   { href: "#quotas", label: "Quotas" },
-  { href: "#kilometrage", label: "Kilométrage" },
   { href: "#demandes", label: "Demandes" },
   { href: "#incident", label: "Incident" },
   { href: "#historique", label: "Historique" },
@@ -25,6 +30,7 @@ const NAV = [
  *  Pensé d'abord pour le mobile : une colonne, sections empilées, cibles tactiles larges. */
 export default function MyVehiclePage() {
   const { data: mine, isLoading, error } = useMyVehicle();
+  const tracking = useMyTracking(!!mine?.vehicle);
   const [flash, setFlash] = useState<Flash>(null);
   const toast = (text: string, tone: "success" | "danger" = "success") => {
     setFlash({ tone, text });
@@ -136,6 +142,26 @@ export default function MyVehiclePage() {
         </section>
       )}
 
+      {/* Relevé rapide : en tête sur mobile, c'est le geste le plus fréquent */}
+      <MileageSection mine={mine} onToast={toast} />
+
+      {/* Suivi kilométrique et prévision d'entretien (aucun montant) */}
+      {mine.vehicle && (
+        <Section id="suivi" title="Suivi kilométrique">
+          {tracking.isLoading ? <Spinner /> : !tracking.data ? <p className="text-sm text-muted">Suivi indisponible.</p>
+            : <TrackingOverview tracking={tracking.data} />}
+        </Section>
+      )}
+      {mine.vehicle && (
+        <Section id="entretien" title="Calendrier des entretiens">
+          {tracking.isLoading ? <Spinner /> : <MaintenanceCalendar rows={tracking.data?.maintenance ?? []} />}
+          <p className="mt-3 text-[11px] text-faint">
+            Dates estimées à partir de vos relevés ; l&apos;échéance est atteinte dès que le kilométrage OU la date l&apos;est.
+            Un entretien n&apos;est enregistré qu&apos;une fois l&apos;intervention réalisée par votre gestionnaire.
+          </p>
+        </Section>
+      )}
+
       {/* Quotas */}
       <Section id="quotas" title="Mes quotas">
         {!u ? <p className="text-sm text-muted">Consommation indisponible.</p> : (
@@ -177,7 +203,6 @@ export default function MyVehiclePage() {
         </div>
       </Section>
 
-      <MileageSection mine={mine} onToast={toast} />
       <RequestsSection onToast={toast} />
       <IncidentSection mine={mine} onToast={toast} />
       <InspectionsHistorySection pendingId={mine.pending_inspection?.id} onToast={toast} />

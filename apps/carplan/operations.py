@@ -9,11 +9,11 @@ n'apparaît ici : ces données sont aussi celles de l'espace « Mon véhicule »
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Max, Sum
+from django.db.models import F, Max, Sum
 from django.utils import timezone
 
 from apps.carplan import services
@@ -62,15 +62,19 @@ def raise_vehicle_mileage(vehicle, km: int) -> None:
 
 
 def _last_reading(vehicle):
-    return MileageReading.objects.filter(vehicle=vehicle).order_by("-reading_date", "-odometer").first()
+    """Dernier relevé EN VIGUEUR (les relevés corrigés sont exclus), dans l'ordre réel des relevés."""
+    return MileageReading.objects.filter(vehicle=vehicle).order_by("-recorded_at", "-id").first()
 
 
 @services.writes
 @transaction.atomic
 def declare_mileage(assignment, *, actor, odometer, reading_date=None, professional_km=None, private_km=None,
-                    by_manager=False) -> MileageReading:
+                    by_manager=False, recorded_at=None) -> MileageReading:
     """Relevé de compteur : croissant, plausible, à la date du jour au plus ; ventilé pro / privé
-    quand la politique l'exige (et jamais de km privés si l'usage privé n'est pas permis)."""
+    quand la politique l'exige (et jamais de km privés si l'usage privé n'est pas permis).
+    Horodaté (`recorded_at`) : les moyennes km / jour reposent sur la durée RÉELLE entre relevés."""
+    from apps.carplan import mileage
+
     assignment = A.objects.select_for_update(of=("self",)).select_related("vehicle", "policy_version").get(pk=assignment.pk)
     if assignment.status not in IN_USE or assignment.vehicle_id is None:
         raise CarPlanError("Relevé impossible : aucun véhicule en cours d'utilisation sur cette attribution.")
@@ -79,7 +83,12 @@ def declare_mileage(assignment, *, actor, odometer, reading_date=None, professio
     if by_manager and actor.pk == assignment.beneficiary_id:
         raise CarPlanError("Le bénéficiaire déclare son kilométrage depuis son espace.")
     services._lock(assignment.vehicle)
-    today = timezone.localdate()
+    now = timezone.now()
+    today = timezone.localdate(now)
+    if recorded_at is not None:
+        if recorded_at > now + timedelta(minutes=5):
+            raise CarPlanError("Un relevé ne se déclare pas à une date future.")
+        reading_date = timezone.localdate(recorded_at)
     reading_date = reading_date or today
     try:
         odometer = int(odometer)
@@ -90,18 +99,27 @@ def declare_mileage(assignment, *, actor, odometer, reading_date=None, professio
     if reading_date < assignment.start_date:
         raise CarPlanError("Relevé antérieur au début de l'attribution.")
     last = _last_reading(assignment.vehicle)
-    floor = max(filter(None, [last.odometer if last else None, assignment.start_mileage]), default=0)
+    offset = last.meter_offset if last else 0
+    floor = last.odometer if last else (assignment.start_mileage or 0)
+    if last is not None and last.assignment_id != assignment.pk and assignment.start_mileage:
+        floor = max(floor, assignment.start_mileage)
     if odometer < floor:
         raise CarPlanError(f"Le compteur ne recule pas : dernier relevé connu {floor} km.")
-    if last and reading_date < last.reading_date:
+    if last and (reading_date < last.reading_date or (recorded_at is not None and recorded_at < last.recorded_at)):
         raise CarPlanError("Un relevé plus récent existe déjà.")
     # Plausibilité CUMULÉE depuis le dernier relevé d'un jour antérieur : plusieurs
-    # déclarations le même jour ne contournent pas le plafond quotidien.
+    # déclarations le même jour ne contournent pas le plafond quotidien. Calcul sur l'index
+    # (compteur + décalage) : un remplacement de compteur ne fausse pas la comparaison.
     reference = MileageReading.objects.filter(vehicle=assignment.vehicle, reading_date__lt=reading_date) \
-        .order_by("-reading_date", "-odometer").first()
-    base = max(filter(None, [reference.odometer if reference else None, assignment.start_mileage]), default=floor)
-    since = reference.reading_date if reference else assignment.start_date
-    if odometer - base > MAX_KM_PER_DAY * max(1, (reading_date - since).days):
+        .order_by("-recorded_at", "-id").first()
+    if reference is not None:
+        base = reference.index
+        if reference.meter_offset == offset and assignment.start_mileage and reference.assignment_id != assignment.pk:
+            base = max(base, assignment.start_mileage + offset)
+        since = reference.reading_date
+    else:
+        base, since = floor + offset, assignment.start_date
+    if odometer + offset - base > MAX_KM_PER_DAY * max(1, (reading_date - since).days):
         raise CarPlanError("Kilométrage invraisemblable depuis le relevé précédent : vérifiez la saisie.")
     policy = assignment.policy_version
     driven = odometer - floor
@@ -116,12 +134,25 @@ def declare_mileage(assignment, *, actor, odometer, reading_date=None, professio
             raise CarPlanError(f"Ventilation incohérente : {pro} + {private} km ≠ {driven} km parcourus.")
     if private and not policy.private_use_allowed:
         raise CarPlanError("L'usage privé n'est pas autorisé par la politique de cette attribution.")
-    reading = MileageReading.objects.create(
+    reading = MileageReading(
         assignment=assignment, vehicle=assignment.vehicle, reading_date=reading_date, odometer=odometer,
-        professional_km=pro, private_km=private, source="manager" if by_manager else "declaration",
-        declared_by=actor)
+        recorded_at=recorded_at, professional_km=pro, private_km=private,
+        source="manager" if by_manager else "declaration", declared_by=actor)
+    if reading.recorded_at is None:
+        # Relevé du jour : maintenant ; antidaté : midi du jour déclaré (jamais avant le dernier relevé).
+        reading.recorded_at = now if reading_date == today else timezone.make_aware(
+            datetime.combine(reading_date, time(12, 0)))
+        if last is not None and reading.recorded_at <= last.recorded_at:
+            reading.recorded_at = last.recorded_at + timedelta(seconds=1)
+    reading.anomaly = mileage.detect_anomaly(assignment, odometer, reading.recorded_at)
+    reading.save()
     raise_vehicle_mileage(assignment.vehicle, odometer)
-    services._event(assignment, "mileage_declared", actor, odometer=odometer, reading_date=reading_date)
+    services._event(assignment, "mileage_declared", actor, odometer=odometer, reading_date=reading_date,
+                    anomaly=reading.anomaly)
+    if reading.anomaly:
+        notify_managers(assignment, f"Car Plan {assignment.reference} : relevé kilométrique atypique",
+                        f"{assignment.vehicle.registration} — {odometer} km. {reading.anomaly}", severity="warning")
+    mileage.after_reading(assignment.vehicle)
     return reading
 
 
@@ -153,12 +184,13 @@ def _km_between(assignment, start: date, end: date) -> int:
     readings = MileageReading.objects.filter(assignment=assignment)
     total = 0
     for vehicle, s, e in _tenures(assignment, start, end):
-        rows = readings.filter(vehicle=vehicle)
-        top = rows.filter(reading_date__lte=e).aggregate(m=Max("odometer"))["m"]
-        base = rows.filter(reading_date__lt=s).aggregate(m=Max("odometer"))["m"]
+        # Index = compteur + décalage : continu malgré un remplacement de compteur.
+        rows = readings.filter(vehicle=vehicle).annotate(km_index=F("odometer") + F("meter_offset"))
+        top = rows.filter(reading_date__lte=e).aggregate(m=Max("km_index"))["m"]
+        base = rows.filter(reading_date__lt=s).aggregate(m=Max("km_index"))["m"]
         if base is None:
-            first = rows.filter(reading_date__gte=s, reading_date__lte=e).order_by("reading_date", "odometer").first()
-            base = first.odometer if first else None
+            first = rows.filter(reading_date__gte=s, reading_date__lte=e).order_by("recorded_at", "id").first()
+            base = first.index if first else None
         if top is not None and base is not None and top > base:
             total += top - base
     return total
@@ -464,13 +496,12 @@ def check_assignments(today: date | None = None) -> dict:
                 notify_beneficiary(a, f"Quota {label} : {reached[-1]} %", msg, severity=level)
                 notify_managers(a, f"Car Plan {a.reference} : quota {label} {reached[-1]} %", msg, severity=level)
                 sent["quota"] += 1
-        if a.policy_version.mileage_declaration != "none" and today.day >= 25 and a.vehicle_id \
-                and not MileageReading.objects.filter(assignment=a, reading_date__gte=today.replace(day=1)).exists() \
-                and _once(a, f"declaration:{month}"):
-            notify_beneficiary(a, "Relevé kilométrique du mois", "Déclarez le compteur de votre véhicule.")
-            sent["declaration"] += 1
         if a.vehicle_id:
             sent["compliance"] += _compliance_alert(a, week)
+    # Relevés périodiques (5 ou 7 jours) : rappel, relance espacée, retard signalé — une fois chacun.
+    from apps.carplan.mileage import check_reading_reminders
+
+    sent["declaration"] = sum(check_reading_reminders(today).values())
     for renewal in A.objects.filter(status=A.ALLOCATED, renewal_of__isnull=False, start_date__lte=today):
         services.roll_over_renewal(renewal)
     for a in A.objects.filter(status=A.ALLOCATED, start_date__lte=today + timedelta(days=2)).select_related(

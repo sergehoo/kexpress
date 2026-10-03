@@ -32,6 +32,9 @@ COVERAGE = [("company", "Pris en charge par l'entreprise"), ("employee", "À la 
             ("shared", "Partagé"), ("excluded", "Non couvert")]
 MILEAGE_DECLARATION = [("none", "Aucune déclaration"), ("total", "Kilométrage total"),
                        ("split", "Kilométrage professionnel / privé")]
+#: Fréquence des relevés obligatoires (jours) ; 7 par défaut.
+READING_FREQUENCIES = [(5, "Tous les 5 jours"), (7, "Toutes les semaines")]
+DEFAULT_READING_FREQUENCY = 7
 
 
 class EmployeeCategory(TimeStampedModel):
@@ -117,6 +120,9 @@ class CarPlanPolicyVersion(TimeStampedModel):
     private_use = models.TextField("conditions d'usage privé", blank=True)
     mileage_declaration = models.CharField("déclaration kilométrique", max_length=8, choices=MILEAGE_DECLARATION,
                                            default="total")
+    reading_frequency_days = models.PositiveSmallIntegerField("fréquence des relevés (jours)",
+                                                              choices=READING_FREQUENCIES,
+                                                              default=DEFAULT_READING_FREQUENCY)
     monthly_km_limit = models.PositiveIntegerField("limite kilométrique mensuelle", null=True, blank=True)
     annual_km_limit = models.PositiveIntegerField("limite kilométrique annuelle", null=True, blank=True)
     monthly_fuel_liters_limit = models.DecimalField("plafond carburant mensuel (L)", max_digits=8, decimal_places=2,
@@ -238,6 +244,9 @@ class CarPlanAssignment(TimeStampedModel):
                                                     null=True, blank=True)
     monthly_energy_kwh_quota = models.DecimalField("quota recharge mensuel (kWh)", max_digits=8, decimal_places=2,
                                                    null=True, blank=True)
+    #: Vide : fréquence de la politique de l'attribution.
+    reading_frequency_days = models.PositiveSmallIntegerField("fréquence des relevés (jours)",
+                                                              choices=READING_FREQUENCIES, null=True, blank=True)
     special_conditions = models.TextField("conditions particulières", blank=True)
     status = models.CharField("statut", max_length=10, choices=STATUS_CHOICES, default=REQUESTED, db_index=True)
     requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+",
@@ -401,28 +410,78 @@ class CarPlanInspectionPhoto(models.Model):
         verbose_name_plural = "photographies d'état des lieux"
 
 
-class MileageReading(models.Model):
-    """Relevé de compteur d'un véhicule attribué (déclaration, remise, restitution)."""
+class EffectiveReadingManager(models.Manager):
+    """Relevés EN VIGUEUR : un relevé corrigé reste en base (trace) mais ne compte plus."""
 
+    def get_queryset(self):
+        return super().get_queryset().filter(correction__isnull=True)
+
+
+class MileageReading(models.Model):
+    """Relevé de compteur d'un véhicule attribué (déclaration, remise, restitution).
+
+    IMMUABLE : une erreur de saisie se corrige par un NOUVEAU relevé qui désigne celui qu'il
+    remplace (`corrects`), avec son motif et son auteur ; le relevé d'origine reste lisible
+    (`all_objects`) mais sort des calculs (`objects`). Un remplacement de compteur est un relevé
+    « meter_replacement » qui ouvre une nouvelle base : `meter_offset` cumule les kilomètres des
+    compteurs précédents, de sorte que `odometer + meter_offset` (l'index) reste croissant et
+    exploitable pour les moyennes avant comme après le changement.
+    """
+
+    METER_REPLACEMENT = "meter_replacement"
     SOURCES = [("declaration", "Déclaration du bénéficiaire"), ("handover", "Remise"), ("return", "Restitution"),
-               ("manager", "Relevé gestionnaire")]
+               ("manager", "Relevé gestionnaire"), (METER_REPLACEMENT, "Remplacement de compteur")]
 
     assignment = models.ForeignKey(CarPlanAssignment, on_delete=models.PROTECT, related_name="mileage_readings",
                                    verbose_name="attribution")
     vehicle = models.ForeignKey("vehicles.Vehicle", on_delete=models.PROTECT, related_name="carplan_readings",
                                 verbose_name="véhicule")
     reading_date = models.DateField("date du relevé")
+    #: Instant réel du relevé : base des durées (et donc des moyennes km / jour).
+    recorded_at = models.DateTimeField("relevé le", db_index=True)
     odometer = models.PositiveIntegerField("compteur (km)")
     professional_km = models.PositiveIntegerField("km professionnels", null=True, blank=True)
     private_km = models.PositiveIntegerField("km privés", null=True, blank=True)
-    source = models.CharField("origine", max_length=12, choices=SOURCES, default="declaration")
+    source = models.CharField("origine", max_length=20, choices=SOURCES, default="declaration")
     declared_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    corrects = models.OneToOneField("self", on_delete=models.CASCADE, null=True, blank=True,
+                                    related_name="correction", verbose_name="corrige le relevé")
+    reason = models.CharField("motif (correction, remplacement de compteur)", max_length=500, blank=True)
+    #: Kilomètres des compteurs précédents (remplacement de compteur) : index = odometer + meter_offset.
+    meter_offset = models.IntegerField("décalage de compteur (km)", default=0)
+    #: Remplacement de compteur : dernier relevé de l'ancien compteur.
+    previous_odometer = models.PositiveIntegerField("ancien compteur (km)", null=True, blank=True)
+    #: Relevé accepté mais atypique (rythme sans commune mesure avec l'habitude du véhicule).
+    anomaly = models.CharField("relevé atypique", max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = EffectiveReadingManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "relevé kilométrique"
         verbose_name_plural = "relevés kilométriques"
-        ordering = ["reading_date", "odometer"]
+        ordering = ["recorded_at", "id"]
+        base_manager_name = "all_objects"
+
+    @property
+    def index(self) -> int:
+        return self.odometer + self.meter_offset
+
+    def save(self, *args, **kwargs):
+        if self.recorded_at is None:
+            from datetime import datetime, time
+
+            from django.utils import timezone
+
+            now = timezone.now()
+            # Relevé du jour : l'instant de saisie ; relevé antidaté : midi du jour déclaré.
+            self.recorded_at = now if self.reading_date >= timezone.localdate(now) else timezone.make_aware(
+                datetime.combine(self.reading_date, time(12, 0)))
+        if self._state.adding and self.source != self.METER_REPLACEMENT and self.corrects_id is None:
+            last = MileageReading.objects.filter(vehicle_id=self.vehicle_id).order_by("-recorded_at", "-id").first()
+            self.meter_offset = last.meter_offset if last else 0
+        super().save(*args, **kwargs)
 
 
 class CarPlanRequest(TimeStampedModel):

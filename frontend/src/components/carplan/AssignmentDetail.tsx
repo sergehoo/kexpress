@@ -10,13 +10,14 @@ import { useAuth } from "@/lib/auth";
 import {
   ASSIGNMENT_STATUS_LABEL, canCarPlan, carPlanError, EVENT_LABEL, httpStatus, MILEAGE_DECLARATION_LABEL,
   REPLACEMENT_STATUS_TONE, useAssignment, useAssignmentComparison, useAssignmentContributions, useAssignmentCosts,
-  useAssignmentEvents, useAssignmentInspections, useAssignmentMileage, useAssignmentReplacements, useAssignmentUsage,
+  useAssignmentEvents, useAssignmentInspections, useAssignmentReplacements, useAssignmentUsage,
   useCarPlanVehicles, useEndReplacement, useManagerMileage, useRecordContribution, useStartReplacement,
   type Assignment, type AssignmentEvent, type AssignmentStatus,
 } from "@/lib/carplan";
 import { cn, formatNumber } from "@/lib/utils";
 
 import { AssignmentActions } from "./AssignmentActions";
+import { AssignmentTrackingPanel, ManagerReadingsTable } from "./MileageManagement";
 import { ComparisonPanel, InspectionCard, InspectionForm } from "./inspections";
 import {
   AssignmentStatusBadge, decimalOrNull, Drawer, type Flash, FormError, formatDateTime, formatDay, formatMonth,
@@ -71,7 +72,7 @@ export function AssignmentDetail({ id, onClose, onOpen }: {
               { key: "inspections", label: "États des lieux", content: (
                 <InspectionsTab a={a} onFlash={notify} onInspection={setInspectionKind} />
               ) },
-              { key: "usage", label: "Consommation & relevés", content: <UsageTab a={a} onFlash={notify} /> },
+              { key: "usage", label: "Relevés, entretien & quotas", content: <UsageTab a={a} onFlash={notify} /> },
               { key: "replacements", label: "Remplacements", content: <ReplacementsTab a={a} onFlash={notify} /> },
               { key: "history", label: "Historique", content: <HistoryTab id={a.id} /> },
               ...(canCosts ? [{ key: "costs", label: "Coûts & participations", content: <CostsTab a={a} onFlash={notify} /> }] : []),
@@ -208,7 +209,6 @@ function UsageTab({ a, onFlash }: { a: Assignment; onFlash: (text: string, tone?
   const { me } = useAuth();
   const canManage = canCarPlan(me, "manage_carplan_assignments");
   const usage = useAssignmentUsage(a.id);
-  const readings = useAssignmentMileage(a.id);
   const declare = useManagerMileage();
   const [odometer, setOdometer] = useState("");
   const [date, setDate] = useState(todayISO());
@@ -228,6 +228,7 @@ function UsageTab({ a, onFlash }: { a: Assignment; onFlash: (text: string, tone?
 
   return (
     <div className="space-y-4">
+      <AssignmentTrackingPanel a={a} canManage={canManage} onFlash={onFlash} />
       <section className="rounded-xl border border-line bg-surface p-4">
         <SectionTitle>Quotas {u ? `· ${formatMonth(u.month)}` : ""}</SectionTitle>
         {usage.isLoading ? <Spinner /> : !u ? <p className="text-xs text-muted">Consommation indisponible.</p> : (
@@ -262,34 +263,7 @@ function UsageTab({ a, onFlash }: { a: Assignment; onFlash: (text: string, tone?
         </form>
       )}
 
-      <section className="rounded-xl border border-line bg-surface">
-        <div className="px-4 pt-4"><SectionTitle>Relevés kilométriques</SectionTitle></div>
-        {readings.isLoading ? <div className="flex justify-center py-6"><Spinner /></div>
-          : !(readings.data ?? []).length ? <EmptyState title="Aucun relevé" />
-          : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-faint">
-                  <th className="px-4 py-2 font-medium">Date</th><th className="px-4 py-2 font-medium">Véhicule</th>
-                  <th className="px-4 py-2 text-right font-medium">Compteur</th><th className="px-4 py-2 text-right font-medium">Pro</th>
-                  <th className="px-4 py-2 text-right font-medium">Privé</th><th className="px-4 py-2 font-medium">Origine</th>
-                </tr></thead>
-                <tbody className="divide-y divide-line">
-                  {[...(readings.data ?? [])].reverse().map((r) => (
-                    <tr key={r.id}>
-                      <td className="whitespace-nowrap px-4 py-2 text-muted">{formatDay(r.reading_date)}</td>
-                      <td className="px-4 py-2 text-muted">{r.vehicle_registration}</td>
-                      <td className="whitespace-nowrap px-4 py-2 text-right font-medium text-ink">{km(r.odometer)}</td>
-                      <td className="px-4 py-2 text-right text-muted">{r.professional_km != null ? formatNumber(r.professional_km) : "—"}</td>
-                      <td className="px-4 py-2 text-right text-muted">{r.private_km != null ? formatNumber(r.private_km) : "—"}</td>
-                      <td className="px-4 py-2 text-xs text-muted">{r.source_display}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-      </section>
+      <ManagerReadingsTable a={a} canManage={canManage} onFlash={onFlash} />
     </div>
   );
 }
@@ -411,10 +385,19 @@ const DETAIL_LABEL: Record<string, string> = {
   previous_end: "ancienne fin", new_end: "nouvelle fin", mileage: "kilométrage", odometer: "compteur",
   reading_date: "relevé du", starts_at: "du", ends_at: "au", renewal: "renouvellement", continuity_of: "suite de",
   on_date: "à compter du", start: "du", end: "au", party: "partie", drivable: "véhicule roulant", reason: "motif",
+  previous: "valeur erronée", old_odometer: "ancien compteur", new_odometer: "nouveau compteur", days: "fréquence (jours)",
+  anomaly: "atypique", by: "par",
+};
+
+/** Clés d'alerte automatique (anti-doublon de l'historique) → libellé. */
+const ALERT_LABEL: Record<string, string> = {
+  expiring: "Échéance de l'attribution", late: "Restitution en retard", quota: "Quota", handover: "Remise imminente",
+  approval: "Validation en attente", compliance: "Véhicule non conforme", reading_due: "Rappel de relevé kilométrique",
+  reading_relaunch: "Relance de relevé kilométrique", reading_late: "Relevé en retard signalé aux gestionnaires",
 };
 
 function detailValue(key: string, value: unknown): string {
-  if (key === "party") return value === "beneficiary" ? "bénéficiaire" : "gestionnaire";
+  if (key === "party" || key === "by") return value === "beneficiary" ? "bénéficiaire" : "gestionnaire";
   if (key === "drivable") return value ? "oui" : "non";
   if (key === "starts_at" || key === "ends_at") return formatDateTime(String(value));
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return formatDay(value);
@@ -448,7 +431,7 @@ function HistoryTab({ id }: { id: string }) {
             {e.note && <p className="mt-0.5 whitespace-pre-line text-xs text-muted">{e.note}</p>}
             {isAlert && typeof e.details?.key === "string" && (
               <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
-                <AlertTriangle className="h-3 w-3" /> {String(e.details.key).split(":")[0]}
+                <AlertTriangle className="h-3 w-3" /> {ALERT_LABEL[String(e.details.key).split(":")[0]] ?? String(e.details.key).split(":")[0]}
               </p>
             )}
             {details.length > 0 && (

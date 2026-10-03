@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { AlertTriangle, Coins, Plus, ShieldCheck, Timer, Wrench } from "lucide-react";
 
 import { Button, Card, CardBody, EmptyState, Select, Spinner } from "@/components/ui";
@@ -23,6 +23,8 @@ import { useAuth } from "@/lib/auth";
 import { apiError } from "@/lib/api";
 import { adjustmentProposal, type AdjustmentProposal } from "@/lib/financeF2";
 import type { MaintenanceRecord } from "@/lib/types";
+
+import { MaintenanceSections } from "./PlansPanel";
 import { formatDate, formatNumber } from "@/lib/utils";
 
 const STATUS_OPTS = [
@@ -118,7 +120,7 @@ export default function MaintenancePage() {
   const preventiveCount = records.filter((r) => ["preventive", "periodic"].includes(r.nature)).length;
   const correctiveCount = records.filter((r) => ["corrective", "urgent"].includes(r.nature)).length;
 
-  return (
+  const recordsView = (
     <div className="space-y-5">
       <StatChips
         stats={[
@@ -210,6 +212,15 @@ export default function MaintenancePage() {
           )}
         </CardBody>
       </Card>
+
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <Suspense fallback={recordsView}>
+        <MaintenanceSections records={recordsView} />
+      </Suspense>
 
       {modal && (
         <EntityForm

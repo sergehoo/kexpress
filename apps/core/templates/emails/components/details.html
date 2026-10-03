@@ -1,0 +1,6 @@
+<table role="presentation" class="kx-details" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:4px 0 22px;border:1px solid {{ kx.line }};border-radius:12px;border-collapse:separate;">
+{% for row in rows %}  <tr>
+    <td class="kx-detail-label" width="38%" valign="top" style="padding:11px 14px;{% if not forloop.first %}border-top:1px solid {{ kx.line }};{% endif %}font-size:13px;line-height:20px;color:{{ kx.muted }};">{{ row.label }}</td>
+    <td class="kx-detail-value" valign="top" style="padding:11px 14px;{% if not forloop.first %}border-top:1px solid {{ kx.line }};{% endif %}font-size:14px;line-height:20px;font-weight:600;color:{{ kx.navy }};">{{ row.value }}</td>
+  </tr>
+{% endfor %}</table>

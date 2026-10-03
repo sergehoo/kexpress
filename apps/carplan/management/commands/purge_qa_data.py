@@ -22,7 +22,8 @@ from django.db.models import ProtectedError, Q
 QA_EMAIL = re.compile(r"^qa\.[a-z0-9._-]+@kaydan\.test$")
 LOCKED_TABLES = ("carplan_carplanevent", "carplan_carplanassignment", "carplan_carplaninspection",
                  "carplan_carplaninspectionphoto", "carplan_carplanpolicyversion",
-                 "carplan_carplanpolicyversion_eligible_categories", "carplan_vehicleusagechange")
+                 "carplan_carplanpolicyversion_eligible_categories", "carplan_vehicleusagechange",
+                 "carplan_mileagereading")
 
 
 class Abort(Exception):
@@ -93,10 +94,12 @@ class Command(BaseCommand):
         notes = Notification.objects.filter(Q(recipient__in=users) | Q(pk__in=[
             n.pk for n in Notification.objects.filter(link__startswith="/car-plan") if any(l in n.link for l in links)]))
         self._guard_business_data(users)
-        return [(label, qs.model.objects.filter(pk__in=list(qs.values_list("pk", flat=True)))) for label, qs in [
+        # `all_objects` quand il existe : les relevés corrigés (hors calculs) sont aussi purgés.
+        return [(label, getattr(qs.model, "all_objects", qs.model.objects).filter(
+            pk__in=list(qs.values_list("pk", flat=True)))) for label, qs in [
             ("notifications", notes),
             ("photos d'état des lieux", CarPlanInspectionPhoto.objects.filter(inspection__in=inspections)),
-            ("relevés kilométriques", MileageReading.objects.filter(assignment__in=assignments)),
+            ("relevés kilométriques", MileageReading.all_objects.filter(assignment__in=assignments)),
             ("demandes", requests), ("incidents", incidents),
             ("interventions de maintenance issues des demandes / incidents QA", maintenance),
             ("détentions", VehicleHold.objects.filter(assignment__in=assignments)),
@@ -136,10 +139,12 @@ class Command(BaseCommand):
                      (pre_delete, locks._assignment_undeletable, "carplan-assignment-undeletable"),
                      (pre_delete, locks._inspection_undeletable, "carplan-inspection-undeletable"),
                      (pre_delete, locks._version_undeletable, "carplan-version-undeletable"),
+                     (pre_delete, locks._reading_undeletable, "carplan-reading-undeletable"),
                      (m2m_changed, locks._categories_immutable, "carplan-version-categories-immutable")]
         senders = {"carplan-event-undeletable": "CarPlanEvent", "carplan-assignment-undeletable": "CarPlanAssignment",
                    "carplan-inspection-undeletable": "CarPlanInspection",
                    "carplan-version-undeletable": "CarPlanPolicyVersion",
+                   "carplan-reading-undeletable": "MileageReading",
                    "carplan-version-categories-immutable": None}
         from apps.carplan import models as carplan_models
 

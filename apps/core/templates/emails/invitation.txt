@@ -1,0 +1,12 @@
+{% extends "emails/base.txt" %}
+{% block body %}{{ title }}
+
+Bonjour{% if first_name %} {{ first_name }}{% endif %},
+
+{{ intro }}
+
+Définissez votre mot de passe en suivant ce lien (valable {{ validity }}, utilisable une seule fois) :
+
+{{ action_url }}
+
+{{ not_you }}{% endblock %}
