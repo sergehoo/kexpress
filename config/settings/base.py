@@ -296,11 +296,19 @@ SIMPLE_JWT = {
     "TOKEN_REFRESH_SERIALIZER": "apps.accounts.sessions.RevocableTokenRefreshSerializer",
 }
 
+# Documentation OpenAPI (schéma + Swagger UI) — JAMAIS publique (constat C-04, 01/10/2026) :
+# fermée par défaut hors développement (404) ; ouverte explicitement (API_DOCS_ENABLED=True),
+# elle reste réservée aux comptes « accès admin » (is_staff) authentifiés.
+API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=DEBUG)
 SPECTACULAR_SETTINGS = {
     "TITLE": "Kaydan Express API",
     "DESCRIPTION": "Plateforme de gestion de flotte multi-filiales.",
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
+    # Jeton (API) ou session de l'administration Django (consultation dans le navigateur).
+    "SERVE_AUTHENTICATION": list(dict.fromkeys(
+        [*_AUTH_CLASSES, "rest_framework.authentication.SessionAuthentication"])),
 }
 
 # --- CORS -----------------------------------------------------------------

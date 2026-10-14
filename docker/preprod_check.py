@@ -59,6 +59,11 @@ def main():
         "Origin": "https://attaquant.example", "Access-Control-Request-Method": "POST"})
     check("CORS : origine étrangère refusée", evil.headers.get("Access-Control-Allow-Origin") != "https://attaquant.example")
 
+    # Constat C-04 : schéma OpenAPI et Swagger UI jamais publics.
+    for path in ("/schema/", "/schema/?format=json", "/docs/"):
+        docs = requests.get(f"{api}{path}", timeout=15)
+        check(f"Documentation API non publique ({path})", docs.status_code in (401, 403, 404), f"HTTP {docs.status_code}")
+
     s = requests.Session()
     s.headers.update({"Origin": front, "Referer": front + "/login"})
     password = getpass.getpass("Mot de passe du compte de recette : ")

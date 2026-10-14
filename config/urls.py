@@ -1,6 +1,7 @@
 """URLs racine de Kaydan Express."""
+from django.conf import settings
 from django.contrib import admin
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.urls import include, path
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -11,6 +12,16 @@ from drf_spectacular.views import (
 def healthz(_request):
     """Sonde de disponibilité (Docker / Dokploy) — sans authentification."""
     return JsonResponse({"status": "ok"})
+
+
+def api_docs(view):
+    """Schéma OpenAPI et Swagger UI : 404 tant que `API_DOCS_ENABLED` est faux (production par
+    défaut) ; ouverts, réservés aux comptes « accès admin » (SPECTACULAR_SETTINGS)."""
+    def guarded(request, *args, **kwargs):
+        if not getattr(settings, "API_DOCS_ENABLED", False):
+            raise Http404
+        return view(request, *args, **kwargs)
+    return guarded
 
 
 urlpatterns = [
@@ -39,13 +50,9 @@ urlpatterns = [
     path("api/", include("apps.carplan.urls")),
     path("api/", include("apps.shield.urls")),
     path("api/", include("apps.core.urls")),
-    # OpenAPI / Swagger
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-    path(
-        "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="schema"),
-        name="swagger-ui",
-    ),
+    # OpenAPI / Swagger : jamais publics (cf. `api_docs`).
+    path("api/schema/", api_docs(SpectacularAPIView.as_view()), name="schema"),
+    path("api/docs/", api_docs(SpectacularSwaggerView.as_view(url_name="schema")), name="swagger-ui"),
 ]
 
 # Fichiers téléversés : PLUS de route publique `/media/`. Permis, pièces d'identité,

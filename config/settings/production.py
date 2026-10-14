@@ -9,6 +9,8 @@ from .base import env
 
 # --- Sécurité de base -----------------------------------------------------
 DEBUG = False
+# Documentation OpenAPI fermée (404) sauf décision explicite ; même ouverte : comptes is_staff.
+API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=False)
 
 # Obligatoires en production (lèvent une erreur explicite si absents).
 SECRET_KEY = env("SECRET_KEY")

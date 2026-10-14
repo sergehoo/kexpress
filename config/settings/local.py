@@ -6,6 +6,7 @@ from .base import *  # noqa: F401,F403
 from .base import GDAL_LIBRARY_PATH, GEOS_LIBRARY_PATH, env
 
 DEBUG = env.bool("DEBUG", default=True)
+API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=DEBUG)
 
 INSTALLED_APPS += ["django_extensions"]  # noqa: F405
 
